@@ -1,0 +1,28 @@
+[project]
+name = "fern"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Kyle Kestell", email = "kyle@kestell.org"},
+]
+dependencies = [
+    "llvmlite>=0.43.0",
+    "lark>=1.2.2",
+]
+requires-python = "==3.12.*"
+readme = "README.md"
+license = {text = "BSD0"}
+
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "mypy>=1.13.0",
+    "ruff>=0.7.1",
+]
+
+[tool.pdm.scripts]
+ruff = "ruff check ./src/fern"
+mypy = "mypy ./src/fern --no-namespace-packages"

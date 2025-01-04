@@ -1,0 +1,98 @@
+?type: INT -> int_type
+     | BOOL -> bool_type
+     | VOID -> void_type
+
+?start: program
+
+program: function*
+
+function: "def" NAME "(" parameters? ")" ":" type block "end"
+
+parameters: parameter ("," parameter)*
+
+parameter: NAME ":" type
+
+block: statement*
+
+?statement: expr_stmt
+          | return_stmt
+          | var_decl_stmt
+          | if_stmt
+
+expr_stmt: NAME "=" expr
+
+return_stmt: "return" expr?
+
+var_decl_stmt: "var" NAME (":" type)? ("=" expr)?
+
+if_stmt: "if" expr "then" block ("elseif" expr "then" block)* ("else" block)? "end"
+
+?expr: or_expr
+
+?or_expr: and_expr
+        | or_expr PIPE_PIPE and_expr -> binary_op
+
+?and_expr: comparison
+         | and_expr AMPERSAND_AMPERSAND comparison -> binary_op
+
+?comparison: sum
+           | comparison GREATER sum -> binary_op
+           | comparison LESS sum -> binary_op
+           | comparison EQUAL sum -> binary_op
+           | comparison NOT_EQUAL sum -> binary_op
+           | comparison GREATER_EQUAL sum -> binary_op
+           | comparison LESS_EQUAL sum -> binary_op
+
+?sum: product
+    | sum PLUS product -> binary_op
+    | sum MINUS product -> binary_op
+
+?product: unary
+        | product ASTERISK unary -> binary_op
+        | product SLASH unary -> binary_op
+
+?unary: EXCLAMATION atom -> unary_op
+      | MINUS atom -> unary_op
+      | atom
+
+?atom: NUMBER -> number
+     | NAME -> var
+     | TRUE -> true
+     | FALSE -> false
+     | funccall
+     | "(" expr ")"
+
+funccall: NAME "(" arguments? ")"
+
+arguments: expr ("," expr)*
+
+INT: "int"
+BOOL: "bool"
+VOID: "void"
+
+TRUE: "true"
+FALSE: "false"
+
+GREATER         : ">"
+LESS            : "<"
+EQUAL           : "=="
+NOT_EQUAL       : "!="
+GREATER_EQUAL   : ">="
+LESS_EQUAL      : "<="
+
+PLUS            : "+"
+MINUS           : "-"
+ASTERISK        : "*"
+SLASH           : "/"
+
+AMPERSAND_AMPERSAND    : "&&"
+PIPE_PIPE              : "||"
+EXCLAMATION            : "!"
+
+%import common.INT -> NUMBER
+%import common.WS
+%import common.CNAME -> NAME
+%import common.CPP_COMMENT
+
+%ignore WS
+%ignore CPP_COMMENT

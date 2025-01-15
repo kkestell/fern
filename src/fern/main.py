@@ -1,4 +1,7 @@
-import textwrap
+import argparse
+import platform
+import sys
+from pathlib import Path
 
 from ast_debug import debug_ast
 from cfg_builder import CFGBuilder
@@ -16,21 +19,30 @@ from utils_debug import format_header
 
 
 def main() -> None:
-    source = """
-    def fib(n: int): int
-        if n <= 1 then
-            return n
-        end
-        return fib(n - 1) + fib(n - 2)
-    end
-    
-    def main(): int
-        return fib(10)
-    end
-    """
+    parser = argparse.ArgumentParser(
+        prog="fern",
+        description="Fern programming language compiler"
+    )
+    parser.add_argument(
+        "source_file",
+        type=Path,
+        help="Source file to compile (e.g. test.fern)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        type=Path,
+        help="Output executable name (default: source file name without extension)"
+    )
+    args = parser.parse_args()
+
+    try:
+        source = args.source_file.read_text()
+    except Exception as e:
+        print(f"Error reading source file: {e}", file=sys.stderr)
+        sys.exit(1)
 
     print(format_header("Source Code"))
-    print(textwrap.dedent(source).strip())
+    print(source.strip())
 
     parser = Parser()
     ast_program = parser.parse(source)
@@ -73,10 +85,16 @@ def main() -> None:
     print(format_header("Result"))
     print(result)
 
+    output_name = args.output
+    if output_name is None:
+        output_name = args.source_file.with_suffix('')
+        if platform.system() == 'Windows':
+            output_name = output_name.with_suffix('.exe')
+
     llvm_compiler = LLVMCompiler()
-    llvm_compiler.create_executable(llvm_generator.module, "a")
+    llvm_compiler.create_executable(llvm_generator.module, str(output_name))
     print(format_header("Executable Generated"))
-    print("a.exe")
+    print(output_name)
 
 
 if __name__ == "__main__":

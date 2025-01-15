@@ -3,26 +3,32 @@ name = "fern"
 version = "0.1.0"
 description = "Default template for PDM package"
 authors = [
-    {name = "Kyle Kestell", email = "kyle@kestell.org"},
+    {name = "Kyle Kestell", email = "kyle@kestell.org"}
 ]
 dependencies = [
     "llvmlite>=0.43.0",
-    "lark>=1.2.2",
+    "lark>=1.2.2"
 ]
 requires-python = "==3.12.*"
 readme = "README.md"
 license = {text = "BSD0"}
 
-
-[tool.pdm]
-distribution = false
-
-[tool.pdm.dev-dependencies]
+[dependency-groups]
 dev = [
     "mypy>=1.13.0",
-    "ruff>=0.7.1",
+    "ruff>=0.7.1"
 ]
 
-[tool.pdm.scripts]
+[scripts]
 ruff = "ruff check ./src/fern"
 mypy = "mypy ./src/fern --no-namespace-packages"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # Pyflakes
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "I",   # isort
+]

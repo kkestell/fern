@@ -82,7 +82,7 @@ class LLVMCompiler:
         # Determine system-specific linker command
         if platform.system() == "Windows":
             link_cmd = (
-                f"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\Tools\\MSVC\\14.41.34120\\bin\\Hostx64\\x64\\link.exe\" /ENTRY:main /SUBSYSTEM:CONSOLE /NOLOGO "
+                f"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\Tools\\MSVC\\14.42.34433\\bin\\Hostx64\\x64\\link.exe\" /ENTRY:main /SUBSYSTEM:CONSOLE /NOLOGO "
                 f"/OUT:{output_path} {obj_path}"
             )
         else:

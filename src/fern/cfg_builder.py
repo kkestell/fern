@@ -8,7 +8,7 @@ from cfg_nodes import CFG, CFGNode
 
 class CFGBuilder:
     """
-    A class responsible for constructing Control Flow Graphs (CFGs) for a TACProgram.
+    Construct Control Flow Graphs (CFGs) for a TACProgram.
 
     Control Flow Graphs are used in compiler design and program analysis to represent the flow 
     of control within procedures. Each CFG represents one procedure and consists of nodes 

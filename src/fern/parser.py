@@ -6,7 +6,7 @@ from lark import Lark
 from lark.tree import Tree
 from lark.lexer import Token
 
-from ast_nodes import (
+from .ast_nodes import (
     ASTProgram, ASTFunction, ASTParameter, ASTType, ASTBlock, ASTStatement, ASTAssignmentStatement, ASTReturnStatement,
     ASTVariableDeclarationStatement, ASTIfStatement, ASTBinaryExpression, ASTVariableReferenceExpression,
     ASTIntegerLiteralExpression, ASTBooleanLiteralExpression, ASTFunctionCallExpression, ASTBinaryOperator,
@@ -17,6 +17,12 @@ from ast_nodes import (
 class Parser:
     def __init__(self) -> None:
         grammar_path = Path(__file__).parent / "fern.lark"
+        if not grammar_path.exists():
+             grammar_path = Path("fern.lark") # Fallback to current directory
+
+        if not grammar_path.exists():
+            raise FileNotFoundError(f"Grammar file 'fern.lark' not found at {grammar_path.resolve()} or current directory.")
+
         with open(grammar_path, 'r') as f:
             grammar = f.read()
         self.parser = Lark(grammar, parser='lalr', start='start')
@@ -36,61 +42,75 @@ class Parser:
     def _convert_function(self, tree: Tree[Any]) -> ASTFunction:
         idx = 0
         name_token = tree.children[idx]
-        if isinstance(name_token, Token):
+        if isinstance(name_token, Token) and name_token.type == 'NAME':
             name = name_token.value
         else:
-            raise TypeError("Expected Token for function name")
+            raise TypeError(f"Expected NAME Token for function name, got {type(name_token)}")
         idx += 1
 
         parameters = []
-        if isinstance(tree.children[idx], Tree) and tree.children[idx].data == 'parameters':
+        if idx < len(tree.children) and isinstance(tree.children[idx], Tree) and tree.children[idx].data == 'parameters':
             parameters = self._convert_parameters(tree.children[idx])
             idx += 1
 
         return_type_tree = tree.children[idx]
-        return_type = self._convert_type(return_type_tree)
+        if isinstance(return_type_tree, Tree) and return_type_tree.data in ('int_type', 'bool_type', 'void_type'):
+             return_type = self._convert_type(return_type_tree)
+        else:
+             expected_data = "'int_type', 'bool_type', or 'void_type'"
+             actual_data = f"'{return_type_tree.data}'" if isinstance(return_type_tree, Tree) else "None"
+             raise TypeError(f"Expected Tree with data {expected_data} for return type, got {type(return_type_tree)} with data {actual_data}")
         idx += 1
 
         block_tree = tree.children[idx]
-        if isinstance(block_tree, Tree):
+        if isinstance(block_tree, Tree) and block_tree.data == 'block':
             body = self._convert_block(block_tree)
         else:
-            raise TypeError("Expected Tree for function body block")
+            raise TypeError(f"Expected Tree 'block' for function body, got {type(block_tree)}")
 
         return ASTFunction(name=name, parameters=parameters, return_type=return_type, body=body)
 
     def _convert_parameters(self, tree: Tree[Any]) -> list[ASTParameter]:
         parameters = []
         for param_tree in tree.children:
-            param = self._convert_parameter(param_tree)
-            parameters.append(param)
+             if isinstance(param_tree, Tree) and param_tree.data == 'parameter':
+                 param = self._convert_parameter(param_tree)
+                 parameters.append(param)
+             else:
+                 raise TypeError(f"Expected Tree 'parameter', got {type(param_tree)}")
         return parameters
 
     def _convert_parameter(self, tree: Tree[Any]) -> ASTParameter:
         name_token = tree.children[0]
-        type_tree = tree.children[1]
-
-        if isinstance(name_token, Token):
+        if isinstance(name_token, Token) and name_token.type == 'NAME':
             name = name_token.value
         else:
-            raise TypeError("Expected Token for parameter name")
+            raise TypeError(f"Expected NAME Token for parameter name, got {type(name_token)}")
 
-        param_type = self._convert_type(type_tree)
+        type_tree = tree.children[1]
+        if isinstance(type_tree, Tree) and type_tree.data in ('int_type', 'bool_type', 'void_type'):
+            param_type = self._convert_type(type_tree)
+        else:
+             expected_data = "'int_type', 'bool_type', or 'void_type'"
+             actual_data = f"'{type_tree.data}'" if isinstance(type_tree, Tree) else "None"
+             raise TypeError(f"Expected Tree with data {expected_data} for parameter type, got {type(type_tree)} with data {actual_data}")
+
         return ASTParameter(name=name, type=param_type)
 
     def _convert_type(self, tree: Tree[Any]) -> ASTType:
         token = tree.children[0]
         if isinstance(token, Token):
-            if token.type == 'VOID':
-                return ASTType(name='void')
-            elif token.type == 'INT':
-                return ASTType(name='int')
-            elif token.type == 'BOOL':
-                return ASTType(name='bool')
+            type_name_map = {
+                'INT': 'int',
+                'BOOL': 'bool',
+                'VOID': 'void'
+            }
+            if token.type in type_name_map:
+                return ASTType(name=type_name_map[token.type])
             else:
-                raise ValueError(f"Unknown type token: {token.type}")
+                raise ValueError(f"Unknown type token inside type tree: {token.type}")
         else:
-            raise TypeError("Expected Token for type")
+            raise TypeError(f"Expected Token child for type tree, got {type(token)}")
 
     def _convert_block(self, tree: Tree[Any]) -> ASTBlock:
         statements = []
@@ -99,162 +119,237 @@ class Parser:
             statements.append(stmt)
         return ASTBlock(statements=statements)
 
-    def _convert_statement(self, tree: Tree[Any]) -> ASTStatement:
-        if isinstance(tree, Tree):
-            if tree.data == 'var_decl_stmt':
-                return self._convert_var_decl_stmt(tree)
-            elif tree.data == 'if_stmt':
-                return self._convert_if_stmt(tree)
-            elif tree.data == 'return_stmt':
-                return self._convert_return_stmt(tree)
-            elif tree.data == 'expr_stmt':
-                return self._convert_expr_stmt(tree)
+    def _convert_statement(self, node: Tree[Any] | Token[Any]) -> ASTStatement:
+        if isinstance(node, Tree):
+            if node.data == 'var_decl_stmt':
+                return self._convert_var_decl_stmt(node)
+            elif node.data == 'if_stmt':
+                return self._convert_if_stmt(node)
+            elif node.data == 'return_stmt':
+                return self._convert_return_stmt(node)
+            elif node.data == 'expr_stmt':
+                return self._convert_expr_stmt(node)
+            elif node.data in ['expr', 'or_expr', 'and_expr', 'comparison', 'sum', 'product', 'unary', 'atom', 'funccall']:
+                 raise ValueError(f"Unexpected expression node '{node.data}' found where statement was expected.")
             else:
-                raise ValueError(f"Unknown statement type: {tree.data}")
+                raise ValueError(f"Unknown statement type: {node.data}")
         else:
-            raise ValueError(f"Expected Tree node for statement, got {type(tree)}")
+            raise ValueError(f"Expected Tree node for statement, got {type(node)}")
 
     def _convert_var_decl_stmt(self, tree: Tree[Any]) -> ASTVariableDeclarationStatement:
         idx = 0
         name_token = tree.children[idx]
-        if isinstance(name_token, Token):
+        if isinstance(name_token, Token) and name_token.type == 'NAME':
             name = name_token.value
         else:
-            raise TypeError("Expected Token for variable name")
+            raise TypeError(f"Expected NAME Token for variable name, got {type(name_token)}")
         idx += 1
 
-        type_tree = tree.children[idx]
-        var_type = self._convert_type(type_tree)
-        idx += 1
+        var_type: ASTType | None = None
+        if idx < len(tree.children) and isinstance(tree.children[idx], Tree) and tree.children[idx].data in ('int_type', 'bool_type', 'void_type'):
+            var_type = self._convert_type(tree.children[idx])
+            idx += 1
 
-        initial_value = None
+        initial_value: ASTExpression | None = None
         if idx < len(tree.children):
-            expr_tree = tree.children[idx]
-            initial_value = self._convert_expression(expr_tree)
+             expr_node = tree.children[idx]
+             if isinstance(expr_node, Tree) and expr_node.data not in ('int_type', 'bool_type', 'void_type'):
+                 initial_value = self._convert_expression(expr_node)
+                 idx += 1
 
         return ASTVariableDeclarationStatement(name=name, type=var_type, initial_value=initial_value)
 
+    # --- Corrected _convert_if_stmt Method ---
     def _convert_if_stmt(self, tree: Tree[Any]) -> ASTIfStatement:
+        """Converts an if/else-if/else statement tree."""
+        children = tree.children
+        num_children = len(children)
         idx = 0
-        condition_tree = tree.children[idx]
-        condition = self._convert_expression(condition_tree)
+
+        # First child is the main 'if' condition
+        if idx >= num_children or not isinstance(children[idx], Tree):
+             raise ValueError("If statement missing condition.")
+        main_condition = self._convert_expression(children[idx])
         idx += 1
 
-        then_block_tree = tree.children[idx]
-        then_block = self._convert_block(then_block_tree)
+        # Second child is the main 'then' block
+        if idx >= num_children or not isinstance(children[idx], Tree) or children[idx].data != 'block':
+             raise ValueError("If statement missing 'then' block.")
+        main_then_block = self._convert_block(children[idx])
         idx += 1
 
-        else_block = None
-        if idx < len(tree.children):
-            else_block_tree = tree.children[idx]
-            else_block = self._convert_block(else_block_tree)
+        # Process remaining children for 'else if' and 'else'
+        else_if_conditions = []
+        else_if_blocks = []
+        final_else_block = None
 
-        return ASTIfStatement(condition=condition, then_block=then_block, else_block=else_block)
+        while idx < num_children:
+            # The grammar structure puts condition and block pairs directly as children.
+            # Check for an 'else if' condition (which must be an expression Tree)
+            # followed by a block Tree.
+            if idx + 1 < num_children and isinstance(children[idx], Tree) and isinstance(children[idx+1], Tree) and children[idx+1].data == 'block':
+                # This pair is an 'else if' condition and block
+                else_if_conditions.append(self._convert_expression(children[idx]))
+                else_if_blocks.append(self._convert_block(children[idx+1]))
+                idx += 2
+            # Check for a final 'else' block (must be the last child and a block Tree)
+            elif idx == num_children - 1 and isinstance(children[idx], Tree) and children[idx].data == 'block':
+                final_else_block = self._convert_block(children[idx])
+                idx += 1
+                break # Final else block found, exit loop
+            else:
+                # Structure doesn't match expected pattern from the grammar
+                # (e.g., condition without block, or non-block as final else)
+                raise ValueError(f"Unexpected structure in 'if' statement's else/else-if part near child index {idx}. Child type: {type(children[idx])}, Data: {getattr(children[idx], 'data', 'N/A')}")
+
+        # Build the nested ASTIfStatement structure from the end (right-associative)
+        current_else_node: ASTStatement | None = final_else_block # Start with the final else block, if any
+
+        # Iterate backwards through the collected 'else if' parts
+        for i in range(len(else_if_conditions) - 1, -1, -1):
+            condition = else_if_conditions[i]
+            then_block = else_if_blocks[i]
+            # Create a new ASTIfStatement for this 'else if', nesting the previous one
+            current_else_node = ASTIfStatement(
+                condition=condition,
+                then_block=then_block,
+                else_block=current_else_node # Nest the previously built else part
+            )
+
+        # Return the top-level ASTIfStatement, connecting the main if/then to the nested else structure
+        return ASTIfStatement(
+            condition=main_condition,
+            then_block=main_then_block,
+            else_block=current_else_node # Attach the fully nested else structure
+        )
+    # --- End Corrected Method ---
 
     def _convert_return_stmt(self, tree: Tree[Any]) -> ASTReturnStatement:
+        expression: ASTExpression | None = None
         if len(tree.children) > 0:
             expr_tree = tree.children[0]
-            expression = self._convert_expression(expr_tree)
-        else:
-            expression = None
+            if isinstance(expr_tree, Tree):
+                 expression = self._convert_expression(expr_tree)
+
         return ASTReturnStatement(expression=expression)
 
     def _convert_expr_stmt(self, tree: Tree[Any]) -> ASTAssignmentStatement:
         name_token = tree.children[0]
-        expr_tree = tree.children[1]
-
-        if isinstance(name_token, Token):
+        if isinstance(name_token, Token) and name_token.type == 'NAME':
             name = name_token.value
         else:
-            raise TypeError("Expected Token for assignment name")
+            raise TypeError(f"Expected NAME Token for assignment target, got {type(name_token)}")
 
-        expression = self._convert_expression(expr_tree)
+        expr_tree = tree.children[1]
+        if isinstance(expr_tree, Tree):
+             expression = self._convert_expression(expr_tree)
+        else:
+             raise TypeError(f"Expected Tree node for assignment expression, got {type(expr_tree)}")
+
         return ASTAssignmentStatement(name=name, expression=expression)
 
-    def _convert_expression(self, tree: Tree[Any]) -> ASTExpression:
-        if isinstance(tree, Tree):
-            if tree.data == 'number':
-                token = cast(Token, tree.children[0])
+    def _convert_expression(self, tree: Tree[Any] | Token[Any]) -> ASTExpression:
+        if isinstance(tree, Token):
+             raise ValueError(f"Unexpected Token '{tree.value}' ({tree.type}) found directly in expression conversion.")
+
+        elif isinstance(tree, Tree):
+            rule_name = tree.data
+            children = tree.children
+
+            if rule_name in ('int_type', 'bool_type', 'void_type'):
+                 raise ValueError(f"Type node '{rule_name}' found unexpectedly during general expression conversion.")
+
+            if rule_name == 'number':
+                token = cast(Token, children[0])
                 return ASTIntegerLiteralExpression(value=int(token.value))
-            elif tree.data == 'var':
-                token = cast(Token, tree.children[0])
+            elif rule_name == 'var':
+                token = cast(Token, children[0])
                 return ASTVariableReferenceExpression(name=token.value)
-            elif tree.data == 'unary_op':
-                token = cast(Token, tree.children[0])
-                operator = {
-                    'EXCLAMATION': ASTUnaryOperator.NOT,
-                    'MINUS': ASTUnaryOperator.NEGATE
-                }[token.type]
-                operand = self._convert_expression(tree.children[1])
-                return ASTUnaryExpression(operator=operator, operand=operand)
-            elif tree.data == 'binary_op':
-                left = self._convert_expression(tree.children[0])
-                token = cast(Token, tree.children[1])
-                operator = {
-                    'PLUS': ASTBinaryOperator.ADD,
-                    'MINUS': ASTBinaryOperator.SUBTRACT,
-                    'ASTERISK': ASTBinaryOperator.MULTIPLY,
-                    'SLASH': ASTBinaryOperator.DIVIDE,
-                    'GREATER': ASTBinaryOperator.GREATER,
-                    'LESS': ASTBinaryOperator.LESS,
-                    'EQUAL': ASTBinaryOperator.EQUAL,
-                    'NOT_EQUAL': ASTBinaryOperator.NOT_EQUAL,
-                    'GREATER_EQUAL': ASTBinaryOperator.GREATER_EQUAL,
-                    'LESS_EQUAL': ASTBinaryOperator.LESS_EQUAL,
-                    'AMPERSAND_AMPERSAND': ASTBinaryOperator.AND,
-                    'PIPE_PIPE': ASTBinaryOperator.OR
-                }[token.type]
-                right = self._convert_expression(tree.children[2])
-                return ASTBinaryExpression(operator=operator, left=left, right=right)
-            elif tree.data == 'funccall':
-                return self._convert_funccall(tree)
-            elif tree.data == 'true':
+            elif rule_name == 'true':
                 return ASTBooleanLiteralExpression(value=True)
-            elif tree.data == 'false':
+            elif rule_name == 'false':
                 return ASTBooleanLiteralExpression(value=False)
+            elif rule_name == 'funccall':
+                return self._convert_funccall(tree)
+            elif rule_name == 'unary_op':
+                op_token = cast(Token, children[0])
+                operator = self._convert_unary_operator(op_token)
+                operand = self._convert_expression(children[1])
+                return ASTUnaryExpression(operator=operator, operand=operand)
+            elif rule_name == 'binary_op':
+                left = self._convert_expression(children[0])
+                op_token = cast(Token, children[1])
+                operator = self._convert_binary_operator(op_token)
+                right = self._convert_expression(children[2])
+                return ASTBinaryExpression(operator=operator, left=left, right=right)
+            elif rule_name in ['expr', 'or_expr', 'and_expr', 'comparison', 'sum', 'product', 'unary', 'atom']:
+                 if len(children) == 1:
+                     return self._convert_expression(children[0])
+                 else:
+                     raise ValueError(f"Unexpected structure for expression rule '{rule_name}' with {len(children)} children.")
             else:
-                raise ValueError(f"Unknown expression type: {tree.data}")
+                raise ValueError(f"Unknown or unhandled expression type (Tree data): {rule_name}")
         else:
-            raise ValueError(f"Expected Tree node for expression, got {type(tree)}")
+            raise ValueError(f"Expected Tree or Token node for expression, got {type(tree)}")
+
 
     def _convert_funccall(self, tree: Tree[Any]) -> ASTFunctionCallExpression:
-        name_token = tree.children[0]
-        args_tree = tree.children[1]
-
-        if isinstance(name_token, Token):
+        idx = 0
+        name_token = tree.children[idx]
+        if isinstance(name_token, Token) and name_token.type == 'NAME':
             name = name_token.value
         else:
-            raise TypeError("Expected Token for function call name")
+            raise TypeError(f"Expected NAME Token for function call name, got {type(name_token)}")
+        idx += 1
 
-        arguments = [self._convert_expression(arg) for arg in args_tree.children]
+        arguments = []
+        if idx < len(tree.children) and isinstance(tree.children[idx], Tree) and tree.children[idx].data == 'arguments':
+            args_tree = tree.children[idx]
+            arguments = [self._convert_expression(arg) for arg in args_tree.children]
+
         return ASTFunctionCallExpression(name=name, arguments=arguments)
 
     @staticmethod
     def _convert_unary_operator(token: Token) -> ASTUnaryOperator:
         operator_map = {
-            '!': ASTUnaryOperator.NOT,
-            '-': ASTUnaryOperator.NEGATE
+            'EXCLAMATION': ASTUnaryOperator.NOT,
+            'MINUS': ASTUnaryOperator.NEGATE
         }
-        if token.value not in operator_map:
-            raise ValueError(f"Unknown unary operator: {token.value}")
-        return operator_map[token.value]
+        if token.type in operator_map:
+            return operator_map[token.type]
+        else:
+            value_map = {'!': ASTUnaryOperator.NOT, '-': ASTUnaryOperator.NEGATE}
+            if token.value in value_map:
+                 return value_map[token.value]
+            else:
+                 raise ValueError(f"Unknown unary operator token: type={token.type}, value={token.value}")
+
 
     @staticmethod
     def _convert_binary_operator(token: Token) -> ASTBinaryOperator:
         operator_map = {
-            '+': ASTBinaryOperator.ADD,
-            '-': ASTBinaryOperator.SUBTRACT,
-            '*': ASTBinaryOperator.MULTIPLY,
-            '/': ASTBinaryOperator.DIVIDE,
-            '>': ASTBinaryOperator.GREATER,
-            '<': ASTBinaryOperator.LESS,
-            '==': ASTBinaryOperator.EQUAL,
-            '!=': ASTBinaryOperator.NOT_EQUAL,
-            '>=': ASTBinaryOperator.GREATER_EQUAL,
-            '<=': ASTBinaryOperator.LESS_EQUAL,
-            '&&': ASTBinaryOperator.AND,
-            '||': ASTBinaryOperator.OR
+            'PLUS': ASTBinaryOperator.ADD,
+            'MINUS': ASTBinaryOperator.SUBTRACT,
+            'ASTERISK': ASTBinaryOperator.MULTIPLY,
+            'SLASH': ASTBinaryOperator.DIVIDE,
+            'GREATER': ASTBinaryOperator.GREATER,
+            'LESS': ASTBinaryOperator.LESS,
+            'EQUAL': ASTBinaryOperator.EQUAL,
+            'NOT_EQUAL': ASTBinaryOperator.NOT_EQUAL,
+            'GREATER_EQUAL': ASTBinaryOperator.GREATER_EQUAL,
+            'LESS_EQUAL': ASTBinaryOperator.LESS_EQUAL,
+            'AMPERSAND_AMPERSAND': ASTBinaryOperator.AND,
+            'PIPE_PIPE': ASTBinaryOperator.OR
         }
-        if token.value not in operator_map:
-            raise ValueError(f"Unknown binary operator: {token.value}")
-        return operator_map[token.value]
+        if token.type in operator_map:
+            return operator_map[token.type]
+        else:
+             value_map = {
+                 '+': ASTBinaryOperator.ADD, '-': ASTBinaryOperator.SUBTRACT, '*': ASTBinaryOperator.MULTIPLY, '/': ASTBinaryOperator.DIVIDE,
+                 '>': ASTBinaryOperator.GREATER, '<': ASTBinaryOperator.LESS, '==': ASTBinaryOperator.EQUAL, '!=': ASTBinaryOperator.NOT_EQUAL,
+                 '>=': ASTBinaryOperator.GREATER_EQUAL, '<=': ASTBinaryOperator.LESS_EQUAL, '&&': ASTBinaryOperator.AND, '||': ASTBinaryOperator.OR
+             }
+             if token.value in value_map:
+                 return value_map[token.value]
+             else:
+                 raise ValueError(f"Unknown binary operator token: type={token.type}, value={token.value}")

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from ast_nodes import (
+from .ast_nodes import (
     ASTProgram, ASTFunction, ASTBlock, ASTStatement, ASTVariableDeclarationStatement, ASTIfStatement
 )
-from symbol_table import SymbolTable, FunctionSymbol, VariableSymbol
+from .symbol_table import SymbolTable, FunctionSymbol, VariableSymbol
 
 
 class SymbolTableBuilder:

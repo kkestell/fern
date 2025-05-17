@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import field, dataclass
 from enum import Enum, auto
 
-from ast_nodes import ASTParameter, ASTType
+from .ast_nodes import ASTParameter, ASTType
 
 
 class SymbolKind(Enum):

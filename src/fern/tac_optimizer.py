@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from tac_transformer import TACProgram, TACProc, TACBlock, TACOp, TACLabel
+from .tac_transformer import TACProgram, TACProc, TACBlock, TACOp, TACLabel
 
 
 class TACDeadCodeEliminator:

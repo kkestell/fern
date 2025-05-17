@@ -1,0 +1,35 @@
+def check_positive_product(x: int, y: int): bool {
+  var product: int = x * y;
+  var is_positive: bool = product > 0;
+  return is_positive;
+}
+
+def process_values(a: int, b: int): int {
+  var sum: int = a + b;
+  var are_equal: bool = a == b;
+  var result: int;
+
+  if (are_equal) {
+    result = 0;
+  } else if (sum > 10) {
+    if (check_positive_product(a, b)) {
+       result = sum * 2;
+    } else {
+       result = sum;
+    }
+  } else {
+    var diff: int = a - b;
+    result = -diff;
+  }
+
+  return result;
+}
+
+def main(): int {
+  var val1: int = 5;
+  var val2: int = 7;
+  var outcome: int = process_values(val1, val2);
+  var another_outcome: int = process_values(3, 3);
+  return outcome - another_outcome;
+}
+

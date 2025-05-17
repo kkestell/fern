@@ -3,19 +3,19 @@ import platform
 import sys
 from pathlib import Path
 
-from ast_debug import debug_ast
-from cfg_builder import CFGBuilder
-from cfg_debug import debug_cfg
-from llvm_compiler import LLVMCompiler
-from llvm_generator import LLVMGenerator
-from llvm_runner import LLVMRunner
-from parser import Parser
-from ssa_transformer import SSATransformer
-from symbol_table_builder import SymbolTableBuilder
-from symbol_table_debug import debug_symbol_table
-from tac_optimizer import TACDeadCodeEliminator
-from tac_transformer import TACTransformer
-from utils_debug import format_header
+from .ast_debug import debug_ast
+from .cfg_builder import CFGBuilder
+from .cfg_debug import debug_cfg
+from .llvm_compiler import LLVMCompiler
+from .llvm_generator import LLVMGenerator
+from .llvm_runner import LLVMRunner
+from .parser import Parser
+from .ssa_transformer import SSATransformer
+from .symbol_table_builder import SymbolTableBuilder
+from .symbol_table_debug import debug_symbol_table
+from .tac_optimizer import TACDeadCodeEliminator
+from .tac_transformer import TACTransformer
+from .utils_debug import format_header
 
 
 def main() -> None:

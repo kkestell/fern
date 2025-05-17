@@ -1,4 +1,4 @@
-from cfg_nodes import CFG
+from .cfg_nodes import CFG
 
 
 def debug_cfg(cfg: CFG) -> str:

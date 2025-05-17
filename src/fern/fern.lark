@@ -6,7 +6,7 @@
 
 program: function*
 
-function: "def" NAME "(" parameters? ")" ":" type block "end"
+function: "def" NAME "(" parameters? ")" ":" type "{" block "}"
 
 parameters: parameter ("," parameter)*
 
@@ -19,13 +19,13 @@ block: statement*
           | var_decl_stmt
           | if_stmt
 
-expr_stmt: NAME "=" expr
+expr_stmt: NAME "=" expr ";"
 
-return_stmt: "return" expr?
+return_stmt: "return" expr? ";"
 
-var_decl_stmt: "var" NAME (":" type)? ("=" expr)?
+var_decl_stmt: "var" NAME (":" type)? ("=" expr)? ";"
 
-if_stmt: "if" expr "then" block ("elseif" expr "then" block)* ("else" block)? "end"
+if_stmt: "if" "(" expr ")" "{" block "}" ("else" "if" "(" expr ")" "{" block "}")* ("else" "{" block "}")?
 
 ?expr: or_expr
 
@@ -96,3 +96,4 @@ EXCLAMATION            : "!"
 
 %ignore WS
 %ignore CPP_COMMENT
+

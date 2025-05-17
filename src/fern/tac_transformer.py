@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from ast_nodes import (
+from .ast_nodes import (
     ASTProgram, ASTFunction, ASTBlock, ASTStatement, ASTVariableDeclarationStatement, ASTIfStatement, ASTExpression,
     ASTBinaryExpression, ASTVariableReferenceExpression, ASTIntegerLiteralExpression, ASTBooleanLiteralExpression,
     ASTFunctionCallExpression, ASTBinaryOperator, ASTReturnStatement, ASTAssignmentStatement, ASTUnaryOperator,
     ASTUnaryExpression
 )
-from symbol_table import SymbolTable
-from tac_nodes import (
+from .symbol_table import SymbolTable
+from .tac_nodes import (
     TACProgram, TACProc, TACBlock, TACInstr, TACOp, TACConst, TACTemp, TACValue, TACLabel, TACParameter
 )
 

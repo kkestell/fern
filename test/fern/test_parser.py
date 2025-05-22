@@ -25,7 +25,7 @@ def test_empty_program(fern_parser):
 
 def test_empty_function(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
     }
     """
     ast = fern_parser.parse(source)
@@ -44,10 +44,10 @@ def test_empty_function(fern_parser):
 
 def test_multiple_functions(fern_parser):
     source = """
-    def foo() : int {
+    fn foo() -> int {
         return 0;
     }
-    def bar() : bool {
+    fn bar() -> bool {
         return true;
     }
     """
@@ -61,7 +61,7 @@ def test_multiple_functions(fern_parser):
 
 def test_function_with_parameters(fern_parser):
     source = """
-    def add(a : int, b : int) : int {
+    fn add(a: int, b: int) -> int {
         return a + b;
     }
     """
@@ -83,10 +83,10 @@ def test_function_with_parameters(fern_parser):
 
 def test_return_statement(fern_parser):
     source = """
-    def test() : void {
+    fn test() -> void {
         return;
     }
-    def test2() : int {
+    fn test2() -> int {
         return 5;
     }
     """
@@ -106,7 +106,7 @@ def test_return_statement(fern_parser):
 
 def test_var_declaration(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         var x;
         var y : int;
         var z = 10;
@@ -147,7 +147,7 @@ def test_var_declaration(fern_parser):
 
 def test_assignment_statement(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         x = 5 + y;
     }
     """
@@ -162,7 +162,7 @@ def test_assignment_statement(fern_parser):
 
 def test_basic_expressions(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         a = 123;
         b = true;
         c = false;
@@ -182,7 +182,7 @@ def test_basic_expressions(fern_parser):
 
 def test_binary_operations(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         res = 1 + 2 * 3;
     }
     """
@@ -202,7 +202,7 @@ def test_binary_operations(fern_parser):
 
 def test_unary_operations(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         a = !true;
         b = -5;
     }
@@ -224,7 +224,7 @@ def test_unary_operations(fern_parser):
 
 def test_function_call(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         dummy = do_nothing();
         result = calculate(x, 5 + y, true);
     }
@@ -251,7 +251,7 @@ def test_function_call(fern_parser):
 
 def test_if_statement(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         if (x > 0) {
             y = 1;
         }
@@ -280,7 +280,7 @@ def test_if_statement(fern_parser):
 
 def test_if_else_statement_raw_tree(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         if (x) {
             y = 1;
         } else {
@@ -304,7 +304,7 @@ def test_if_else_statement_raw_tree(fern_parser):
 
 def test_if_else_if_statement_raw_tree(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         if (a) {
             x = 1;
         } else if (b) {
@@ -332,7 +332,7 @@ def test_if_else_if_statement_raw_tree(fern_parser):
 
 def test_syntax_error(fern_parser):
     source = """
-    def main() : int {
+    fn main() -> int {
         return 1 +;
     }
     """
@@ -341,7 +341,7 @@ def test_syntax_error(fern_parser):
 
 def test_missing_semicolon(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         x = 5
     }
     """
@@ -350,7 +350,7 @@ def test_missing_semicolon(fern_parser):
 
 def test_unbalanced_parentheses(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         x = (5 + 2;
     }
     """
@@ -359,7 +359,7 @@ def test_unbalanced_parentheses(fern_parser):
 
 def test_invalid_standalone_call(fern_parser):
     source = """
-    def main() : void {
+    fn main() -> void {
         my_func();
     }
     """

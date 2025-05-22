@@ -6,7 +6,7 @@
 
 program: function*
 
-function: "def" NAME "(" parameters? ")" ":" type "{" block "}"
+function: "fn" NAME "(" parameters? ")" "->" type "{" block "}"
 
 parameters: parameter ("," parameter)*
 

@@ -5,14 +5,14 @@ A multi-stage optimizing compiler for a statically-typed imperative programming 
 ## Example
 
 ```
-def fib(n: int): int
+fn fib(n: int) -> int
     if n <= 1 then
         return n
     end
     return fib(n - 1) + fib(n - 2)
 end
 
-def main(): int
+fn main() -> int
     return fib(10)
 end
 ```

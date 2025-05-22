@@ -3,19 +3,19 @@ import platform
 import sys
 from pathlib import Path
 
-from .ast_debug import debug_ast
-from .cfg_builder import CFGBuilder
-from .cfg_debug import debug_cfg
-from .llvm_compiler import LLVMCompiler
-from .llvm_generator import LLVMGenerator
-from .llvm_runner import LLVMRunner
-from .parser import Parser
-from .ssa_transformer import SSATransformer
-from .symbol_table_builder import SymbolTableBuilder
-from .symbol_table_debug import debug_symbol_table
-from .tac_optimizer import TACDeadCodeEliminator
-from .tac_transformer import TACTransformer
-from .utils_debug import format_header
+from src.fern.ast_debug import debug_ast
+from src.fern.cfg_builder import CFGBuilder
+from src.fern.cfg_debug import debug_cfg
+from src.fern.llvm_compiler import LLVMCompiler
+from src.fern.llvm_generator import LLVMGenerator
+from src.fern.llvm_runner import LLVMRunner
+from src.fern.parser import Parser
+from src.fern.ssa_transformer import SSATransformer
+from src.fern.symbol_table_builder import SymbolTableBuilder
+from src.fern.symbol_table_debug import debug_symbol_table
+from src.fern.tac_optimizer import TACDeadCodeEliminator
+from src.fern.tac_transformer import TACTransformer
+from src.fern.utils_debug import format_header
 
 
 def main() -> None:

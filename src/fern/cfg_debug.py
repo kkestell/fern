@@ -1,4 +1,4 @@
-from .cfg_nodes import CFG
+from src.fern.cfg_nodes import CFG
 
 
 def debug_cfg(cfg: CFG) -> str:

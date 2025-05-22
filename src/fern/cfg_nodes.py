@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .tac_nodes import TACBlock
+from src.fern.tac_nodes import TACBlock
 
 
 @dataclass(kw_only=True, frozen=True)

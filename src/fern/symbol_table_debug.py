@@ -1,4 +1,4 @@
-from .symbol_table import SymbolTable, Scope, FunctionSymbol
+from src.fern.symbol_table import SymbolTable, Scope, FunctionSymbol
 
 
 def debug_symbol_table(symbol_table: SymbolTable) -> str:

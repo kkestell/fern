@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from .ast_nodes import ASTType
+from src.fern.ast_nodes import ASTType
 
 
 class SSAOp(Enum):

@@ -6,7 +6,7 @@ from lark import Lark
 from lark.tree import Tree
 from lark.lexer import Token
 
-from .ast_nodes import (
+from src.fern.ast_nodes import (
     ASTProgram, ASTFunction, ASTParameter, ASTType, ASTBlock, ASTStatement, ASTAssignmentStatement, ASTReturnStatement,
     ASTVariableDeclarationStatement, ASTIfStatement, ASTBinaryExpression, ASTVariableReferenceExpression,
     ASTIntegerLiteralExpression, ASTBooleanLiteralExpression, ASTFunctionCallExpression, ASTBinaryOperator,

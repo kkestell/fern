@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from llvmlite import ir
 
-from .ssa_nodes import SSAPhi, SSAFunction, SSAInstr, SSABlock, SSAName, SSAProgram, SSAOp, SSAConst, SSAValue
+from src.fern.ssa_nodes import SSAPhi, SSAFunction, SSAInstr, SSABlock, SSAName, SSAProgram, SSAOp, SSAConst, SSAValue
 
 
 class LLVMGenerator:

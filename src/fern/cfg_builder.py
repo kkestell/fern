@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import cast
 
-from .tac_nodes import TACProgram, TACProc, TACOp, TACLabel
-from .cfg_nodes import CFG, CFGNode
+from src.fern.tac_nodes import TACProgram, TACProc, TACOp, TACLabel
+from src.fern.cfg_nodes import CFG, CFGNode
 
 
 class CFGBuilder:

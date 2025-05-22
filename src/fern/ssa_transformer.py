@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import collections
 
-from .cfg_nodes import CFG
-from .ssa_nodes import SSAFunction, SSABlock, SSAPhi, SSAInstr, SSAName, SSAProgram, SSAOp, SSAConst
-from .tac_nodes import TACConst, TACProgram, TACTemp, TACLabel, TACProc
+from src.fern.cfg_nodes import CFG
+from src.fern.ssa_nodes import SSAFunction, SSABlock, SSAPhi, SSAInstr, SSAName, SSAProgram, SSAOp, SSAConst
+from src.fern.tac_nodes import TACConst, TACProgram, TACTemp, TACLabel, TACProc
 
 
 class SSATransformer:

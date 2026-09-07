@@ -14,18 +14,18 @@ described as "behavior" or a "specification."
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
 | `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
-| `eng/roadmap.md`      | Build order, current scope, and completion gates. Reference behavior contracts rather than defining them here.                                                                         |
-| `eng/plans/`          | Bounded implementation steps and validation for a slice, produced by `kplan` and executed by `kwork`.                                                                                  |
+| `eng/roadmap.md`      | Milestones, their tasks, scope, order, and completion gates. Reference behavior contracts rather than defining them here.                                                              |
 | `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
 
-Use `kspec` when creating or modifying `docs/spec.md`, and `kroadmap` when
-creating or modifying `eng/roadmap.md`. Reading either does not require its
-skill. Generic skill wording about "product behavior" does not expand the
-language specification's scope.
+Use `kspec` when creating or modifying `docs/spec.md`. Use `kroadmap` to
+add or revise roadmap milestones and tasks; `kwork` only checks off completed
+tasks in `eng/roadmap.md`. Reading either document does not require its skill.
+Generic skill wording about "product behavior" does not expand the language
+specification's scope.
 
-The specification and roadmap are created when the project needs them. `kplan`
+The specification and roadmap are created when the project needs them. `kwork`
 requires both and will direct the user to the appropriate skill when either is
-missing. The architecture document is not required to begin planning.
+missing. The architecture document is not required to begin work.
 
 ## Codebase Map
 
@@ -35,7 +35,7 @@ missing. The architecture document is not required to begin planning.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests.
 - `examples/` — Fern programs demonstrating supported syntax and semantics;
-  executable support is documented in `README.md`.
+  build and run instructions are documented in `README.md`.
 
 ## Development Commands
 
@@ -69,6 +69,10 @@ already have names. Prefer the concrete: name the file, the function, the value.
 
 When you need a decision, ask one plain question.
 
+When asking about a language-design decision, briefly explain what Odin, Hare,
+and C do for that same decision. Distinguish specified behavior from
+implementation-specific behavior and verify uncertain details in primary sources.
+
 This governs replies. Files you write follow the repository's documentation
 rules.
 
@@ -85,11 +89,10 @@ implementation depends on them.
 When `eng/architecture.md` exists, read it before changing the program's
 structure. Do not invent architectural constraints when it does not exist.
 
-Prioritize language features and a clear compiler architecture. A feature or
-milestone is the completion boundary; plans are implementation steps and may
-leave that feature partially integrated. Preserve existing supported behavior
-and state unfinished integration clearly. Add temporary guards only when needed
-to prevent incorrect execution, not to make each phase a standalone deliverable.
+Finish one roadmap task at a time. A task may leave the feature partially
+implemented across compiler phases. Preserve existing supported behavior and
+state unfinished integration clearly. Add temporary guards only when needed to
+prevent incorrect execution, not to make each task a standalone deliverable.
 
 Use focused checks during implementation. Run broad validation when the feature
 or milestone is integrated, or earlier when a concrete risk warrants it. Review
@@ -99,9 +102,19 @@ feature is complete only when its affected phases and tests agree.
 Do not reserve names, add extension points, or build infrastructure for
 hypothetical future features.
 
-Use `kplan` to plan substantial work and `kwork` to execute an implementation
-plan. Both `docs/spec.md` and `eng/roadmap.md` must exist before planning
-begins.
+Use `kwork` to plan briefly in context, implement, and validate one roadmap task
+in the same session. Do not write an implementation plan file. Both
+`docs/spec.md` and `eng/roadmap.md` must exist before work begins.
+
+The roadmap is a list of named milestones in implementation order, with task
+checkboxes recording progress. Preserve completed tasks and milestone details.
+
+Each milestone must have a complete Fern example in the roadmap when its scope
+is planned. Demonstrate its new capabilities, include the expected result, and
+name its future `examples/` file. When the milestone is implemented, create
+that file. `kroadmap` maintains the roadmap's example snippets and links. For
+milestones awaiting language decisions, write the example when those decisions
+are settled.
 
 Preserve unrelated working-tree changes. Never commit unless the user asks for a
 commit explicitly.

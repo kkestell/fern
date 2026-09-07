@@ -8,7 +8,7 @@ Entry {
             ty: Int,
             kind: Copy(
                 Integer {
-                    value: 42,
+                    value: 1,
                     ty: Int,
                 },
             ),
@@ -16,11 +16,10 @@ Entry {
         Value {
             ty: Int,
             kind: Copy(
-                Value(
-                    ValueId(
-                        0,
-                    ),
-                ),
+                Integer {
+                    value: 42,
+                    ty: Int,
+                },
             ),
         },
         Value {
@@ -36,26 +35,26 @@ Entry {
         Value {
             ty: Int,
             kind: Copy(
+                Value(
+                    ValueId(
+                        2,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: Int,
+            kind: Copy(
                 Integer {
                     value: 7,
                     ty: Int,
                 },
             ),
         },
-        Value {
-            ty: Int,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        3,
-                    ),
-                ),
-            ),
-        },
     ],
     exit: Value(
         ValueId(
-            2,
+            1,
         ),
     ),
 }

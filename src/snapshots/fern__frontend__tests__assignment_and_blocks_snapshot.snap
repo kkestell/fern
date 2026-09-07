@@ -1,0 +1,20 @@
+---
+source: src/frontend.rs
+expression: project(&parse(source).unwrap())
+---
+fn main name=3..7 span=0..95
+  var x name=24..25 annotation=None span=20..30
+    integer 1 span=28..29
+  assign x name=31..32 span=31..37
+    reference x span=35..36
+  block span=38..40
+  block span=41..84
+    const copy name=49..53 annotation=None span=43..58
+      reference x span=56..57
+    block span=59..70
+      assign x name=61..62 span=61..68
+        integer 42 span=65..67
+    exit span=71..82
+      reference copy span=76..80
+  exit span=85..93
+    reference x span=90..91

@@ -4,19 +4,35 @@ expression: entry.entry()
 ---
 Entry {
     values: [
-        Integer(
-            42,
-        ),
-        Value(
-            ValueId(
-                0,
+        Value {
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 42,
+                    ty: Int,
+                },
             ),
-        ),
-        Value(
-            ValueId(
-                1,
+        },
+        Value {
+            ty: Int,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
             ),
-        ),
+        },
+        Value {
+            ty: Int,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            ),
+        },
     ],
     exit: Value(
         ValueId(

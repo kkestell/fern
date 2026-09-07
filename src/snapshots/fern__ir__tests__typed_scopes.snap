@@ -1,0 +1,111 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Value {
+            ty: I8,
+            kind: Copy(
+                Integer {
+                    value: 42,
+                    ty: I8,
+                },
+            ),
+        },
+        Value {
+            ty: I8,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: I64,
+            kind: Convert(
+                Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: I64,
+            kind: Convert(
+                Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: I64,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        3,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: I8,
+            kind: Copy(
+                Integer {
+                    value: 7,
+                    ty: I8,
+                },
+            ),
+        },
+        Value {
+            ty: Int,
+            kind: Convert(
+                Value(
+                    ValueId(
+                        5,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: Int,
+            kind: Convert(
+                Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: I8,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: Int,
+            kind: Convert(
+                Value(
+                    ValueId(
+                        8,
+                    ),
+                ),
+            ),
+        },
+    ],
+    exit: Value(
+        ValueId(
+            9,
+        ),
+    ),
+}

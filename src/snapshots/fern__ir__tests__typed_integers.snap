@@ -1,0 +1,121 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Value {
+            ty: I8,
+            kind: Copy(
+                Integer {
+                    value: 127,
+                    ty: I8,
+                },
+            ),
+        },
+        Value {
+            ty: I16,
+            kind: Copy(
+                Integer {
+                    value: 32767,
+                    ty: I16,
+                },
+            ),
+        },
+        Value {
+            ty: I32,
+            kind: Copy(
+                Integer {
+                    value: 2147483647,
+                    ty: I32,
+                },
+            ),
+        },
+        Value {
+            ty: I64,
+            kind: Copy(
+                Integer {
+                    value: 9223372036854775807,
+                    ty: I64,
+                },
+            ),
+        },
+        Value {
+            ty: U8,
+            kind: Copy(
+                Integer {
+                    value: 255,
+                    ty: U8,
+                },
+            ),
+        },
+        Value {
+            ty: U16,
+            kind: Copy(
+                Integer {
+                    value: 65535,
+                    ty: U16,
+                },
+            ),
+        },
+        Value {
+            ty: U32,
+            kind: Copy(
+                Integer {
+                    value: 4294967295,
+                    ty: U32,
+                },
+            ),
+        },
+        Value {
+            ty: U64,
+            kind: Copy(
+                Integer {
+                    value: 18446744073709551615,
+                    ty: U64,
+                },
+            ),
+        },
+        Value {
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 2147483647,
+                    ty: Int,
+                },
+            ),
+        },
+        Value {
+            ty: Uint,
+            kind: Copy(
+                Integer {
+                    value: 4294967295,
+                    ty: Uint,
+                },
+            ),
+        },
+        Value {
+            ty: U64,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        7,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            ty: U64,
+            kind: Copy(
+                Integer {
+                    value: 18446744073709551615,
+                    ty: U64,
+                },
+            ),
+        },
+    ],
+    exit: Integer {
+        value: 0,
+        ty: Int,
+    },
+}

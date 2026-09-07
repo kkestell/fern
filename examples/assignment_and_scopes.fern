@@ -1,0 +1,10 @@
+fn main() -> void {
+    var status = 7;
+    const saved = status;
+    {
+        status = 42;
+        var status = status; // The initializer reads the enclosing binding.
+        status = saved;     // Only the inner binding changes.
+    }
+    exit(status); // The enclosing assignment survives the nested scope.
+}

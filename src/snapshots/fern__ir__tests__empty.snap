@@ -4,7 +4,8 @@ expression: entry.entry()
 ---
 Entry {
     values: [],
-    exit: Integer(
-        0,
-    ),
+    exit: Integer {
+        value: 0,
+        ty: Int,
+    },
 }

@@ -6,10 +6,10 @@ Entry {
     values: [
         Value {
             ty: Int,
-            kind: Copy(
+            kind: Convert(
                 Integer {
                     value: 42,
-                    ty: Int,
+                    ty: I16,
                 },
             ),
         },

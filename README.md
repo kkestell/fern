@@ -4,17 +4,14 @@ Fern is a low-level programming language. The
 [language specification](docs/spec.md) defines its behavior; the
 [roadmap](eng/roadmap.md) tracks implementation scope and completion gates.
 
-The compiler checks initialized `var` and `const` bindings, integer literals,
-binding references, and `exit` arguments in one parameterless `main` returning
-`void`. Its `int` is signed 32-bit, independent of host pointer width. Literals
-may be unsuffixed or use `i`; other integer suffixes are not supported yet.
-
-These programs compile to native executables. See
-[the empty entry](examples/empty.fern),
+See [the empty entry](examples/empty.fern),
 [integer literals](examples/integer_literals.fern) for bases, annotations,
 suffixes, comments, and a trailing call comma, and
 [shadowing](examples/shadowing.fern) for binding copies and initializer
-visibility. The two nonempty examples exit with status 42.
+visibility. See [assignment and scopes](examples/assignment_and_scopes.fern) for
+reassignment, saved copies, and nested shadowing, and
+[integer types](examples/integer_types.fern) for typed literals and implicit
+conversions. The nonempty examples exit with status 42.
 
 ## Build and run
 
@@ -35,8 +32,7 @@ with `./`.
 
 `QBE` and `CC` can each specify a tool executable name or path. They do not
 accept command-line flags. QBE must default to the development host's target;
-cross-compilation is not supported. Native execution was tested on macOS arm64
-with Rust 1.95.0, QBE's `arm64_apple` default target, and Apple clang 21.0.0.
+cross-compilation is not supported.
 
 Source diagnostics include the input path and source location. Invalid UTF-8
 reports a zero-based byte offset. File and tool failures return a nonzero

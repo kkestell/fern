@@ -13,8 +13,6 @@ enum Token {
     Void,
     #[token("const")]
     Const,
-    #[token("int")]
-    Int,
     #[token("exit")]
     Exit,
     #[regex("[0-9][a-zA-Z0-9_]*")]
@@ -88,17 +86,30 @@ pub(crate) struct Statement {
 #[derive(Debug)]
 pub(crate) enum StatementKind {
     Binding {
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         mutable: bool,
         name: Spur,
         #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         name_span: Range<usize>,
-        int_annotation: Option<Range<usize>>,
+        annotation: Option<TypeAnnotation>,
         initializer: Idx<Expression>,
+    },
+    Assignment {
+        name: Spur,
+        name_span: Range<usize>,
+        value: Idx<Expression>,
+    },
+    Block {
+        body: Vec<Idx<Statement>>,
     },
     Exit {
         argument: Idx<Expression>,
     },
+}
+
+#[derive(Debug)]
+pub(crate) struct TypeAnnotation {
+    pub name: String,
+    pub span: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -258,15 +269,7 @@ impl Parser<'_> {
         )?;
         self.expect(Token::Arrow, "expected `->`")?;
         self.expect(Token::Void, "expected `void`")?;
-        self.expect(Token::LeftBrace, "expected `{`")?;
-        let mut body = Vec::new();
-        while self.current != Some(Token::RightBrace) {
-            if self.current.is_none() {
-                return Err(self.error("expected `}`"));
-            }
-            body.push(self.statement()?);
-        }
-        let end = self.expect(Token::RightBrace, "expected `}`")?.end;
+        let (body, end) = self.body()?;
         self.syntax.functions.alloc(Function {
             name,
             name_span,
@@ -276,8 +279,28 @@ impl Parser<'_> {
         Ok(())
     }
 
+    fn body(&mut self) -> Result<(Vec<Idx<Statement>>, usize), Diagnostic> {
+        self.expect(Token::LeftBrace, "expected `{`")?;
+        let mut body = Vec::new();
+        while self.current != Some(Token::RightBrace) {
+            if self.current.is_none() {
+                return Err(self.error("expected `}`"));
+            }
+            body.push(self.statement()?);
+        }
+        let end = self.expect(Token::RightBrace, "expected `}`")?.end;
+        Ok((body, end))
+    }
+
     fn statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
         let start = self.span.start;
+        if self.current == Some(Token::LeftBrace) {
+            let (body, end) = self.body()?;
+            return Ok(self.syntax.statements.alloc(Statement {
+                kind: StatementKind::Block { body },
+                span: start..end,
+            }));
+        }
         let kind = match self.current {
             Some(Token::Const) | Some(Token::Name)
                 if self.lexer.slice() == "const" || self.lexer.slice() == "var" =>
@@ -285,9 +308,9 @@ impl Parser<'_> {
                 let mutable = self.lexer.slice() == "var";
                 self.advance()?;
                 let (name, name_span) = self.name()?;
-                let int_annotation = if self.current == Some(Token::Colon) {
+                let annotation = if self.current == Some(Token::Colon) {
                     self.advance()?;
-                    Some(self.expect(Token::Int, "expected `int`")?)
+                    Some(self.integer_annotation()?)
                 } else {
                     None
                 };
@@ -297,8 +320,18 @@ impl Parser<'_> {
                     mutable,
                     name,
                     name_span,
-                    int_annotation,
+                    annotation,
                     initializer,
+                }
+            }
+            Some(Token::Name) => {
+                let (name, name_span) = self.name()?;
+                self.expect(Token::Equals, "expected `=`")?;
+                let value = self.expression()?;
+                StatementKind::Assignment {
+                    name,
+                    name_span,
+                    value,
                 }
             }
             Some(Token::Exit) => {
@@ -311,13 +344,30 @@ impl Parser<'_> {
                 self.expect(Token::RightParen, "expected `)`; exit takes one argument")?;
                 StatementKind::Exit { argument }
             }
-            _ => return Err(self.error("expected a declaration or `exit`")),
+            _ => return Err(self.error("expected a declaration, assignment, block, or `exit`")),
         };
         let end = self.expect(Token::Semicolon, "expected `;`")?.end;
         Ok(self.syntax.statements.alloc(Statement {
             kind,
             span: start..end,
         }))
+    }
+
+    fn integer_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
+        if self.current != Some(Token::Name)
+            || !matches!(
+                self.lexer.slice(),
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "int" | "uint"
+            )
+        {
+            return Err(self.error("expected an integer type"));
+        }
+        let annotation = TypeAnnotation {
+            name: self.lexer.slice().to_owned(),
+            span: self.span.clone(),
+        };
+        self.advance()?;
+        Ok(annotation)
     }
 
     fn expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
@@ -350,50 +400,120 @@ mod tests {
                 function.span
             )
             .unwrap();
-            for &id in &function.body {
-                let statement = &syntax.statements[id];
-                let expression = match &statement.kind {
-                    StatementKind::Binding {
-                        mutable,
-                        name,
-                        name_span,
-                        int_annotation,
-                        initializer,
-                    } => {
-                        write!(
-                            output,
-                            "  {} {} name={name_span:?} int={int_annotation:?}",
-                            if *mutable { "var" } else { "const" },
-                            syntax.names.resolve(name)
-                        )
-                        .unwrap();
-                        *initializer
-                    }
-                    StatementKind::Exit { argument } => {
-                        write!(output, "  exit").unwrap();
-                        *argument
-                    }
-                };
-                writeln!(output, " span={:?}", statement.span).unwrap();
-                let expression = &syntax.expressions[expression];
-                match &expression.kind {
-                    ExpressionKind::Integer(spelling) => {
-                        write!(output, "    integer {spelling}").unwrap()
-                    }
-                    ExpressionKind::Reference(name) => {
-                        write!(output, "    reference {}", syntax.names.resolve(name)).unwrap()
-                    }
-                }
-                writeln!(output, " span={:?}", expression.span).unwrap();
-            }
+            project_body(syntax, &function.body, 1, &mut output);
         }
         output
+    }
+
+    fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: &mut String) {
+        use std::fmt::Write;
+        let indent = "  ".repeat(depth);
+        for &id in body {
+            let statement = &syntax.statements[id];
+            let expression = match &statement.kind {
+                StatementKind::Binding {
+                    mutable,
+                    name,
+                    name_span,
+                    annotation,
+                    initializer,
+                } => {
+                    write!(
+                        output,
+                        "{indent}{} {} name={name_span:?} annotation={annotation:?}",
+                        if *mutable { "var" } else { "const" },
+                        syntax.names.resolve(name)
+                    )
+                    .unwrap();
+                    *initializer
+                }
+                StatementKind::Assignment {
+                    name,
+                    name_span,
+                    value,
+                } => {
+                    write!(
+                        output,
+                        "{indent}assign {} name={name_span:?}",
+                        syntax.names.resolve(name)
+                    )
+                    .unwrap();
+                    *value
+                }
+                StatementKind::Block { body } => {
+                    writeln!(output, "{indent}block span={:?}", statement.span).unwrap();
+                    project_body(syntax, body, depth + 1, output);
+                    continue;
+                }
+                StatementKind::Exit { argument } => {
+                    write!(output, "{indent}exit").unwrap();
+                    *argument
+                }
+            };
+            writeln!(output, " span={:?}", statement.span).unwrap();
+            let expression = &syntax.expressions[expression];
+            match &expression.kind {
+                ExpressionKind::Integer(spelling) => {
+                    write!(output, "{indent}  integer {spelling}").unwrap()
+                }
+                ExpressionKind::Reference(name) => {
+                    write!(output, "{indent}  reference {}", syntax.names.resolve(name)).unwrap()
+                }
+            }
+            writeln!(output, " span={:?}", expression.span).unwrap();
+        }
     }
 
     #[test]
     fn mixed_body_snapshot() {
         let source = "fn main() -> void { const exit_code = 0x2Ai; var copy: int = exit_code; exit(copy,); const after = missing; } fn helper() -> void { exit(000,); }";
         insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn assignment_and_blocks_snapshot() {
+        let source = "fn main() -> void { var x = 1; x = x; {} { const copy = x; { x = 42; } exit(copy); } exit(x); }";
+        insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn integer_annotations_snapshot() {
+        let mut source = String::from("/* 🌿 */ fn main() -> void {\n");
+        for name in [
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint",
+        ] {
+            source.push_str(&format!("var value: {name} = 0x2A;\n"));
+            source.push_str(&format!("{{ const copy: /* type */ {name} = value; }}\n"));
+        }
+        source.push('}');
+        insta::assert_snapshot!(project(&parse(&source).unwrap()));
+    }
+
+    #[test]
+    fn malformed_annotations_report_the_offending_token() {
+        for spelling in [
+            "size",
+            "uintptr",
+            "bool",
+            "void",
+            "f32",
+            "i128",
+            "u7",
+            "int_value",
+            "i",
+            "u",
+            "42",
+            "=",
+            ";",
+            ":",
+            "",
+        ] {
+            let prefix = "/* 🌿 */ fn main() -> void { const x: ";
+            let source = format!("{prefix}{spelling}");
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expected an integer type", "{spelling}");
+            assert_eq!(error.span, prefix.len()..source.len(), "{spelling}");
+        }
     }
 
     #[test]
@@ -472,7 +592,7 @@ mod tests {
             "const «;»",
             "var x = «;»",
             "var x: «=» 1;",
-            "var x: «u8» = 1;",
+            "var x: «size» = 1;",
             "var x «1»;",
             "var x: int «;»",
             "const x = 1 «}»",
@@ -484,8 +604,18 @@ mod tests {
             "exit(0,«,»);",
             "exit(0«;»",
             "exit(0) «}»",
-            "«x» = 1;",
-            "«{»}",
+            "x «1»;",
+            "x = «;»",
+            "x = 1 «}»",
+            "x = 1«»",
+            "{ x = 1; «»",
+            "{ {} } «»",
+            "{}«;»",
+            "«1» = 2;",
+            "«=» 2;",
+            "«)»",
+            "x «.»field = 1;",
+            "x «[»0] = 1;",
             "const x = 1 «+» 2;",
             "exit(«-»1);",
             "var x = «(»1);",

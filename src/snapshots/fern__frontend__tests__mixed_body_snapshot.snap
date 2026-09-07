@@ -3,13 +3,13 @@ source: src/frontend.rs
 expression: project(&parse(source).unwrap())
 ---
 fn main name=3..7 span=0..109
-  const exit_code name=26..35 int=None span=20..44
+  const exit_code name=26..35 annotation=None span=20..44
     integer 0x2Ai span=38..43
-  var copy name=49..53 int=Some(55..58) span=45..71
+  var copy name=49..53 annotation=Some(TypeAnnotation { name: "int", span: 55..58 }) span=45..71
     reference exit_code span=61..70
   exit span=72..84
     reference copy span=77..81
-  const after name=91..96 int=None span=85..107
+  const after name=91..96 annotation=None span=85..107
     reference missing span=99..106
 fn helper name=113..119 span=110..145
   exit span=132..143

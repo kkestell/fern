@@ -1,186 +1,24 @@
 # Fern Language Specification
 
-This specification defines the behavior every implementation of Fern must
-provide. It is authoritative wherever it is explicit.
+This specification defines Fern's language behavior. It is authoritative
+wherever it is explicit. An invalid program must be rejected during compilation.
+A trap halts execution with a diagnostic identifying the failing operation.
 
-Fern is a low-level programming language in the spirit of C. Its goals are to
-avoid C's legacy baggage, undefined behavior, and unsafe default semantics. A
-program this specification calls invalid is ill-formed, and an implementation
-must reject it. Where this specification leaves a choice to the implementation,
-it says so explicitly.
-
-## Open Questions
-
-This section is not normative. Each item is a decision this specification has
-not yet made. Items are numbered for reference and grouped by the section they
-will belong to once decided. Where the current text already implies something,
-the item says what.
-
-### Lexical structure
-
-1. **Keywords.** The Keywords section defines the words already reserved. What
-   additional words belong in the complete set?
-
-### Types
-
-4. **Pointer lifetimes and mutability.** Which additional pointer conversions
-   are allowed? What remaining lifetime and mutability rules apply to taking
-   addresses and accessing pointees? After explicitly casting away pointee
-   constness, may the pointer modify storage originally declared `const`?
-5. **Size and index types.** What type do array indices, lengths, and the count
-   argument of `alloc` have? What are the range and arithmetic rules of `size`?
-6. **Integer overflow.** What happens when integer arithmetic overflows:
-   wrapping, a runtime failure, or something else? Division by zero and shifts
-   by at least the operand width need the same decision.
-7. **Numeric conversions.** Integer conversions below settle same-signedness
-   widening in initialization, assignment, function arguments, return values,
-   and binary expressions. What other numeric conversions exist, and what are
-   the syntax and value rules for explicit integer casts? What do conversions
-   involving the null type produce? Does an unsupported `uintptr` promotion
-   print a diagnostic and abort during compilation or execution? Which operators
-   use the promotion rules?
-8. **Strings.** What is the representation of `str`, and which standard-library
-   operations provide content access, length, conversion, and validation?
-9. **Slices.** A slice owns its memory, yet assigning one is shallow and creates
-   an alias. Is a slice an owning buffer, a view into other storage, or both? Is
-   there a slicing expression such as `xs[a..b]`? Can a slice grow?
-10. **Arrays.** Does assigning an array copy its elements? Are array accesses
-    bounds checked, and is a constant out-of-range index rejected at compile
-    time? Is a zero-length array valid? Must the length `N` be a literal, or may
-    it be any constant expression?
-11. **Structs.** Must a struct literal initialize every field? Do fields have
-    zero values? Can layout, padding, and alignment be controlled? Can a struct
-    type be used without naming it? How are structs compared?
-12. **Tuples.** Is the empty tuple `()` a type? Is a one-element tuple distinct
-    from its element? Can a tuple be destructured into several bindings?
-13. **Other types.** Enumerations, unions or tagged unions, optional values, and
-    an error-handling mechanism are all absent. Which does the language provide?
-    Beyond the compatibility rules under Function types, what are the rules for
-    obtaining and calling function pointers?
-14. **Type declarations.** Does `type name = ...` create a distinct type or an
-    alias? Are two struct types with identical fields the same type? Can a type
-    refer to itself? The example has no terminating semicolon; is one required?
-
-### Flexible types and constants
-
-15. **Flexible arithmetic.** How do two flexible operands combine, as in
-    `1 + 2`, `1 + 2.0`, or `'a' + 1`? May a flexible integer initialize a
-    floating-point binding? What precision and rounding rules apply to flexible
-    floating-point values?
-16. **Constant expressions.** Which `const` bindings may be used in constant
-    expressions? What else may appear in a constant expression?
-
-### Declarations
-
-17. **Uninitialized bindings.** Is `var x: int;` valid? If so, does `x` hold a
-    zero value, or must it be assigned before it is read?
-18. **Top-level declarations.** Can bindings be declared outside functions? When
-    are they initialized?
-19. **Immutability and aliasing.** How does copying non-pointer values interact
-    with const qualification? How does const qualification apply to slices and
-    their elements? Can a `const`-bound allocation be freed?
-
-### Expressions
-
-21. **Operators.** Which arithmetic, comparison, logical, and bitwise operators
-    exist, with what precedence and associativity? The pointer and null-test
-    operations below settle only part of this question.
-22. **Evaluation order.** In what order are operands, arguments, and the
-    elements of a composite literal evaluated?
-23. **Functions.** The Functions section settles parameterless declarations and
-    the entry point. How are parameters declared, arguments passed, and values
-    returned? What are the rules for calling user-defined functions? Does `exit`
-    run deferred statements?
-24. **Generics.** `[]T` and `[N]T` are parameterized by `T`. Can user code
-    define generic types or functions?
-25. **Compile-time evaluation.** Which expressions can be evaluated at compile
-    time? How does compile-time evaluation relate to flexible types?
-
-### Statements
-
-26. **Control flow.** Null tests, boolean conditions, and matching nullable
-    pointers are specified below. What are the full rules for conditionals,
-    loops, matching other values, `yield`, `break`, `continue`, and `return`?
-27. **Assignment forms.** Beyond the specified `+=` restrictions for pointers
-    and `uintptr`, which compound assignments exist? Is assignment a statement
-    only, or also an expression?
-28. **`defer` details.** In what order do several deferred statements in one
-    scope run? Are the operands of a deferred statement evaluated when it is
-    deferred or when it runs? Which statements may be deferred? Does a deferred
-    statement run on every way of leaving the scope?
-
-### Memory management
-
-29. **`alloc` forms.** Only `alloc([]T, n)` appears. Can a single struct or
-    other non-slice value be allocated, and what does the result refer to? Is
-    allocated memory zeroed? What alignment does it have?
-30. **Allocation failure.** What happens when `alloc` cannot obtain memory?
-31. **Use after free and double free.** Avoiding them is "the programmer's
-    responsibility", which conflicts with the goal of no undefined behavior.
-    What does the language guarantee when a dangling alias is used or an
-    allocation is freed twice?
-32. **`free` on other values.** What happens when `free` is applied to an array,
-    a struct, a string literal, or a slice that did not come from `alloc`?
-33. **Explicit copy.** Independent storage "requires an explicit copy
-    operation". What is that operation, and how deep is the copy?
-34. **Allocators.** Is there a single global allocator, or can allocation be
-    directed to arenas or user-supplied allocators?
-
-### Runtime checks
-
-35. **Out-of-bounds behavior.** Out-of-bounds access "has defined behavior".
-    What is it: termination with a diagnostic, a recoverable error, or something
-    else? Can the check be disabled?
-36. **Diagnostics.** Is every invalid program detected before it runs? What must
-    an implementation report for an invalid program and for a runtime failure?
-    What does a panic do, and can it be recovered from?
-37. **Invalid pointer dereferences.** Does dereferencing an invalid or
-    misaligned pointer panic, or can it have undefined behavior? A panic is
-    preferred, but the guarantee is not yet settled.
-
-### Program structure
-
-38. **Module details.** How are declarations made public? How are import name
-    conflicts and dependency cycles handled?
-39. **C interoperability.** Can Fern call C and be called from C? What is the
-    calling convention, and how are C types mapped?
-40. **Standard library.** What does the language provide beyond `alloc`, `free`,
-    and the explicit copy operation?
-41. **Formal grammar.** Syntax is shown as forms rather than as a grammar. Once
-    the lexical structure and expression syntax are settled, which grammar
-    notation should this specification use?
-42. **Module search.** Does setting `FERNPATH` replace the default search list
-    or extend it? How are missing modules reported?
-
-## Notation and Terminology
-
-Syntax is shown as forms in `text` blocks. In a form, `T` stands for a type, `N`
-for an array length, `name` for an identifier, `e`, `n`, and `i` for
-expressions, and `s` for a statement. `...` marks repetition of the preceding
-item. Every other character in a form is literal.
-
-Examples are fragments of Fern programs. A comment on an example line states the
-type or value the line produces, or marks the line as invalid.
-
-A program this specification calls **invalid** is ill-formed. An implementation
-must reject it.
-
-A behavior this specification calls **implementation-defined** is chosen by the
-implementation.
+Fern is a low-level programming language in the spirit of C. Its goals are
+clarity, defined behavior, and safe default semantics.
 
 ## Lexical Structure
 
 ### Source text
 
 Source text is encoded in UTF-8. Source text that is not valid UTF-8 is invalid.
-Unicode characters are permitted in comments, string literals, and rune
-literals.
+Unicode characters are permitted in comments.
 
-Outside comments and literals, ASCII space, horizontal tab, line feed, carriage
-return, vertical tab, and form feed are whitespace. Whitespace and comments
-separate tokens but do not otherwise affect syntax. Newlines do not insert
-semicolons. Tokens use the longest matching spelling; a keyword is recognized
-only when it is the entire identifier, so `exit_code` is an identifier.
+Outside comments, ASCII space, horizontal tab, line feed, carriage return,
+vertical tab, and form feed are whitespace. Whitespace and comments separate
+tokens but do not otherwise affect syntax. Newlines do not insert semicolons.
+Tokens use the longest matching spelling; a keyword is recognized only when it
+is the entire identifier, so `exit_code` is an identifier.
 
 ### Identifiers
 
@@ -208,24 +46,9 @@ var x = 10; // int
 
 ### Keywords
 
-`alloc` and `free` are reserved keywords for built-in operations. They use
-function-like syntax but are not ordinary functions or library functions, and
-cannot be used as identifiers.
-
-`const` is a reserved keyword used in declarations and type qualification.
-
-`fn` is a reserved keyword used in function declarations. `void` is reserved for
-a function return annotation indicating that the function returns no value.
-`exit` is a reserved keyword for the built-in process-exit operation and cannot
-be used as an identifier.
-
-Built-in type names are reserved and cannot be used as identifiers: `i8`, `i16`,
-`i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `int`, `uint`, `f32`, `f64`, `bool`,
-`rune`, `str`, `uintptr`, and `size`.
-
-```text
-var int = 3; // invalid: int is reserved
-```
+`fn`, `void`, `const`, and `exit` are reserved. The ten integer type names
+listed under Integer types and `bool` are reserved and cannot be identifiers.
+`var` introduces a mutable binding in a declaration.
 
 ### Integer literals
 
@@ -234,484 +57,43 @@ hexadecimal with `0x`, binary with `0b`, or octal with `0o`. A prefix must be
 followed by at least one digit valid in that base. Hexadecimal digits include
 `a`–`f` and `A`–`F`. Digit separators are not allowed.
 
-A literal may have one of the suffixes `i8`, `i16`, `i32`, `i64`, `u8`, `u16`,
-`u32`, `u64`, `i`, `u`, or `z`. The fixed-width suffixes name their types; `i`
-means `int`, `u` means `uint`, and `z` means `size`. `int`, `uint`, and `size`
-are not valid suffixes. `uintptr` has no literal suffix.
+Integer literals are untyped and do not accept type suffixes. Use a binding
+annotation or an explicit conversion to select an integer type.
 
-```text
+```fern
 42
 0x2A
 0b101010
 0o52
-42u8
-42i
-42u
-42z
-```
 
-The Flexible Types section defines literal typing and range checks.
-
-### Floating-point literals
-
-A floating-point literal begins with one or more decimal digits, optionally
-followed by a decimal point and one or more decimal digits, then optionally an
-exponent. At least the decimal point or exponent must be present. An exponent
-begins with `e` or `E`, followed by an optional `+` or `-` and at least one
-decimal digit. A literal may end with `f32` or `f64` to specify its type.
-Hexadecimal floating-point literals are not supported.
-
-```text
-3.14
-3.14f32
-1e3
-1.5e-2
-1E+3f64
-1.  // invalid
-.5  // invalid
-```
-
-The Flexible Types section defines literal typing and overflow checks.
-
-### String and rune literals
-
-A string literal is enclosed in double quotes. Unicode characters may appear
-directly, as in `"x 🌐"`. Escape sequences are decoded and Unicode characters
-are encoded as UTF-8; the resulting literal always contains valid UTF-8.
-
-A rune literal is enclosed in single quotes and denotes exactly one Unicode
-scalar value, written directly or with an escape sequence. Examples include
-`'x'`, `'🌐'`, and `'\n'`. The Flexible Types section defines its type.
-
-String and rune literals support these escapes:
-
-| Escape       | Value                                            |
-| ------------ | ------------------------------------------------ |
-| `\n`         | Newline                                          |
-| `\r`         | Carriage return                                  |
-| `\t`         | Tab                                              |
-| `\\`         | Backslash                                        |
-| `\"`         | Double quote                                     |
-| `\0`         | NUL                                              |
-| `\uXXXX`     | Unicode scalar: exactly four hexadecimal digits  |
-| `\UXXXXXXXX` | Unicode scalar: exactly eight hexadecimal digits |
-
-Rune literals additionally support `\'` for a single quote. An unsupported
-escape, an incorrectly sized Unicode escape, or an escape denoting a surrogate
-or a value above `U+10FFFF` is invalid.
-
-```text
-"x 🌐"
-"\u0078 \U0001F310"
-'\u0041'
-'\U0001F310'
-'\''
-```
-
-A raw string literal is enclosed in backticks. It may contain any characters
-except a backtick, including newlines. Backslashes are literal characters; there
-are no escape sequences. Its contents are encoded as UTF-8.
-
-```text
-`C:\tmp`
-`first line
-second line`
-```
-
-String literals, including raw string literals, have type `str` and use static
-storage that lasts for the entire program. Evaluating a string literal does not
-dynamically allocate memory. Its storage does not require `free`.
-
-```text
-const s = "hello"; // str
+var a: u8 = 42;
+var b = u8(42);
 ```
 
 ### Trailing commas
 
-A trailing comma is permitted in every comma-separated list, on one line or
-across multiple lines.
+A trailing comma is permitted in the argument list of `exit`:
 
-```text
-[1, 2,]
-f(a, b,)
-```
-
-## Types
-
-The built-in types include integers, floating-point numbers, `bool`, `rune`,
-`str`, `uintptr`, `size`, and the null type. Array, slice, tuple, struct, and
-pointer types are built from other types. A type declaration (see Declarations)
-gives a name to a type.
-
-```text
-i8 i16 i32 i64 u8 u16 u32 u64 int uint   integer types
-f32 f64                                  floating-point types
-bool                                     boolean type
-rune                                     rune type
-str                                      string type
-uintptr                                  address integer type
-size                                     type-size result type
-*T                                       non-null pointer type
-*const T                                 pointer to a const value
-const *T                                 const pointer to a value
-const *const T                           const pointer to a const value
-nullable *T                              nullable pointer type
-nullable *const T                        nullable pointer to a const value
-[N]T                                     array type
-[]T                                      slice type
-(T, T, ...)                              tuple type
-struct { name: T, ... }                  struct type
-```
-
-### Integer types
-
-```text
-i8  i16  i32  i64
-u8  u16  u32  u64
-int uint
-```
-
-`i8`, `i16`, `i32`, and `i64` are signed integer types 8, 16, 32, and 64 bits
-wide. `u8`, `u16`, `u32`, and `u64` are unsigned integer types of the same
-widths. These eight types are the fixed-width integer types. Fixed-width signed
-integer types use two's-complement representation.
-
-`int` is an implementation-defined signed integer type at least 32 bits wide.
-`uint` is the unsigned integer type with the same width as `int`. They are
-distinct types in their own right, not aliases for fixed-width integer types.
-Equal storage widths do not make them identical: a 32-bit `int` is distinct from
-`i32`, and a 32-bit `uint` is distinct from `u32`.
-
-Unsigned integer types are intended for cases where the bit representation or
-the unsigned range matters. Signed integer types are the normal choice for
-arithmetic.
-
-### Integer conversions
-
-When initializing or assigning a binding of integer type, a concrete integer
-source converts implicitly to the destination type if both types have the same
-signedness and the source width is no greater than the destination width. The
-conversion preserves the value. Implicit narrowing and implicit conversions
-between signed and unsigned integers are not permitted, even when the source
-value fits the destination. Such conversions require an explicit cast.
-
-Equal-width assignment is permitted between distinct types of the same
-signedness. For example, on an implementation with 32-bit `int`, `int` and `i32`
-are mutually assignable. This does not make their types identical or make
-function pointers with those parameter or return types interchangeable (see
-Function types).
-
-The same implicit conversions apply when passing an integer argument to an
-integer parameter and when returning an integer value from a function with an
-integer return type. The parameter type or declared return type is the
-destination type. For example, an `i32` argument may be passed to an `i64`
-parameter, and an `i32` value may be returned from a function returning `i64`.
-
-These rules apply to the fixed-width integer types, `int`, and `uint`. The
-separate rules for `uintptr`, `size`, and `rune` remain as specified in their
-respective sections.
-
-```text
-var a: i64 = 42i32; // valid: signed widening
-var b: u64 = 42u8;  // valid: unsigned widening
-var c: u64 = 42i32; // invalid: signedness differs
-var d: i64 = 42u32; // invalid: signedness differs
-var e: i8 = 42i32;  // invalid: narrowing requires a cast
-```
-
-In a binary expression with two concrete integer operands of different widths,
-the narrower operand is implicitly promoted to the wider operand's type only
-when both have the same signedness. Signed and unsigned operands cannot be
-combined without an explicit cast. Distinct types of equal width cannot be
-implicitly promoted to one another in a binary expression, even when they have
-the same signedness and are mutually assignable. An expression combining `int`
-and `i32` is therefore invalid when `int` is 32 bits wide. The operator
-determines the result type; for example, comparisons produce `bool`.
-
-```text
-1i32 + 2i64 // the i32 operand is promoted to i64
-1u8 + 2u64 // the u8 operand is promoted to u64
-1i32 + 2u64 // invalid: signedness differs
-```
-
-Literal typing is defined under Flexible Types. A suffixed literal retains its
-specified type before any permitted conversion is applied.
-
-### Address and size types
-
-`uintptr` is an unsigned integer type for byte addresses. Its size equals the
-size of a pointer, so `size(uintptr) == size(*int)` is valid and evaluates to
-`true`. Address arithmetic and casts defines its use in byte-address
-calculations.
-
-`size` is the type of the result of `size(T)`. The Type size section defines
-that operation. Its range and general arithmetic rules remain open.
-
-### Floating-point types
-
-```text
-f32
-f64
-```
-
-`f32` is the IEEE 754 binary32 format and `f64` is the IEEE 754 binary64 format.
-Floating-point values use IEEE 754 representation and semantics.
-
-### Boolean type
-
-`bool` is a distinct type with the values `true` and `false`. Comparisons
-produce `bool`. Conditions require `bool`; an integer or pointer is not a
-boolean condition. For example, `if 1` is invalid.
-
-### Rune type
-
-`rune` is a distinct type represented as `u32`. A rune denotes a Unicode scalar
-value. A concrete `rune` value is never implicitly promoted to another type. The
-lowering rules for flexible rune literals are defined in Flexible Types.
-
-### Function types
-
-Function types distinguish their parameter types and return type. Integer
-widening at a call site or return does not make different function types
-interchangeable. Parameter and return types must match without applying integer
-widening when assigning function pointers.
-
-For example, `fn(i32) void` and `fn(i64) void` are different,
-non-interchangeable function types. A function pointer binding of type
-`*fn(i64) void` cannot accept a function declared with an `i32` parameter, even
-though an `i32` argument can be passed directly to an `i64` parameter.
-
-### Pointer types
-
-`*T` is a non-null pointer to a value of type `T`. `nullable *T` can refer to a
-value of type `T` or hold `null`, which has the null type. A non-null `*T`
-converts implicitly to `nullable *T`.
-
-`*const T` is a non-null pointer that permits reading the pointed-to value of
-type `T` but not modifying it through that pointer.
-
-`nullable *const T` is the nullable form of `*const T`.
-
-A `*T` converts implicitly to `*const T`, including when passed as an argument
-to a function that accepts `*const T`.
-
-The reverse conversion never occurs implicitly. An explicit cast can remove
-pointee constness (see Pointer casts).
-
-A nullable pointer cannot be dereferenced directly. An `as` assertion or a
-pattern match obtains a non-null pointer (see Pointer access and null handling).
-Unchecked address casts are specified separately under Address arithmetic and
-casts.
-
-### Const-qualified types
-
-`const T` qualifies the type `T` as const. A value cannot be modified through
-const-qualified access. The qualifier applies to the type immediately following
-it: `const *T` is a const pointer to `T`, while `*const T` is a pointer to const
-`T`. `const *const T` qualifies both the pointer and its pointee.
-
-Const qualification of a pointer does not itself qualify the pointee. The
-declaration keyword and the qualifiers in its type are separate:
-
-```text
-const x: *const T = e;
-```
-
-Here the declaration prevents reassignment of `x`, and the type qualifier
-prevents modifying its pointee through `x`. Writing `const x: const *const T`
-adds an outer type qualifier that is redundant for preventing reassignment of
-this binding.
-
-Copying a pointer value does not carry the source binding's constness to the
-destination. The copy drops any outer `const` qualifier on the pointer type,
-while preserving the pointee type and all const qualifiers within it. An
-explicit const qualifier on the destination still applies.
-
-```text
-const value = 1;
-const other = 2;
-const p: *const int = &value;
-var q = p;    // *const int
-q = &other;   // valid: the copied pointer can be reassigned
-*q = 3;       // invalid: the pointee is still const
-```
-
-### String type
-
-```text
-str
-```
-
-`str` is the built-in string type. Dynamically allocated strings own their
-memory. Strings have no built-in indexing or slicing operations. Content access
-and other string-data operations belong to the standard library. The lexical
-rules guarantee valid UTF-8 for literals; handling other string data belongs to
-the standard library.
-
-### Array types
-
-```text
-[N]T
-```
-
-An array holds exactly `N` values of type `T`. The length is part of the type,
-so `[3]i32` and `[4]i32` are different types.
-
-```text
-const xs: [3]i32 = [1, 2, 3];
-const ys = [1, 2, 3]; // [3]int
-```
-
-In a type annotation, `_` in place of `N` infers the length from the
-initializer.
-
-```text
-var foo: [_]int = [1, 2, 3]; // [3]int
-```
-
-### Slice types
-
-```text
-[]T
-```
-
-A slice is a sequence of values of type `T`. A slice owns its memory. Operations
-on a slice are bounds checked (see Runtime Checks). The Allocation section
-defines how a slice is created.
-
-### Tuple types
-
-```text
-(T, T, ...)
-```
-
-A tuple holds a fixed number of values, each with its own type. The type lists
-the element types in order.
-
-```text
-var foo: (int, f64) = (42, 3.14);
-```
-
-### Struct types
-
-```text
-struct {
-    name: T,
-    ...
-}
-```
-
-A struct holds a fixed set of named fields, each with its own type. Each field
-is written `name: T`, and fields are separated by commas.
-
-```text
-type point = struct {
-    x: int,
-    y: int
-}
-```
-
-## Flexible Types
-
-Unsuffixed integer literals, unsuffixed floating-point literals, and rune
-literals have distinct **flexible types**. A flexible type lowers to a concrete
-type required by the context in which its value is assigned, passed, or used.
-This terminology describes literal typing; it does not define named constants or
-which expressions can be evaluated at compile time.
-
-```text
-var a = 42;       // int
-var b: u8 = 42;   // u8
-var c: i64 = 42;  // i64
-var d: uint = 42; // uint
-```
-
-When no surrounding context requires another type, a flexible integer lowers to
-`int`, a flexible floating-point value to `f64`, and a flexible rune to `rune`.
-
-```text
-var a = 3.14;      // f64
-var b: f32 = 3.14; // f32
-var r = 'a';       // rune, represented as u32
-```
-
-A suffixed literal has the concrete type specified by its suffix, regardless of
-context.
-
-```text
-var x = 42u8;    // u8
-var y = 3.14f32; // f32
-var z = 42i;     // int
-var w = 42u;     // uint
-```
-
-An integer literal outside the range of its required type is invalid and must be
-rejected at compile time. A floating-point literal that overflows its required
-type is also invalid; it does not produce infinity. These rules apply whether
-the type comes from a suffix or from context.
-
-```text
-256u8            // invalid
-var x: u8 = 256; // invalid
-1e100f32         // invalid
-```
-
-A flexible rune can lower to a type that can hold its Unicode scalar value,
-including integer types such as `i32`, `u32`, `u8`, and `u64`. In an expression
-with a concrete operand, the flexible rune lowers to that operand's type if it
-can hold the value. Lowering to a type that cannot hold the value is invalid.
-
-```text
-var a: u8 = 'a';   // 97u8
-var b = 'a' + 1u8; // 98u8
-var c: u8 = '🌐';  // invalid: the value does not fit
-var r = 'a';       // rune
-var d = r + 1u8;   // invalid: a concrete rune is not implicitly promoted
+```fern
+exit(42,);
 ```
 
 ## Declarations
 
 ### Functions
 
-A parameterless function declaration has this form:
-
-```text
-fn name() -> T {
-    ...
-}
-```
-
-`T` is the return type, or `void` when the function returns no value. The body
-is a brace-delimited sequence of statements and may be empty. No semicolon
-follows the closing brace.
-
 The program entry point is a top-level function named `main`, with no parameters
 and the explicit return annotation `void`:
 
-```text
+```fern
 fn main() -> void {
 }
 ```
 
-`main` does not return an integer. Reaching the end of its body terminates the
-program with exit status 0. A program can explicitly terminate with an integer
-exit status using the built-in `exit` operation (see Process exit).
-
-### Type declarations
-
-```text
-type name = T
-```
-
-A type declaration binds `name` to the type `T`. The name may then be used
-wherever a type is required.
-
-```text
-type point = struct {
-    x: int,
-    y: int
-}
-```
+The body is a brace-delimited sequence of statements and may be empty. No
+semicolon follows the closing brace. A program must have exactly one entry
+point. Reaching the end of `main` terminates the program with exit status zero.
+Explicit termination is defined under Process exit.
 
 ### Variable declarations
 
@@ -722,28 +104,11 @@ var name: T = e;
 const name: T = e;
 ```
 
-A variable declaration introduces a binding initialized to the value of `e`. A
-binding declared with `var` permits assignment after initialization, subject to
-its type's const qualification. A binding declared with `const` may not be
-reassigned.
-
-```text
-var x = 10;
-x = 20;
-
-const y = 10;
-y = 20; // invalid
-```
-
-When the declaration has a type annotation `T`, the binding has type `T`.
-Otherwise the binding has the type of its initializer, except that a pointer
-copy drops the outer const qualifier as specified under Const-qualified types.
-
-```text
-var a = 10;     // int
-var b: u8 = 10; // u8
-var c = 10u8;   // u8
-```
+A declaration introduces a local binding initialized to the value of `e`. A type
+annotation determines the binding's type. Without an annotation, the binding
+takes the initializer's type, with untyped integer constants defaulting to
+`int`. A binding reference has the binding's type. Initialization copies the
+integer value; later assignment to the source binding does not change the copy.
 
 ### Scope and shadowing
 
@@ -785,276 +150,383 @@ exit(x); // reports 10: the outer binding is visible again
 
 ### Immutability
 
-A `const` binding cannot be reassigned. Its struct fields and array elements
-cannot be modified through that binding, including fields and elements nested
-within them. This restriction does not propagate through pointers: whether a
-pointee may be modified is determined by its const qualification (see
-Const-qualified types).
+A `var` binding may be reassigned. A `const` binding cannot be reassigned. A
+`const` binding may be initialized from a runtime value; immutability does not
+require compile-time evaluation. Integer constant expressions defines when a
+binding can be used in a constant expression.
 
-```text
-const p = point { x = 10, y = 20 };
-p.x = 30; // invalid
-
-const xs = [1, 2, 3];
-xs[0] = 10; // invalid
-
-const points = [
-    point { x = 1, y = 2 },
-    point { x = 3, y = 4 },
-];
-points[0].x = 10; // invalid
+```fern
+var value = 7;
+const saved = value;
+value = 42;
+exit(saved); // reports 7
 ```
 
-```text
-var value = 1;
-var other = 2;
-const p: *int = &value;
-*p = 3;       // valid: the pointee is not const
-p = &other;   // invalid: p is a const binding
+## Integer Semantics
 
-var q: *const int = &value;
-q = &other;   // valid: q is a var binding
-*q = 4;       // invalid: the pointee is const
+The integer model uses untyped exact constants, explicit conversions, and
+trapping arithmetic.
+
+Design principles:
+
+1. Every integer operation has exactly one meaning, given its operand types.
+2. No implicit conversions between integer types, in either direction.
+3. Out-of-range results trap. Wraparound happens only when requested by name.
+4. Exactly two types, `int` and `uint`, have a platform-dependent width. They are distinct from every fixed-width type, so code that mixes them with fixed-width types fails to compile on every platform, not just some.
+
+### Integer types
+
+| Type | Width | Range |
+|------|-------|-------|
+| `i8` | 8 | −2⁷ … 2⁷−1 |
+| `i16` | 16 | −2¹⁵ … 2¹⁵−1 |
+| `i32` | 32 | −2³¹ … 2³¹−1 |
+| `i64` | 64 | −2⁶³ … 2⁶³−1 |
+| `u8` | 8 | 0 … 2⁸−1 |
+| `u16` | 16 | 0 … 2¹⁶−1 |
+| `u32` | 32 | 0 … 2³²−1 |
+| `u64` | 64 | 0 … 2⁶⁴−1 |
+| `int` | pointer width | −2ʷ⁻¹ … 2ʷ⁻¹−1 |
+| `uint` | pointer width | 0 … 2ʷ−1 |
+
+`int` and `uint` have the width of a pointer on the target platform: 32 or 64
+bits. They are always the same width as each other. A conforming implementation
+must not choose a width narrower than 32 bits.
+
+All ten types are distinct. `int` is a distinct type from `i32` and `i64` even
+when its width matches one of them; the same holds for `uint`. There are no
+`byte`, `char`, `short`, or `long` types.
+
+`int` is the general-purpose integer: the default type of constants, the type of
+lengths and indices, and the type most code should use. `uint` is the type of
+allocation sizes and of integers converted from pointers.
+
+Signed types use two's complement representation.
+
+### Integer constant expressions
+
+#### Untyped constants
+
+Integer literals and ordinary arithmetic, bitwise, and shift expressions built entirely from untyped constants are *untyped*. Parentheses
+preserve the enclosed expression's type and value. An untyped constant is an
+exact mathematical integer with no fixed width; the compiler must represent at
+least 256 bits of precision.
+
+Untyped constant expressions are evaluated at compile time with exact
+arithmetic. Overflow cannot occur in an untyped constant expression. Their
+intermediate values need not fit the eventual type; the final value must fit
+when it acquires a type. For example, `var x: u8 = (250 + 10) / 2;` initializes
+`x` to 130.
+
+Integer literals, integer conversions of constant expressions, integer
+operations on constant expressions, and parentheses around constant expressions
+are constant expressions. A reference to a `const` binding initialized by a
+constant expression is a typed constant expression. References to `var` bindings
+and to `const` bindings initialized from runtime values are not constant
+expressions.
+
+Constant expressions and constant subexpressions are checked during compilation,
+including in unreachable statements. Typed operations obey their type's range
+and operation rules; exact intermediate arithmetic applies to untyped
+expressions, with the additional rule for typed constant shifts below. Constant
+evaluation must reject an operation that would trap, even if a later operation
+would bring its result back into range. Optimization of a non-constant
+expression must preserve its runtime value and failure behavior.
+
+#### Typing by context
+
+An untyped constant acquires a type from the context in which it is used:
+
+```fern
+var a: u8 = 200; // 200 becomes u8
+var b: i16 = 1000; // 1000 becomes i16
+var c = x + 1; // 1 becomes the type of x
 ```
 
-Taking the address of a `const` binding preserves const access as specified
-under Pointer access and null handling.
+It is a compile-time error if the constant's value is not representable in the
+target type:
 
-## Expressions
-
-### Identifiers
-
-An identifier in an expression refers to the most recent declaration of that
-name.
-
-### Type size
-
-`size(T)` returns the size of type `T` in bytes, as a value of type `size`. Its
-operand is a type, not a value.
-
-```text
-size(int)
-size(uintptr) == size(*int) // true
+```fern
+var a: u8 = 256; // error: 256 does not fit u8
+var b: u32 = -1; // error: negative value in unsigned type
+var c: i8 = 127 + 1; // error: 128 does not fit i8
 ```
 
-### Pointer access and null handling
+For `int` and `uint`, representability is checked against the width of the
+target platform being compiled for. A constant that fits a 64-bit `int` but not
+a 32-bit `int` compiles on 64-bit targets and is rejected on 32-bit targets.
+Code intended to be portable to 32-bit targets should use `i64` for such values.
 
-`&x` takes the address of `x`. `*p` dereferences a non-null pointer `p`. Field
-access automatically dereferences a non-null pointer: `p.field` accesses the
-field of the pointed-to value.
+#### Default type
 
-Taking the address of a `const` binding of type `T` produces a `*const T`
-pointer (see Pointer types).
+When no context determines a type, an untyped integer constant becomes `int`:
 
-```text
-const x = 1;
-const p: *const int = &x;
-const y = *p; // 1
-*p = 2;       // invalid: the pointee is const
+```fern
+var n = 42; // n: int
+var big = 1 << 40; // int; compile error on a 32-bit target
 ```
 
-For a nullable pointer `p`, `p is null` produces a `bool` indicating whether it
-is null. `!(p is null)` produces the opposite result. A null test does not
-narrow the pointer's type, even in a branch where it is known to be non-null.
+#### Typed constants
 
-```text
-if !(p is null) {
-    const value = p.value; // invalid: p still has a nullable pointer type
-}
+A constant may be declared with an explicit type. Its value must be
+representable in that type. It follows the same operand type rules as a
+variable of that type, with evaluation governed by Integer constant expressions:
+
+```fern
+const Limit: u16 = 65535;
+const Bad: u16 = 65536; // error
 ```
 
-The assertion `p as *T` converts a `nullable *T` to `*T`. It panics if `p` is
-null. The assertion produces a non-null pointer value without changing the type
-of `p`.
+### Integer conversions
 
-An `as` assertion that removes nullability preserves the pointee type, including
-its const qualifiers. For example, a `nullable *const T` can be asserted as
-`*const T`; asserting it as `*T` is invalid because that would remove pointee
-constness.
+There are no implicit conversions between integer types. Widening, narrowing,
+and changing signedness all require an explicit conversion. This includes
+conversions between `int` and `i64`, or `uint` and `u64`, even on a platform
+where the widths coincide.
 
-```text
-const np: *node = p as *node;
-const value = np.value;
+#### Checked conversion
+
+`T(x)` converts `x` to type `T`. If the value of `x` is not representable in
+`T`, the program traps at runtime.
+
+```fern
+var a: i64 = 300;
+var b = u8(a); // trap: 300 does not fit u8
+var c = u16(a); // 300
+var d = i8(-1); // -1
+var e = u8(i8(-1)); // compile error: constant conversion would trap
+var f = int(a); // 300 on every platform
 ```
 
-A match expression can distinguish the null and non-null cases. `case null`
-handles null. `case const nd` binds the non-null pointer, of type `*T`, in its
-branch without changing the type of the matched binding. A `yield` supplies the
-value of the match expression.
+Converting an untyped constant follows the rules of Typing by context: the value
+must fit or the program does not compile.
 
-The non-null pattern binding also preserves the pointee type and its const
-qualifiers. Matching a `nullable *const T` binds a `*const T` in the non-null
-branch.
+#### Truncating conversion
 
-```text
-const v: int = match (p) {
-case null =>
-    yield 0;
-case const nd =>
-    yield nd.value;
-};
+`T.truncate(x)` converts `x` to type `T` by reinterpreting its two's complement
+bit pattern at the width of `T`: high bits are discarded on narrowing, and the
+value is sign-extended (from a signed source) or zero-extended (from an unsigned
+source) on widening. This conversion never traps. An untyped constant is reduced
+modulo 2 to the power of the destination width, then interpreted using the
+destination signedness; it need not first fit `int` or the destination type.
+
+```fern
+var a: i64 = 300;
+var b = u8.truncate(a); // 44
+var c = u8.truncate(-1); // 255
+var d = i8.truncate(200); // -56
 ```
 
-### Pointer casts
+### Integer arithmetic
 
-An explicit cast `p: *T` converts a `*const T` to `*T`, allowing the programmer
-to remove pointee constness. This is an explicit escape hatch from the pointer's
-write restrictions. It does not change the type of the source binding.
+#### Operand types
 
-```text
-var value = 1;
-const p: *const int = &value;
-var implicit: *int = p; // invalid: pointee constness cannot be removed implicitly
-const q = p: *int;
-*q = 2;                // valid: value was declared var
+Binary arithmetic operators require both operands to have the identical type.
+There is no promotion: `u8 + u8` is `u8`. Untyped constants adopt the type of
+the other operand. It is a compile-time error to combine two differently typed
+integers.
+
+```fern
+var a: u8 = 10;
+var b: u16 = 20;
+var c = a + b; // error: u8 and u16
+var d = u16(a) + b; // ok
+var e = a + 5; // ok, 5 becomes u8
+var n: int = 3;
+var m: i64 = 4;
+var p = n + m; // error: int and i64, on every platform
 ```
 
-This cast is separate from an `as` assertion that removes nullability, which
-preserves pointee constness (see Pointer access and null handling).
+#### Integer operators
 
-### Address arithmetic and casts
+| Operator | Meaning |
+|----------|---------|
+| `+ - *` | Addition, subtraction, multiplication. Trap on overflow. |
+| `/` | Division, truncating toward zero. Traps on division by zero and on `MIN / -1`. |
+| `%` | Remainder. Result has the sign of the dividend. Traps when `/` would. |
+| `&+ &- &*` | Wrapping addition, subtraction, multiplication (two's complement). Never trap. |
+| unary `-` | Negation. Traps on `-MIN`. Not permitted on unsigned types. |
+| unary `&-` | Wrapping negation. Permitted on all types. |
 
-Pointers are non-numeric. Arithmetic operators require numeric results, so
-`p + 1` and `p += n` on a pointer variable are type errors. The diagnostic for
-arithmetic on a pointer is:
+As a mathematical identity, division and remainder satisfy
+`(a / b) * b + a % b == a` whenever both are defined.
 
-```text
-Cannot perform arithmetic on non-numeric pointer type
+Division by a constant zero, and any constant expression that would trap, is a
+compile-time error.
+
+#### Overflow
+
+An arithmetic result that is not representable in the operand type is an error.
+The program traps: execution halts with a diagnostic identifying the operation.
+This is the defined behavior of the language, not a debug-mode check; a
+conforming implementation traps in every build configuration.
+
+An implementation may elide an overflow check when it can prove the result is in
+range.
+
+Wrapping operators explicitly request modular arithmetic at the operand type's
+width. The retained bits are interpreted using that type's signedness.
+
+```fern
+var x: u8 = 255;
+var y = x + 1; // trap
+var z = x &+ 1; // 0
+
+var h: u64 = 14695981039346656037;
+var h2 = h &* 1099511628211; // FNV hashing, wraps by design
 ```
 
-Address arithmetic uses `uintptr` values in bytes. Pointer-to-`uintptr` and
-`uintptr`-to-pointer casts use `e: T` syntax. A cast from `uintptr` to `*T` is
-unchecked: it does not verify alignment or address validity. Guarantees for
-dereferencing an invalid result remain unsettled (see Open Questions).
+Because `int` overflow traps rather than wraps, code that overflows a 32-bit
+`int` but not a 64-bit one traps on 32-bit targets rather than silently
+computing a different result.
 
-There is no implicit scaling by the size of the pointed-to type. Moving by an
-element count requires multiplying by `size(T)` explicitly. In this example, `x`
-holds two consecutive `int` values:
+### Indexing and lengths
 
-```text
-var x: [2]int = [1, 2];
-const y = &x: uintptr;
-assert(*((y + (size(int) * 0): uintptr): *int) == 1);
-assert(*((y + (size(int) * 1): uintptr): *int) == 2);
+The length of any array, slice, or string has type `int`. Indices and slice
+bounds have type `int`.
+
+An index is valid if `0 <= i < len`. Accessing an out-of-range index traps.
+Because indices are signed, an expression such as `i - 1` when `i == 0` produces
+`-1` and fails the bounds check rather than wrapping to a huge value.
+
+The maximum length of an object is `2ʷ⁻¹ − 1` elements, where `w` is the pointer
+width. Allocation sizes use `uint`; converting between lengths and allocation
+sizes follows Integer conversions.
+
+### Bitwise operations
+
+| Operator | Meaning |
+|----------|---------|
+| `&` | And |
+| `\|` | Or |
+| `^` | Exclusive or |
+| `&^` | And-not (bit clear) |
+| unary `^` | Complement |
+
+Binary bitwise operators require identical operand types, with untyped constants
+adopting the other operand's type when it fits. Typed operations use that type's
+two's-complement bit representation and cannot overflow. Untyped bitwise
+operations use an unbounded two's-complement interpretation; unary `^x` is
+`-x - 1`.
+
+### Integer shifts
+
+`x << n` and `x >> n` shift `x` by `n` bit positions. Non-constant shifts
+follow these rules; constant shifts are specified separately below.
+
+- The result type is the type of the left operand.
+- The right operand may be any integer type; it need not match the left operand.
+- A negative shift count traps.
+- A shift count greater than or equal to the width of the left operand's type is defined: `<<` yields `0`; `>>` yields `0` for unsigned and for non-negative signed values, and `-1` for negative signed values. It does not trap.
+- `>>` is arithmetic (sign-filling) for signed types and logical (zero-filling) for unsigned types.
+- `<<` discards bits shifted out and never traps. It is a bit operation, not multiplication.
+
+#### Constant shifts
+
+If both operands are untyped constants, the shift is a constant expression and
+is evaluated exactly before any type is assigned. `1 << 40` is the untyped
+integer 2⁴⁰; `1 << 100` is 2¹⁰⁰. The result then acquires a type from context in
+the ordinary way (Typing by context) and must be representable in it:
+
+```fern
+var a: i64 = 1 << 40; // ok
+var b = 1 << 40; // int; ok on 64-bit, compile error on 32-bit
+var c: i32 = 1 << 40; // compile error on every platform
 ```
 
-The following table defines promotion when combining `uintptr` with another
-type. Each row lists the resulting type; arithmetic must still satisfy the
-requirement that its result is numeric.
+If both operands are constant expressions and the left operand is typed, the
+shift is still evaluated exactly, and the result must be representable in that
+type; a `<<` that would discard bits is a compile-time error, not a silent
+truncation.
 
-| Other type              | Result                               |
-| ----------------------- | ------------------------------------ |
-| `size`                  | `uintptr`                            |
-| The null type           | `uintptr`                            |
-| A pointer type          | The pointer type                     |
-| Any other concrete type | Print a diagnostic message and abort |
-
-The last row includes `u64`, `uint`, and every signed type. The phase at which
-an unsupported promotion prints a diagnostic and aborts remains an open
-question. Compound addition `+=` is permitted on a `uintptr` variable subject to
-these promotion rules.
-
-### Array literals
-
-```text
-[e, e, ...]
+```fern
+const one: i32 = 1;
+var d = one << 40; // compile error: 2⁴⁰ does not fit i32
 ```
 
-An array literal has type `[N]T`, where `N` is the number of elements and `T` is
-the type of the elements.
+Constant left shifts multiply exactly by two to the power of the count. Constant
+right shifts divide by that power, rounding toward negative infinity. The
+runtime rules above (zero on overshift, discarded high bits) do not apply to
+constant shifts. A negative constant count is a compile-time error, including
+when the left operand is not constant.
 
-```text
-const xs = [1, 2, 3]; // [3]int
+#### Non-constant shifts
+
+If either operand is not a constant expression, the shift is evaluated at
+runtime under the rules above. An untyped constant on the left takes its type
+from context first, defaulting to `int`:
+
+```fern
+var n = 40; // a variable reference is not a constant expression
+var e = 1 << n; // int(1) shifted by n; 0 if n >= width
+var f: u64 = 1 << n; // u64(1) shifted by n
 ```
 
-### Tuple literals
+A typed left operand retains its type regardless of the destination. The count
+does not force the left operand to adopt its type.
 
-```text
-(e, e, ...)
-```
+### Comparison
 
-A tuple literal has a tuple type whose element types are the types of the
-elements, in order.
-
-```text
-var foo: (int, f64) = (42, 3.14);
-```
-
-### Struct literals
-
-```text
-name { name = e, ... }
-```
-
-A struct literal names a struct type and gives each field a value with a
-`name = e` initializer.
-
-```text
-var p = point { x = 10, y = 20 };
-```
-
-### Field and element access
-
-`e.name` accesses the field `name` of a struct value; access through a pointer
-is defined under Pointer access and null handling. `e.N` accesses element `N` of
-a tuple value. Tuple elements are numbered from zero.
-
-```text
-p.x   // 10
-foo.0 // 42
-foo.1 // 3.14
-```
-
-### Index expressions
-
-```text
-e[i]
-```
-
-An index expression accesses the element at index `i` of an array or slice.
-Indices start at zero. Index expressions on slices are bounds checked (see
-Runtime Checks).
-
-## Statements
-
-This specification defines variable declarations (see Declarations),
-assignments, calls to `free` (see Deallocation), and `defer` statements below.
-These statements end with `;`. Boolean conditions and the `yield` used in
-nullable-pointer match expressions are specified in the Types and Expressions
-sections; the remaining control-flow rules are open.
+`bool` is a distinct type whose values are `true` and `false`. The comparisons
+`== != < <= > >=` require identical operand types and yield `bool`. Untyped
+constants adopt the type of the other operand, so `x < 0` is a compile-time
+error when `x` is unsigned (0 fits, but the comparison is flagged as
+always-false).
 
 ### Assignment
 
-```text
-name = e;
-```
+`x = e;` stores the value of `e` in the mutable local binding `x`. It requires
+`e` to have the type of `x`, or to be an untyped constant that fits. Assignment
+is a statement and ends with a semicolon.
 
-An assignment stores the value of `e` in its target. The target is a binding, a
-struct field such as `p.x`, an array or slice element such as `xs[0]`, or a
-dereferenced pointer such as `*p`. Reassigning a binding requires `var`.
-Assignments to fields, elements, and pointees must satisfy the Immutability and
-Const-qualified types rules.
+Compound assignments `+= -= *= /= %= &= |= ^= &^= <<= >>=` and their wrapping
+forms `&+= &-= &*=` are equivalent to the corresponding binary operation
+followed by assignment, and trap under the same conditions.
 
-```text
-var x = 10;
-x = 20;
-```
+There are no `++` or `--` operators.
 
-Assignment of a dynamically allocated string or slice is shallow (see Aliasing).
+### Portability notes
 
-### Defer
+The only platform-dependent behavior in this specification is the width of `int`
+and `uint`. Its consequences are:
 
-```text
-defer s
-```
+- Untyped constants assigned to `int`/`uint` may fit on one platform and be rejected at compile time on another (Typing by context).
+- Checked conversions to `int`/`uint` may succeed on one platform and trap on another (Checked conversion).
+- Arithmetic on `int`/`uint` may succeed on one platform and trap on another (Overflow).
+- Truncating conversions to or from `int`/`uint` produce different values on different platforms (Truncating conversion).
+- Shifts on `int`/`uint` with counts between 32 and 63 produce different results on different platforms (Integer shifts).
 
-A `defer` statement holds the statement `s` and executes it when the current
-scope exits.
+Checked arithmetic and checked conversions preserve mathematical values when
+they succeed. Explicit wrapping, truncating conversions, and runtime shifts can
+produce different in-range results at different widths. Code that needs a
+specific width should use fixed-width types; their distinctness from `int` and
+`uint` prevents accidental mixing.
 
-```text
-var xs = alloc([]u8, 100);
-defer free(xs);
-```
+### Summary of trapping behavior
+
+| Situation | Behavior |
+|-----------|----------|
+| Constant does not fit target type | Compile error |
+| Constant expression would trap | Compile error |
+| `+ - *` overflow | Trap |
+| `/` or `%` by zero | Trap |
+| `MIN / -1`, `MIN % -1`, `-MIN` | Trap |
+| Checked conversion out of range | Trap |
+| Negative shift count | Trap |
+| Out-of-range index | Trap |
+| Runtime shift count ≥ width | Defined, no trap |
+| Constant shift result does not fit its type | Compile error |
+| Wrapping operators | Defined, no trap |
+| Truncating conversion | Defined, no trap |
+| Bitwise operators | Defined, no trap |
+
+## Statements and Execution
+
+A function body and each nested brace-delimited block execute statements in
+source order. Declarations, assignments, compound assignments, and `exit`
+statements end with `;`. A nested block needs no trailing semicolon.
+Declarations and references must be valid even after a statement that terminates
+execution.
 
 ### Process exit
 
@@ -1063,63 +535,16 @@ exit(e);
 ```
 
 The built-in `exit` takes one argument of type `int` and terminates the program.
-The reported exit status is the argument modulo 256, in the range 0 through 255,
-on every host. For example, `exit(256)` reports 0 and `exit(-1)` reports 255. It
-does not return to its caller. The Flexible Types rules apply to its argument.
+An untyped constant argument must fit `int`; a differently typed integer
+requires an explicit checked or truncating conversion. The reported exit status
+is the argument modulo 256, in the range zero through 255, on every host.
+`exit(256);` reports zero and `exit(-1);` reports 255. It does not return.
 
-```text
+```fern
 fn main() -> void {
     exit(42);
 }
 ```
-
-## Memory Management
-
-### Allocation
-
-```text
-alloc([]T, n)
-```
-
-Dynamic memory is allocated explicitly, with `alloc`. `alloc([]T, n)` allocates
-memory for `n` values of type `T` and evaluates to a slice of type `[]T` that
-refers to that memory.
-
-```text
-var xs = alloc([]u8, 100); // []u8
-```
-
-### Deallocation
-
-```text
-free(e);
-```
-
-Dynamic memory is released explicitly, with `free`. `free(e)` releases the
-allocation that `e` refers to. There is no automatic ownership-based
-deallocation.
-
-```text
-free(xs);
-```
-
-### Aliasing
-
-Assignment of a dynamically allocated string or slice is shallow. After the
-assignment, both bindings refer to the same allocation. Assignment copies
-neither the contents of the allocation nor exclusive ownership of it.
-
-```text
-var a = alloc([]u8, 100);
-var b = a;
-free(a);
-```
-
-After `free(a)`, every alias of the allocation, such as `b`, is dangling.
-Avoiding use-after-free and double-free errors is the programmer's
-responsibility.
-
-Creating independent storage requires an explicit copy operation.
 
 ## Modules and Imports
 
@@ -1167,11 +592,8 @@ means placing its source tree under a module search root. Fern does not provide
 a package registry or perform dependency version resolution. Projects manage
 their own dependency source trees, for example through copies or Git submodules.
 
-## Runtime Checks
+### Open module questions
 
-Operations on `[]T` are bounds checked. An out-of-bounds access has defined
-behavior rather than undefined behavior.
-
-Nullable-pointer assertions have the panic behavior specified under Pointer
-access and null handling. This specification does not yet settle the behavior of
-an invalid or misaligned pointer dereference.
+The specification does not yet settle public-declaration syntax, import name
+conflicts, dependency cycles, missing-module diagnostics, or whether setting
+`FERNPATH` replaces or extends the default search list.

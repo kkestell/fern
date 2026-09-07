@@ -61,6 +61,54 @@ fn cli_compiles_and_replaces_existing_output() {
 }
 
 #[test]
+fn typed_values_after_exit_do_not_change_status() {
+    for body in [
+        "exit(42); const value = 18446744073709551615u64;",
+        "{ exit(42); const value = 1i8; } const value: u64 = 1u8;",
+    ] {
+        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+    }
+}
+
+#[test]
+fn typed_integer_diagnostics_precede_emission_and_preserve_output() {
+    for (body, message) in [
+        (
+            "const x: u64 = 256u8;",
+            "integer literal out of range for `u8`",
+        ),
+        (
+            "var x: u8 = 0; { x = 256; }",
+            "integer literal out of range for `u8`",
+        ),
+        (
+            "const x = 1u64; { exit(0); exit(x); }",
+            "cannot implicitly convert `u64` to `int`",
+        ),
+        (
+            "const x = 1i64; const y: int = x;",
+            "cannot implicitly convert `i64` to `int`",
+        ),
+        (
+            "{ exit(0); } const x = 18446744073709551616u64;",
+            "integer literal out of range for `u64`",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
+        fs::write(&output, "old executable").unwrap();
+        let error = fern::compile(&input, &output).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error.contains(input.file_name().unwrap().to_str().unwrap()),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+    }
+}
+
+#[test]
 fn source_failures_preserve_output() {
     for (source, expected) in [
         ("", "missing `main`"),
@@ -83,9 +131,29 @@ fn source_failures_preserve_output() {
             "integer literal out of range for `int`",
         ),
         (
-            "fn main() -> void { exit(1i32); }",
-            "unsupported integer suffix `i32`",
+            "fn main() -> void { const x = 1; x = 2; }",
+            "cannot assign to immutable binding `x`",
         ),
+        (
+            "fn main() -> void { { var x = 1; } x = 2; }",
+            "unknown binding `x`",
+        ),
+        (
+            "fn main() -> void { var x = 1; { exit(0); x = missing; } }",
+            "unknown binding `missing`",
+        ),
+        (
+            "fn main() -> void { var x = 1; { exit(0); } x = 2147483648; }",
+            "integer literal out of range for `int`",
+        ),
+        (
+            "fn main() -> void { var x = 1; { x = 1u8; } }",
+            "cannot implicitly convert `u8` to `int`",
+        ),
+        ("fn main() -> void { x = ; }", "expected a name"),
+        ("fn main() -> void { x 1; }", "expected `=`"),
+        ("fn main() -> void { x = 1 }", "expected `;`"),
+        ("fn main() -> void { { }", "expected `}`"),
         ("fn main(x) -> void {}", "parameters are not supported"),
         ("fn main() -> int {}", "expected `void`"),
         ("fn main() -> void {} trailing", "expected `fn`"),
@@ -105,7 +173,10 @@ fn source_failures_preserve_output() {
         fs::write(&output, "keep me").unwrap();
         let error = fern::compile(&input, &output).unwrap_err().to_string();
         assert!(error.contains(expected), "{error}");
-        assert!(error.contains("input.fern"), "{error}");
+        assert!(
+            error.contains(input.file_name().unwrap().to_str().unwrap()),
+            "{error}"
+        );
         assert_eq!(fs::read_to_string(&output).unwrap(), "keep me");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
@@ -292,5 +363,91 @@ fn integer_programs_execute() {
             "{source}"
         );
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn assignments_and_nested_scopes_execute() {
+    for (body, expected) in [
+        ("var x = 1; x = 2; const y = 42; x = y; x = x; exit(x);", 42),
+        ("var x = 42; const saved = x; x = 7; exit(saved);", 42),
+        ("var x = 1; { x = 42; var x = 7; x = 8; } exit(x);", 42),
+        ("var x = 1; { x = 42; const x = x; exit(x); }", 42),
+        ("const x = 1; var x = x; x = 42; exit(x);", 42),
+        ("var x = 1; const x = 42; exit(x);", 42),
+        ("const x = 42; { var x = x; x = 7; } exit(x);", 42),
+        ("var x = 42; { const x = 7; } x = x; exit(x);", 42),
+        (
+            "var x = 1; { { x = 42; exit(x); x = 7; } x = 8; } x = 9; exit(x);",
+            42,
+        ),
+        ("{} { {} { {} } }", 0),
+        ("var x = 1; { { x = 42; } } exit(x);", 42),
+        ("var x = 1; { var y = x; { x = y; } } x = 42;", 0),
+    ] {
+        let source = format!("fn main() -> void {{ {body} }}");
+        let (_dir, input, output) = fixture(&source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected),
+            "{body}"
+        );
+    }
+    let (_dir, input, output) = fixture(include_str!("../examples/assignment_and_scopes.fern"));
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn typed_integer_programs_execute() {
+    let mut fixtures = vec![(
+        include_str!("../examples/integer_types.fern").to_owned(),
+        42,
+    )];
+    for (body, expected) in [
+        (
+            "var x = 42i8; const saved = x; x = 7; var status: int = x; status = saved; exit(status);",
+            42,
+        ),
+        (
+            "var x = 1i8; { x = 42; var x: i64 = x; x = 7i16; } exit(x);",
+            42,
+        ),
+        ("var x = 1i8; { { x = 42; exit(x); x = 7; } } exit(0);", 42),
+        (
+            "const x = 42; const y: i32 = x; const z: int = y; exit(z);",
+            42,
+        ),
+        (
+            "const x = 4294967295u; const y: u32 = x; var z: uint = y; z = 255u8;",
+            0,
+        ),
+    ] {
+        fixtures.push((format!("fn main() -> void {{ {body} }}"), expected));
+    }
+    for (suffix, max) in [
+        ("i8", 127),
+        ("i16", 32767),
+        ("i32", i32::MAX),
+        ("i", i32::MAX),
+    ] {
+        for value in [0, 42, max] {
+            for body in [
+                format!("exit({value}{suffix});"),
+                format!("const x = {value}{suffix}; var y: int = 0; y = x; exit(y);"),
+            ] {
+                fixtures.push((format!("fn main() -> void {{ {body} }}"), value % 256));
+            }
+        }
+    }
+    for (source, expected) in fixtures {
+        let (_dir, input, output) = fixture(&source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected),
+            "{source}"
+        );
     }
 }

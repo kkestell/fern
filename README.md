@@ -4,9 +4,14 @@ Fern is a low-level programming language. The
 [language specification](docs/spec.md) defines its behavior; the
 [roadmap](eng/roadmap.md) tracks implementation scope and completion gates.
 
-The compiler currently accepts one empty, parameterless `main` with an explicit
-`void` return annotation. Other functions and nonempty bodies are rejected. See
-[examples/empty.fern](examples/empty.fern).
+The compiler checks initialized `var` and `const` bindings, integer literals,
+binding references, and `exit` arguments in one parameterless `main` returning
+`void`. Its `int` is signed 32-bit, independent of host pointer width. Literals
+may be unsuffixed or use `i`; other integer suffixes are not supported yet.
+
+Executable compilation currently supports only an empty body. Nonempty bodies
+receive semantic diagnostics first, then an unsupported-lowering diagnostic if
+checking succeeds. See [examples/empty.fern](examples/empty.fern).
 
 ## Build and run
 

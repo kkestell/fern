@@ -71,11 +71,24 @@ fn source_failures_preserve_output() {
         ),
         (
             "fn main() -> void { exit(0); }",
-            "nonempty bodies are not supported",
+            "lowering nonempty bodies is not supported",
         ),
         (
             "fn main() -> void { const status: int = 42; var copy = status; exit(copy,); }",
-            "nonempty bodies are not supported",
+            "lowering nonempty bodies is not supported",
+        ),
+        ("fn main() -> void { const x = x; }", "unknown binding `x`"),
+        (
+            "fn main() -> void { exit(0); exit(missing); }",
+            "unknown binding `missing`",
+        ),
+        (
+            "fn main() -> void { exit(0); var x = 2147483648; }",
+            "integer literal out of range for `int`",
+        ),
+        (
+            "fn main() -> void { exit(1i32); }",
+            "unsupported integer suffix `i32`",
         ),
         ("fn main(x) -> void {}", "parameters are not supported"),
         ("fn main() -> int {}", "expected `void`"),

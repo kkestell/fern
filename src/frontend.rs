@@ -78,15 +78,12 @@ pub(crate) struct Function {
     pub body: Vec<Idx<Statement>>,
 }
 
-// These nodes are retained for the next semantic-checking slice.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Statement {
     pub kind: StatementKind,
     pub span: Range<usize>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum StatementKind {
     Binding {
@@ -101,14 +98,12 @@ pub(crate) enum StatementKind {
     },
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Expression {
     pub kind: ExpressionKind,
     pub span: Range<usize>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
@@ -152,7 +147,7 @@ fn reserved(name: &str) -> bool {
     )
 }
 
-fn valid_integer(spelling: &str) -> bool {
+pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
     let (digits, base) = if let Some(digits) = spelling.strip_prefix("0x") {
         (digits, 16)
     } else if let Some(digits) = spelling.strip_prefix("0b") {
@@ -166,9 +161,14 @@ fn valid_integer(spelling: &str) -> bool {
         .bytes()
         .take_while(|b| char::from(*b).is_digit(base))
         .count();
-    end > 0
+    (base, &digits[..end], &digits[end..])
+}
+
+fn valid_integer(spelling: &str) -> bool {
+    let (_, digits, suffix) = integer_parts(spelling);
+    !digits.is_empty()
         && matches!(
-            &digits[end..],
+            suffix,
             "" | "i" | "u" | "z" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
         )
 }

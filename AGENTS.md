@@ -29,7 +29,23 @@ missing. The architecture document is not required to begin planning.
 
 ## Codebase Map
 
+- `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
+- `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
+- `src/ir.rs`, `src/backend.rs` — verified Fern IR and native compilation.
+- `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
+- `tests/` — compiler and CLI integration tests.
 - `examples/` — runnable Fern programs.
+
+## Development Commands
+
+- `cargo fmt --check` — check Rust formatting.
+- `cargo clippy --all-targets -- -D warnings` — lint the compiler and tests.
+- `cargo test` — run unit, snapshot, and native integration tests.
+- `cargo build` — build the compiler.
+- `cargo run -- examples/empty.fern -o target/empty && target/empty` — compile
+  and execute the empty example.
+
+Native tests require the tools documented in [README.md](README.md).
 
 ## Project Rules
 

@@ -1,0 +1,15 @@
+[package]
+name = "fern"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ariadne = "0.6"
+la-arena = "0.3"
+lasso = "0.7"
+logos = "0.16"
+tempfile = "3"
+
+[dev-dependencies]
+insta = "1"

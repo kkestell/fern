@@ -21,8 +21,12 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry, Diagnostic> {
             ));
         }
     }
-    if main.is_none() {
-        return Err(Diagnostic::new(0..0, "missing `main` function"));
+    let main = main.ok_or_else(|| Diagnostic::new(0..0, "missing `main` function"))?;
+    if let Some(statement) = syntax.functions[main].body.first() {
+        return Err(Diagnostic::new(
+            syntax.statements[*statement].span.clone(),
+            "nonempty bodies are not supported yet",
+        ));
     }
     Ok(CheckedEntry { _private: () })
 }

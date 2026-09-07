@@ -1,0 +1,10 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [],
+    exit: Integer(
+        0,
+    ),
+}

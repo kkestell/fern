@@ -9,14 +9,12 @@ binding references, and `exit` arguments in one parameterless `main` returning
 `void`. Its `int` is signed 32-bit, independent of host pointer width. Literals
 may be unsuffixed or use `i`; other integer suffixes are not supported yet.
 
-Executable compilation currently supports only an empty body. Nonempty bodies
-receive semantic diagnostics first, then an unsupported-lowering diagnostic if
-checking succeeds. See [examples/empty.fern](examples/empty.fern).
-
-[Integer literals](examples/integer_literals.fern) demonstrates bases,
-annotations, suffixes, comments, and a trailing call comma.
-[Shadowing](examples/shadowing.fern) demonstrates binding copies and initializer
-visibility. Both pass semantic checking but currently stop at lowering.
+These programs compile to native executables. See
+[the empty entry](examples/empty.fern),
+[integer literals](examples/integer_literals.fern) for bases, annotations,
+suffixes, comments, and a trailing call comma, and
+[shadowing](examples/shadowing.fern) for binding copies and initializer
+visibility. The two nonempty examples exit with status 42.
 
 ## Build and run
 

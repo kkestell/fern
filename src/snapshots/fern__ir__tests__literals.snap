@@ -1,0 +1,17 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Integer(
+            42,
+        ),
+        Integer(
+            7,
+        ),
+    ],
+    exit: Integer(
+        0,
+    ),
+}

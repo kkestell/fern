@@ -81,6 +81,7 @@ pub(crate) struct Function {
 #[derive(Debug)]
 pub(crate) struct Statement {
     pub kind: StatementKind,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
 }
 

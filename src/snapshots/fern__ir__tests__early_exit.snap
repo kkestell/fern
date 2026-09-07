@@ -1,0 +1,16 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Integer(
+            42,
+        ),
+    ],
+    exit: Value(
+        ValueId(
+            0,
+        ),
+    ),
+}

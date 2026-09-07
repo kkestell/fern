@@ -6,6 +6,8 @@ use std::{
 use tempfile::{TempDir, tempdir};
 
 const EMPTY: &str = "fn main() -> void {}";
+const INTEGER: &str =
+    "fn main() -> void { const status: int = 42; var copy = status; exit(copy,); }";
 
 fn cli(input: &Path, output: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fern"));
@@ -34,6 +36,8 @@ fn failure(result: Output, expected: &str) {
 fn native_programs_exit_zero() {
     for source in [
         include_str!("../examples/empty.fern"),
+        EMPTY,
+        "fn main() -> void { const x = 42; var y = x; }",
         "\t\r\n\x0b\x0c /* 🌿 /* nested */ */ fn/*a*/main( ) -> void { // body\n } // eof",
     ] {
         let (dir, input, output) = fixture(source);
@@ -45,7 +49,7 @@ fn native_programs_exit_zero() {
 
 #[test]
 fn cli_compiles_and_replaces_existing_output() {
-    let (_dir, input, output) = fixture(EMPTY);
+    let (_dir, input, output) = fixture(INTEGER);
     fs::write(&output, "old executable").unwrap();
     let result = cli(&input, &output).output().unwrap();
     assert!(
@@ -53,7 +57,7 @@ fn cli_compiles_and_replaces_existing_output() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(0));
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
 }
 
 #[test]
@@ -68,10 +72,6 @@ fn source_failures_preserve_output() {
         (
             "fn main() -> void {} fn other() -> void {}",
             "only the `main`",
-        ),
-        (
-            "fn main() -> void { const status: int = 42; var copy = status; exit(copy,); }",
-            "lowering nonempty bodies is not supported",
         ),
         ("fn main() -> void { const x = x; }", "unknown binding `x`"),
         (
@@ -149,7 +149,7 @@ fn malformed_cli_arguments_fail() {
 
 #[test]
 fn output_cannot_alias_input() {
-    let (dir, input, _) = fixture(EMPTY);
+    let (dir, input, _) = fixture(INTEGER);
     failure(cli(&input, &input).output().unwrap(), "overwrite the input");
     let alias = dir.path().join("alias");
     fs::hard_link(&input, &alias).unwrap();
@@ -163,13 +163,13 @@ fn output_cannot_alias_input() {
             "overwrite the input",
         );
     }
-    assert_eq!(fs::read_to_string(input).unwrap(), EMPTY);
+    assert_eq!(fs::read_to_string(input).unwrap(), INTEGER);
 }
 
 #[test]
 fn missing_tools_preserve_outputs_and_remove_intermediates() {
     for tool in ["QBE", "CC"] {
-        let (dir, input, output) = fixture(EMPTY);
+        let (dir, input, output) = fixture(INTEGER);
         for existing in [false, true] {
             if existing {
                 fs::write(&output, "keep me").unwrap();
@@ -199,7 +199,7 @@ fn missing_tools_preserve_outputs_and_remove_intermediates() {
 fn failing_tools_report_stderr_and_preserve_output() {
     use std::os::unix::fs::PermissionsExt;
     for tool in ["QBE", "CC"] {
-        let (dir, input, output) = fixture(EMPTY);
+        let (dir, input, output) = fixture(INTEGER);
         let script = dir.path().join("failing-tool");
         fs::write(
             &script,
@@ -229,7 +229,7 @@ fn failing_tools_report_stderr_and_preserve_output() {
 
 #[test]
 fn unusable_output_destination_fails() {
-    let (dir, input, output) = fixture(EMPTY);
+    let (dir, input, output) = fixture(INTEGER);
     fs::write(&output, "not a directory").unwrap();
     failure(
         cli(&input, &output.join("child")).output().unwrap(),
@@ -247,10 +247,50 @@ fn unusable_output_destination_fails() {
 #[test]
 fn unwritable_output_directory_fails() {
     use std::os::unix::fs::PermissionsExt;
-    let (dir, input, output) = fixture(EMPTY);
+    let (dir, input, output) = fixture(INTEGER);
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
     let result = cli(&input, &output).output();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
     failure(result.unwrap(), "cannot create temporary files");
     assert!(!output.exists());
+}
+
+#[test]
+fn integer_programs_execute() {
+    let mut fixtures = vec![
+        (
+            include_str!("../examples/integer_literals.fern").to_owned(),
+            42,
+        ),
+        (include_str!("../examples/shadowing.fern").to_owned(), 42),
+        ("fn main() -> void { exit(42); exit(7); }".to_owned(), 42),
+        (
+            "fn main() -> void { const x = 42; exit(x); var x = 7; exit(x); }".to_owned(),
+            42,
+        ),
+    ];
+    for value in [0, 42, 255, 256, 257, i32::MAX] {
+        for body in [
+            format!("exit({value});"),
+            format!("const x: int = {value}i; var y = x; exit(y,);"),
+        ] {
+            fixtures.push((format!("fn main() -> void {{ {body} }}"), value % 256));
+        }
+    }
+    for literal in ["00042", "0x0002Ai", "0o00052", "0b000101010i"] {
+        fixtures.push((
+            format!("fn main() -> void {{ var x: int = {literal}; exit(x,); }}"),
+            42,
+        ));
+    }
+    for (source, expected) in fixtures {
+        let (dir, input, output) = fixture(&source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(&output).status().unwrap().code(),
+            Some(expected),
+            "{source}"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 }

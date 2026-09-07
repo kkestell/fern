@@ -1,0 +1,34 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Integer(
+            42,
+        ),
+        Value(
+            ValueId(
+                0,
+            ),
+        ),
+        Value(
+            ValueId(
+                1,
+            ),
+        ),
+        Integer(
+            7,
+        ),
+        Value(
+            ValueId(
+                3,
+            ),
+        ),
+    ],
+    exit: Value(
+        ValueId(
+            2,
+        ),
+    ),
+}

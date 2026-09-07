@@ -27,10 +27,6 @@ pub(crate) enum ExpressionValue {
 #[derive(Debug)]
 pub(crate) struct CheckedExpression {
     pub ty: Type,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "retained for nonempty lowering")
-    )]
     pub value: ExpressionValue,
 }
 

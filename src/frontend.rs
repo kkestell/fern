@@ -13,6 +13,8 @@ enum Token {
     Void,
     #[token("const")]
     Const,
+    #[token("var")]
+    Var,
     #[token("exit")]
     Exit,
     #[regex("[0-9][a-zA-Z0-9_]*")]
@@ -25,6 +27,8 @@ enum Token {
     Semicolon,
     #[token(",")]
     Comma,
+    #[token(".")]
+    Dot,
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Name,
     #[token("(")]
@@ -122,6 +126,11 @@ pub(crate) struct Expression {
 pub(crate) enum ExpressionKind {
     Integer(String),
     Reference(Spur),
+    Conversion {
+        destination: TypeAnnotation,
+        truncating: bool,
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -135,9 +144,10 @@ pub(crate) struct Syntax {
 fn reserved(name: &str) -> bool {
     matches!(
         name,
-        "alloc"
-            | "free"
-            | "const"
+        "const"
+            | "var"
+            | "true"
+            | "false"
             | "fn"
             | "void"
             | "exit"
@@ -151,13 +161,14 @@ fn reserved(name: &str) -> bool {
             | "u64"
             | "int"
             | "uint"
-            | "f32"
-            | "f64"
             | "bool"
-            | "rune"
-            | "str"
-            | "uintptr"
-            | "size"
+    )
+}
+
+fn integer_type(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "int" | "uint"
     )
 }
 
@@ -180,11 +191,7 @@ pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
 
 fn valid_integer(spelling: &str) -> bool {
     let (_, digits, suffix) = integer_parts(spelling);
-    !digits.is_empty()
-        && matches!(
-            suffix,
-            "" | "i" | "u" | "z" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
-        )
+    !digits.is_empty() && suffix.is_empty()
 }
 
 struct Parser<'a> {
@@ -192,7 +199,11 @@ struct Parser<'a> {
     current: Option<Token>,
     span: Range<usize>,
     syntax: Syntax,
+    nesting: usize,
 }
+
+// Bound recursive parsing, checking, and lowering before entering another level.
+const MAX_NESTING: usize = 128;
 
 pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
     let mut parser = Parser {
@@ -200,6 +211,7 @@ pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
         current: None,
         span: 0..0,
         syntax: Syntax::default(),
+        nesting: 0,
     };
     parser.advance()?;
     while parser.current.is_some() {
@@ -209,6 +221,14 @@ pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
 }
 
 impl Parser<'_> {
+    fn enter_nesting(&mut self) -> Result<(), Diagnostic> {
+        if self.nesting == MAX_NESTING {
+            return Err(self.error("source nesting exceeds compiler limit of 128"));
+        }
+        self.nesting += 1;
+        Ok(())
+    }
+
     fn advance(&mut self) -> Result<(), Diagnostic> {
         let token = self.lexer.next();
         self.span = if token.is_some() {
@@ -246,12 +266,12 @@ impl Parser<'_> {
         Ok(span)
     }
 
-    fn name(&mut self) -> Result<(Spur, Range<usize>), Diagnostic> {
+    fn name(&mut self, expected: &str) -> Result<(Spur, Range<usize>), Diagnostic> {
         if self.current.is_some() && reserved(self.lexer.slice()) {
             return Err(self.error("reserved word cannot be used as an identifier"));
         }
         if self.current != Some(Token::Name) {
-            return Err(self.error("expected a name"));
+            return Err(self.error(expected));
         }
         let name = self.syntax.names.get_or_intern(self.lexer.slice());
         let span = self.span.clone();
@@ -261,7 +281,7 @@ impl Parser<'_> {
 
     fn function(&mut self) -> Result<(), Diagnostic> {
         let start = self.expect(Token::Fn, "expected `fn`")?.start;
-        let (name, name_span) = self.name()?;
+        let (name, name_span) = self.name("expected a function name")?;
         self.expect(Token::LeftParen, "expected `(`")?;
         self.expect(
             Token::RightParen,
@@ -280,6 +300,7 @@ impl Parser<'_> {
     }
 
     fn body(&mut self) -> Result<(Vec<Idx<Statement>>, usize), Diagnostic> {
+        self.enter_nesting()?;
         self.expect(Token::LeftBrace, "expected `{`")?;
         let mut body = Vec::new();
         while self.current != Some(Token::RightBrace) {
@@ -289,6 +310,7 @@ impl Parser<'_> {
             body.push(self.statement()?);
         }
         let end = self.expect(Token::RightBrace, "expected `}`")?.end;
+        self.nesting -= 1;
         Ok((body, end))
     }
 
@@ -302,12 +324,14 @@ impl Parser<'_> {
             }));
         }
         let kind = match self.current {
-            Some(Token::Const) | Some(Token::Name)
-                if self.lexer.slice() == "const" || self.lexer.slice() == "var" =>
-            {
-                let mutable = self.lexer.slice() == "var";
+            Some(Token::Const) | Some(Token::Var) => {
+                let mutable = self.current == Some(Token::Var);
                 self.advance()?;
-                let (name, name_span) = self.name()?;
+                let (name, name_span) = self.name(if mutable {
+                    "expected a binding name after `var`"
+                } else {
+                    "expected a binding name after `const`"
+                })?;
                 let annotation = if self.current == Some(Token::Colon) {
                     self.advance()?;
                     Some(self.integer_annotation()?)
@@ -325,7 +349,7 @@ impl Parser<'_> {
                 }
             }
             Some(Token::Name) => {
-                let (name, name_span) = self.name()?;
+                let (name, name_span) = self.name("expected an assignment target")?;
                 self.expect(Token::Equals, "expected `=`")?;
                 let value = self.expression()?;
                 StatementKind::Assignment {
@@ -337,11 +361,17 @@ impl Parser<'_> {
             Some(Token::Exit) => {
                 self.advance()?;
                 self.expect(Token::LeftParen, "expected `(`")?;
+                if self.current == Some(Token::RightParen) {
+                    return Err(self.error("exit requires one argument"));
+                }
                 let argument = self.expression()?;
                 if self.current == Some(Token::Comma) {
                     self.advance()?;
+                    if self.current != Some(Token::RightParen) {
+                        return Err(self.error("exit takes one argument"));
+                    }
                 }
-                self.expect(Token::RightParen, "expected `)`; exit takes one argument")?;
+                self.expect(Token::RightParen, "expected `)` after exit argument")?;
                 StatementKind::Exit { argument }
             }
             _ => return Err(self.error("expected a declaration, assignment, block, or `exit`")),
@@ -354,12 +384,7 @@ impl Parser<'_> {
     }
 
     fn integer_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
-        if self.current != Some(Token::Name)
-            || !matches!(
-                self.lexer.slice(),
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "int" | "uint"
-            )
-        {
+        if self.current != Some(Token::Name) || !integer_type(self.lexer.slice()) {
             return Err(self.error("expected an integer type"));
         }
         let annotation = TypeAnnotation {
@@ -376,8 +401,39 @@ impl Parser<'_> {
             let spelling = self.lexer.slice().to_owned();
             self.advance()?;
             ExpressionKind::Integer(spelling)
+        } else if self.current == Some(Token::Name) && integer_type(self.lexer.slice()) {
+            self.enter_nesting()?;
+            let destination = self.integer_annotation()?;
+            let truncating = if self.current == Some(Token::Dot) {
+                self.advance()?;
+                if self.current != Some(Token::Name) || self.lexer.slice() != "truncate" {
+                    return Err(self.error("expected `truncate`"));
+                }
+                self.advance()?;
+                true
+            } else {
+                false
+            };
+            if !truncating && self.current != Some(Token::LeftParen) {
+                return Err(Diagnostic::new(
+                    destination.span.clone(),
+                    "reserved word cannot be used as an identifier",
+                ));
+            }
+            self.expect(Token::LeftParen, "expected `(`")?;
+            let operand = self.expression()?;
+            let end = self.expect(Token::RightParen, "expected `)`")?.end;
+            self.nesting -= 1;
+            return Ok(self.syntax.expressions.alloc(Expression {
+                kind: ExpressionKind::Conversion {
+                    destination,
+                    truncating,
+                    operand,
+                },
+                span: span.start..end,
+            }));
         } else {
-            let (name, _) = self.name()?;
+            let (name, _) = self.name("expected an expression")?;
             ExpressionKind::Reference(name)
         };
         Ok(self.syntax.expressions.alloc(Expression { kind, span }))
@@ -459,6 +515,17 @@ mod tests {
                 ExpressionKind::Reference(name) => {
                     write!(output, "{indent}  reference {}", syntax.names.resolve(name)).unwrap()
                 }
+                ExpressionKind::Conversion {
+                    destination,
+                    truncating,
+                    ..
+                } => write!(
+                    output,
+                    "{indent}  {} conversion {}",
+                    if *truncating { "truncating" } else { "checked" },
+                    destination.name
+                )
+                .unwrap(),
             }
             writeln!(output, " span={:?}", expression.span).unwrap();
         }
@@ -466,7 +533,7 @@ mod tests {
 
     #[test]
     fn mixed_body_snapshot() {
-        let source = "fn main() -> void { const exit_code = 0x2Ai; var copy: int = exit_code; exit(copy,); const after = missing; } fn helper() -> void { exit(000,); }";
+        let source = "fn main() -> void { const exit_code = 0x2A; var copy: int = exit_code; exit(copy,); const after = missing; } fn helper() -> void { exit(000,); }";
         insta::assert_snapshot!(project(&parse(source).unwrap()));
     }
 
@@ -517,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_spellings_survive_parsing() {
+    fn unsuffixed_integer_spellings_survive_parsing() {
         for digits in [
             "0",
             "00042",
@@ -527,19 +594,64 @@ mod tests {
             "0o00752",
             "9999999999999999999999999999999999999999999999999999999999",
         ] {
-            for suffix in [
-                "", "i", "u", "z", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-            ] {
-                let spelling = format!("{digits}{suffix}");
-                let source = format!("fn main() -> void {{ exit({spelling}); }}");
-                let syntax = parse(&source).unwrap();
-                let (_, expression) = syntax.expressions.iter().next().unwrap();
-                let ExpressionKind::Integer(actual) = &expression.kind else {
-                    panic!("expected integer")
-                };
-                assert_eq!(actual, &spelling);
-                assert_eq!(&source[expression.span.clone()], spelling);
-            }
+            let source = format!("fn main() -> void {{ exit({digits}); }}");
+            let syntax = parse(&source).unwrap();
+            let (_, expression) = syntax.expressions.iter().next().unwrap();
+            let ExpressionKind::Integer(actual) = &expression.kind else {
+                panic!("expected integer")
+            };
+            assert_eq!(actual, digits);
+            assert_eq!(&source[expression.span.clone()], digits);
+        }
+    }
+
+    #[test]
+    fn nested_checked_and_truncating_conversions_preserve_their_forms() {
+        let source = "fn main() -> void { exit(u8.truncate(i16(u64(42)))); }";
+        let syntax = parse(source).unwrap();
+        let statement = syntax.functions.iter().next().unwrap().1.body[0];
+        let StatementKind::Exit { argument } = syntax.statements[statement].kind else {
+            panic!("expected exit")
+        };
+        let ExpressionKind::Conversion {
+            destination,
+            truncating,
+            operand,
+        } = &syntax.expressions[argument].kind
+        else {
+            panic!("expected truncating conversion")
+        };
+        assert_eq!(destination.name, "u8");
+        assert!(*truncating);
+        let ExpressionKind::Conversion {
+            destination,
+            truncating,
+            operand,
+        } = &syntax.expressions[*operand].kind
+        else {
+            panic!("expected checked conversion")
+        };
+        assert_eq!(destination.name, "i16");
+        assert!(!*truncating);
+        let ExpressionKind::Conversion {
+            destination,
+            truncating,
+            ..
+        } = &syntax.expressions[*operand].kind
+        else {
+            panic!("expected nested checked conversion")
+        };
+        assert_eq!(destination.name, "u64");
+        assert!(!*truncating);
+
+        for (body, message) in [
+            ("var value = u8(1;", "expected `)`"),
+            ("var value = u8.truncate(1;", "expected `)`"),
+            ("var value = u8.(1);", "expected `truncate`"),
+            ("var value = u8.truncate 1;", "expected `(`"),
+        ] {
+            let text = format!("fn main() -> void {{ {body} }}");
+            assert_eq!(parse(&text).unwrap_err().message, message, "{body}");
         }
     }
 
@@ -561,6 +673,17 @@ mod tests {
             "1_000",
             "0x_ff",
             "42foo",
+            "42i",
+            "42u",
+            "42z",
+            "42i8",
+            "42i16",
+            "42i32",
+            "42i64",
+            "42u8",
+            "42u16",
+            "42u32",
+            "42u64",
             "42int",
             "42uint",
             "42size",
@@ -638,8 +761,8 @@ mod tests {
     #[test]
     fn reserved_names_agree_in_all_name_positions() {
         for name in [
-            "alloc", "free", "const", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16",
-            "u32", "u64", "int", "uint", "f32", "f64", "bool", "rune", "str", "uintptr", "size",
+            "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
+            "u16", "u32", "u64", "int", "uint", "bool",
         ] {
             for (prefix, suffix) in [
                 ("fn ", "() -> void {}"),
@@ -652,6 +775,13 @@ mod tests {
                 assert_eq!(error.span, prefix.len()..prefix.len() + name.len());
                 assert!(error.message.contains("reserved word"));
             }
+        }
+
+        for name in [
+            "alloc", "free", "f32", "f64", "rune", "str", "uintptr", "size",
+        ] {
+            parse(&format!("fn {name}() -> void {{}}"))
+                .unwrap_or_else(|error| panic!("{name} should not be reserved: {error:?}"));
         }
     }
 
@@ -687,8 +817,53 @@ mod tests {
         let syntax = parse("fn exit_code() -> void { var const_value: int = unknown; exit(const_value); var after = missing; } fn exit_code() -> void {}").unwrap();
         assert_eq!(syntax.functions.len(), 2);
         assert_eq!(syntax.statements.len(), 3);
-        // `var` has a declaration role but is not reserved by the specification.
-        parse("fn var() -> void { const var = 1; exit(var); }").unwrap();
+    }
+
+    #[test]
+    fn malformed_expressions_and_calls_have_specific_diagnostics() {
+        for (body, message) in [
+            ("var = 1;", "expected a binding name after `var`"),
+            ("const = 1;", "expected a binding name after `const`"),
+            ("var x = ;", "expected an expression"),
+            ("exit();", "exit requires one argument"),
+            ("exit(1.5);", "expected `)` after exit argument"),
+            ("exit(1, 2);", "exit takes one argument"),
+            ("var x = int();", "expected an expression"),
+        ] {
+            let error = parse(&format!("fn main() -> void {{ {body} }}")).unwrap_err();
+            assert_eq!(error.message, message, "{body}");
+        }
+    }
+
+    #[test]
+    fn nesting_limit_protects_parsing_checking_and_lowering() {
+        for (blocks, conversions) in [(127, 0), (0, 127), (63, 64)] {
+            let text = format!(
+                "fn main() -> void {{ var x = 42; {}exit({}x{});{} }}",
+                "{".repeat(blocks),
+                "int(".repeat(conversions),
+                ")".repeat(conversions),
+                "}".repeat(blocks),
+            );
+            let syntax = parse(&text).unwrap();
+            let checked = crate::semantic::check(&syntax).unwrap();
+            crate::ir::lower(checked).verify().unwrap();
+        }
+        for (blocks, conversions) in [(128, 0), (0, 128), (64, 64), (100_000, 0), (0, 100_000)] {
+            let text = format!(
+                "fn main() -> void {{ {}exit({}42{});{} }}",
+                "{".repeat(blocks),
+                "int(".repeat(conversions),
+                ")".repeat(conversions),
+                "}".repeat(blocks),
+            );
+            let error = parse(&text).unwrap_err();
+            assert_eq!(
+                error.message,
+                "source nesting exceeds compiler limit of 128"
+            );
+            assert!(["{", "int"].contains(&&text[error.span]));
+        }
     }
 
     #[test]

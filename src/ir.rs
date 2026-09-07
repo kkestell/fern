@@ -19,11 +19,12 @@ pub(crate) enum Operand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Copy(Operand),
-    Convert(Operand),
+    Convert { operand: Operand, truncating: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Value {
+    pub span: Option<std::ops::Range<usize>>,
     pub ty: Type,
     pub kind: ValueKind,
 }
@@ -72,11 +73,14 @@ impl Operand {
 impl Entry {
     pub(crate) fn verify(self) -> Result<VerifiedEntry, CompileError> {
         for (index, value) in self.values.iter().enumerate() {
-            let (ValueKind::Copy(operand) | ValueKind::Convert(operand)) = value.kind;
-            let source = operand.verify(&self.values[..index])?;
-            let valid = match value.kind {
-                ValueKind::Copy(_) => source == value.ty,
-                ValueKind::Convert(_) => source != value.ty && source.converts_to(value.ty),
+            let (source, valid) = match value.kind {
+                ValueKind::Copy(operand) => {
+                    let source = operand.verify(&self.values[..index])?;
+                    (source, source == value.ty)
+                }
+                ValueKind::Convert { operand, .. } => {
+                    (operand.verify(&self.values[..index])?, true)
+                }
             };
             if !valid {
                 return Err(CompileError::new(format!(
@@ -122,21 +126,34 @@ fn lower_expression(
     checked: &CheckedEntry<'_>,
     id: Idx<Expression>,
     bindings: &HashMap<Idx<Binding>, ValueId>,
+    entry: &mut Entry,
 ) -> Value {
     let expression = &checked.expressions[id];
     let operand = match expression.value {
         ExpressionValue::Integer(value) => Operand::Integer {
-            value: i128::from(value),
-            ty: expression.source_ty,
+            value,
+            ty: expression.ty,
         },
         ExpressionValue::Reference(binding) => Operand::Value(bindings[&binding]),
+        ExpressionValue::Conversion { operand, .. } => {
+            let value = lower_expression(checked, operand, bindings, entry);
+            match value.kind {
+                ValueKind::Copy(operand) => operand,
+                ValueKind::Convert { .. } => Operand::Value(entry.push(value)),
+            }
+        }
     };
     Value {
+        span: matches!(expression.value, ExpressionValue::Conversion { .. })
+            .then(|| checked.syntax.expressions[id].span.clone()),
         ty: expression.ty,
-        kind: if expression.source_ty == expression.ty {
-            ValueKind::Copy(operand)
+        kind: if let ExpressionValue::Conversion { truncating, .. } = expression.value {
+            ValueKind::Convert {
+                operand,
+                truncating,
+            }
         } else {
-            ValueKind::Convert(operand)
+            ValueKind::Copy(operand)
         },
     }
 }
@@ -150,12 +167,12 @@ fn lower_body(
     for &statement in body {
         match &checked.syntax.statements[statement].kind {
             StatementKind::Binding { initializer, .. } => {
-                let value = lower_expression(checked, *initializer, bindings);
+                let value = lower_expression(checked, *initializer, bindings, entry);
                 let id = entry.push(value);
                 bindings.insert(checked.declarations[statement], id);
             }
             StatementKind::Assignment { value, .. } => {
-                let value = lower_expression(checked, *value, bindings);
+                let value = lower_expression(checked, *value, bindings, entry);
                 let id = entry.push(value);
                 bindings.insert(checked.assignments[statement], id);
             }
@@ -165,10 +182,10 @@ fn lower_body(
                 }
             }
             StatementKind::Exit { argument } => {
-                let value = lower_expression(checked, *argument, bindings);
+                let value = lower_expression(checked, *argument, bindings, entry);
                 entry.exit = match value.kind {
                     ValueKind::Copy(operand) => operand,
-                    ValueKind::Convert(_) => Operand::Value(entry.push(value)),
+                    ValueKind::Convert { .. } => Operand::Value(entry.push(value)),
                 };
                 return true;
             }
@@ -188,8 +205,29 @@ mod tests {
 
     fn copy(operand: Operand, ty: Type) -> Value {
         Value {
+            span: None,
             ty,
             kind: ValueKind::Copy(operand),
+        }
+    }
+
+    #[test]
+    fn conversions_use_existing_operands_and_keep_their_source_spans() {
+        let text = "fn main() -> void { var x: u64 = 42; var y = u8(u16(x)); exit(int(y)); }";
+        let syntax = frontend::parse(text).unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        let values = &entry.entry().values;
+        assert_eq!(values.len(), 4);
+        for (id, spelling) in [(1, "u16(x)"), (2, "u8(u16(x))"), (3, "int(y)")] {
+            let start = text.find(spelling).unwrap();
+            assert_eq!(values[id].span, Some(start..start + spelling.len()));
+            assert_eq!(
+                values[id].kind,
+                ValueKind::Convert {
+                    operand: Operand::Value(ValueId(id - 1)),
+                    truncating: false,
+                }
+            );
         }
     }
 
@@ -200,37 +238,37 @@ mod tests {
             (
                 "typed_integers",
                 "
-                const a = 127i8; const b = 32767i16; const c = 2147483647i32;
-                const d = 9223372036854775807i64; const e = 255u8;
-                const f = 65535u16; const g = 4294967295u32;
-                const h = 18446744073709551615u64; const i = 2147483647i;
-                const j = 4294967295u; const copy = h;
+                const a: i8 = 127; const b: i16 = 32767; const c: i32 = 2147483647;
+                const d: i64 = 9223372036854775807; const e: u8 = 255;
+                const f: u16 = 65535; const g: u32 = 4294967295;
+                const h: u64 = 18446744073709551615; const i: int = 2147483647;
+                const j: uint = 4294967295; const copy = h;
                 const contextual: u64 = 18446744073709551615;
             ",
             ),
             (
                 "typed_conversions",
                 "
-                const small = 42i8; const medium: i16 = small;
-                const wide: i64 = medium; const unsigned: u64 = 255u8;
-                const native = 42; const fixed: i32 = native;
-                const back: int = fixed; const u = 42u;
-                const uf: u32 = u; const ub: uint = uf;
-                exit(small);
+                var small: i8 = 42; var medium = i16(small);
+                var wide = i64(medium); var unsigned: u8 = 255;
+                var unsigned_wide = u64(unsigned); var native = 42; var fixed = i32(native);
+                var back = int(fixed); var u: uint = 42;
+                var uf = u32(u); var ub = uint(uf);
+                exit(int(small));
             ",
             ),
             (
                 "typed_scopes",
                 "
-                var x = 42i8; const saved = x;
-                { var x: i64 = x; x = saved; const copy = x; }
-                x = 7; var status: int = x; status = saved;
-                { const status = saved; exit(status); const ignored = 1u64; }
+                var x: i8 = 42; const saved = x;
+                { var x = i64(x); x = i64(saved); const copy = x; }
+                x = 7; var status = int(x); status = int(saved);
+                { const status = saved; exit(int(status)); const ignored: u64 = 1; }
                 exit(0);
             ",
             ),
-            ("converted_literal_exit", "exit(42i16);"),
-            ("literals", "const a = 42; var b: int = 7i;"),
+            ("converted_literal_exit", "exit(42);"),
+            ("literals", "const a = 42; var b: int = 7;"),
             ("copies", "const a = 42; var b = a; const c = b; exit(c);"),
             (
                 "shadowing",
@@ -314,22 +352,28 @@ mod tests {
         }
     }
 
-    const RANGES: [(Type, i128, i128); 10] = [
-        (Type::I8, -128, 127),
-        (Type::I16, -32768, 32767),
-        (Type::I32, -2147483648, 2147483647),
-        (Type::I64, -9223372036854775808, 9223372036854775807),
-        (Type::U8, 0, 255),
-        (Type::U16, 0, 65535),
-        (Type::U32, 0, 4294967295),
-        (Type::U64, 0, 18446744073709551615),
-        (Type::Int, -2147483648, 2147483647),
-        (Type::Uint, 0, 4294967295),
-    ];
+    fn ranges() -> [(Type, i128, i128); 10] {
+        [
+            (Type::I8, -128, 127),
+            (Type::I16, -32768, 32767),
+            (Type::I32, -2147483648, 2147483647),
+            (Type::I64, -9223372036854775808, 9223372036854775807),
+            (Type::U8, 0, 255),
+            (Type::U16, 0, 65535),
+            (Type::U32, 0, 4294967295),
+            (Type::U64, 0, 18446744073709551615),
+            (
+                Type::Int,
+                -(1i128 << (Type::Int.width() - 1)),
+                i128::from(Type::Int.max()),
+            ),
+            (Type::Uint, 0, i128::from(Type::Uint.max())),
+        ]
+    }
 
     #[test]
     fn verification_checks_literal_ranges_and_copy_types() {
-        for (ty, min, max) in RANGES {
+        for (ty, min, max) in ranges() {
             for value in [min, 0, max] {
                 Entry {
                     values: vec![
@@ -350,7 +394,7 @@ mod tests {
                 .unwrap_err();
                 assert!(error.to_string().contains("out of range"));
             }
-            for (other, _, _) in RANGES {
+            for (other, _, _) in ranges() {
                 if ty == other {
                     continue;
                 }
@@ -370,30 +414,26 @@ mod tests {
 
     #[test]
     fn verification_checks_conversions_and_exits() {
-        for (source, min, max) in RANGES {
-            for (destination, dest_min, dest_max) in RANGES {
-                let allowed = source != destination
-                    && (min < 0) == (dest_min < 0)
-                    && min >= dest_min
-                    && max <= dest_max;
+        for (source, min, max) in ranges() {
+            for (destination, _, _) in ranges() {
                 for value in [min, max] {
                     for operand in [integer(value, source), Operand::Value(ValueId(0))] {
                         let result = Entry {
                             values: vec![
                                 copy(integer(value, source), source),
                                 Value {
+                                    span: None,
                                     ty: destination,
-                                    kind: ValueKind::Convert(operand),
+                                    kind: ValueKind::Convert {
+                                        operand,
+                                        truncating: false,
+                                    },
                                 },
                             ],
                             exit: integer(0, Type::Int),
                         }
                         .verify();
-                        assert_eq!(
-                            result.is_ok(),
-                            allowed,
-                            "{source:?} to {destination:?}: {value}"
-                        );
+                        assert!(result.is_ok(), "{source:?} to {destination:?}: {value}");
                     }
                 }
             }
@@ -417,8 +457,12 @@ mod tests {
             assert!(
                 Entry {
                     values: vec![Value {
+                        span: None,
                         ty: Type::Int,
-                        kind: ValueKind::Convert(operand)
+                        kind: ValueKind::Convert {
+                            operand,
+                            truncating: false,
+                        }
                     }],
                     exit: integer(0, Type::Int),
                 }
@@ -426,7 +470,10 @@ mod tests {
                 .is_err()
             );
         }
-        for value in [i128::from(i32::MIN) - 1, i128::from(i32::MAX) + 1] {
+        for value in [
+            -(1i128 << (Type::Int.width() - 1)) - 1,
+            i128::from(Type::Int.max()) + 1,
+        ] {
             assert!(
                 Entry {
                     values: vec![],
@@ -436,5 +483,25 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn verification_accepts_checked_conversion_operands() {
+        Entry {
+            values: vec![
+                copy(integer(42, Type::U8), Type::U8),
+                Value {
+                    span: None,
+                    ty: Type::U64,
+                    kind: ValueKind::Convert {
+                        operand: Operand::Value(ValueId(0)),
+                        truncating: false,
+                    },
+                },
+            ],
+            exit: integer(0, Type::Int),
+        }
+        .verify()
+        .unwrap();
     }
 }

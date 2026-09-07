@@ -5,6 +5,7 @@ expression: entry.entry()
 Entry {
     values: [
         Value {
+            span: None,
             ty: Int,
             kind: Copy(
                 Integer {

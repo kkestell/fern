@@ -1,47 +1,46 @@
 fn main() -> void {
-    // Every integer annotation and suffix, including large unsigned values.
-    const signed8: i8 = 127i8;
-    const signed16: i16 = 32767i16;
-    const signed32: i32 = 2147483647i32;
-    const signed64: i64 = 9223372036854775807i64;
-    const unsigned8: u8 = 0xFFu8;
-    const unsigned16: u16 = 0xFFFFu16;
-    const unsigned32: u32 = 4294967295u32;
-    const unsigned64: u64 = 18446744073709551615u64;
-    const native_signed: int = 42i;
-    const native_unsigned: uint = 42u;
+    // Every integer annotation, including large unsigned values.
+    const signed8: i8 = 127;
+    const signed16: i16 = 32767;
+    const signed32: i32 = 2147483647;
+    const signed64: i64 = 9223372036854775807;
+    const unsigned8: u8 = 0xFF;
+    const unsigned16: u16 = 0xFFFF;
+    const unsigned32: u32 = 4294967295;
+    const unsigned64: u64 = 18446744073709551615;
+    const native_signed: int = 42;
+    const native_unsigned: uint = 42;
 
-    // Inference, contextual literals, and conversion during initialization.
+    // Inference, contextual literals, and explicit conversion.
     const inferred = 42;
-    const inferred_unsigned = 42u8;
+    const inferred_unsigned: u8 = 42;
     var small: i8 = 0b101010;
     const contextual: u64 = 18446744073709551615;
-    const wide_signed: i64 = signed8;
-    const wide_unsigned: u64 = inferred_unsigned;
+    const wide_signed = i64(signed8);
+    const wide_unsigned = u64(inferred_unsigned);
     const copied = unsigned64;
-    const equal_width: i32 = native_signed;
-    const back_to_int: int = equal_width;
+    const fixed_width = i32(native_signed);
+    const back_to_int = int(fixed_width);
 
     // Assignment conversions, saved copies, and nested shadowing.
     var status: int = 0;
-    status = small;
+    status = int(small);
     const saved = status;
     {
-        var status: u64 = unsigned8;
-        status = unsigned32;
+        var status = u64(unsigned8);
+        status = u64(unsigned32);
         small = 0o7;
     }
 
     // Uncomment individually to try invalid literals and conversions.
     // const out_of_range: u8 = 256;
-    // const invalid_suffix: u64 = 256u8;
-    // const narrowing: i8 = signed16;
-    // const mixed_sign: u64 = signed8;
+    // const narrowing = i8(signed16);
+    // const implicit: u64 = signed8;
     // exit(unsigned8);
 
     {
         const result: i8 = 42;
-        exit(result); // Implicit conversion to int; exits the whole program.
+        exit(int(result));
     }
     exit(saved); // Still checked, although the preceding exit cannot return.
 }

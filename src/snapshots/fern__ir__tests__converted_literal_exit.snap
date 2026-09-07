@@ -3,20 +3,9 @@ source: src/ir.rs
 expression: entry.entry()
 ---
 Entry {
-    values: [
-        Value {
-            ty: Int,
-            kind: Convert(
-                Integer {
-                    value: 42,
-                    ty: I16,
-                },
-            ),
-        },
-    ],
-    exit: Value(
-        ValueId(
-            0,
-        ),
-    ),
+    values: [],
+    exit: Integer {
+        value: 42,
+        ty: Int,
+    },
 }

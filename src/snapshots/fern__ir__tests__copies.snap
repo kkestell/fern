@@ -5,6 +5,7 @@ expression: entry.entry()
 Entry {
     values: [
         Value {
+            span: None,
             ty: Int,
             kind: Copy(
                 Integer {
@@ -14,6 +15,7 @@ Entry {
             ),
         },
         Value {
+            span: None,
             ty: Int,
             kind: Copy(
                 Value(
@@ -24,6 +26,7 @@ Entry {
             ),
         },
         Value {
+            span: None,
             ty: Int,
             kind: Copy(
                 Value(

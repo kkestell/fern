@@ -5,6 +5,7 @@ expression: entry.entry()
 Entry {
     values: [
         Value {
+            span: None,
             ty: I8,
             kind: Copy(
                 Integer {
@@ -14,6 +15,7 @@ Entry {
             ),
         },
         Value {
+            span: None,
             ty: I8,
             kind: Copy(
                 Value(
@@ -24,26 +26,35 @@ Entry {
             ),
         },
         Value {
+            span: Some(
+                96..102,
+            ),
             ty: I64,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         0,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: Some(
+                108..118,
+            ),
             ty: I64,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         1,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: None,
             ty: I64,
             kind: Copy(
                 Value(
@@ -54,6 +65,7 @@ Entry {
             ),
         },
         Value {
+            span: None,
             ty: I8,
             kind: Copy(
                 Integer {
@@ -63,26 +75,35 @@ Entry {
             ),
         },
         Value {
+            span: Some(
+                174..180,
+            ),
             ty: Int,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         5,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: Some(
+                191..201,
+            ),
             ty: Int,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         1,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: None,
             ty: I8,
             kind: Copy(
                 Value(
@@ -93,14 +114,18 @@ Entry {
             ),
         },
         Value {
+            span: Some(
+                248..259,
+            ),
             ty: Int,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         8,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
     ],
     exit: Value(

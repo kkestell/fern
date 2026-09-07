@@ -1,0 +1,25 @@
+fn main() -> void {
+    const literal: u8 = 42;
+    const limit: u64 = 18446744073709551615;
+    const reduced = u8.truncate(340282366920938463463374607431768211498);
+    const signed = i8.truncate(255);
+
+    var small: u8 = literal;
+    var wide: u64 = u64(small);
+    var status = int(wide);
+    const saved = status;
+    {
+        var status: u8 = u8(saved);
+        status = reduced;
+        small = status;
+        wide = u64(small);
+    }
+    status = int(wide);
+
+    // const out_of_range = u8(256);
+    // const constant_failure = u8(limit);
+    // var large: u64 = limit;
+    // status = int(u8(large));
+
+    exit(status);
+}

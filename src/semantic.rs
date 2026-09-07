@@ -6,6 +6,8 @@ use crate::{
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
+use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,13 +35,13 @@ impl Type {
             "u16" => Self::U16,
             "u32" => Self::U32,
             "u64" => Self::U64,
-            "int" | "i" => Self::Int,
-            "uint" | "u" => Self::Uint,
+            "int" => Self::Int,
+            "uint" => Self::Uint,
             _ => return None,
         })
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::I8 => "i8",
             Self::I16 => "i16",
@@ -55,11 +57,16 @@ impl Type {
     }
 
     pub(crate) fn width(self) -> u32 {
+        self.width_on(usize::BITS)
+    }
+
+    pub(crate) fn width_on(self, pointer_width: u32) -> u32 {
         match self {
             Self::I8 | Self::U8 => 8,
             Self::I16 | Self::U16 => 16,
-            Self::I32 | Self::U32 | Self::Int | Self::Uint => 32,
+            Self::I32 | Self::U32 => 32,
             Self::I64 | Self::U64 => 64,
+            Self::Int | Self::Uint => pointer_width,
         }
     }
 
@@ -73,30 +80,30 @@ impl Type {
     pub(crate) fn max(self) -> u64 {
         u64::MAX >> (64 - self.width() + u32::from(self.signed()))
     }
-
-    pub(crate) fn converts_to(self, destination: Self) -> bool {
-        self.signed() == destination.signed() && self.width() <= destination.width()
-    }
 }
 
 #[derive(Debug)]
 pub(crate) struct Binding {
     pub ty: Type,
     pub mutable: bool,
+    pub constant: Option<i128>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
-    Integer(u64),
+    Integer(i128),
     Reference(Idx<Binding>),
+    Conversion {
+        operand: Idx<Expression>,
+        truncating: bool,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct CheckedExpression {
-    // The literal or binding type before the contextual conversion.
-    pub source_ty: Type,
     pub ty: Type,
     pub value: ExpressionValue,
+    pub constant: Option<i128>,
 }
 
 #[derive(Debug)]
@@ -156,21 +163,15 @@ impl CheckedEntry<'_> {
                 } => {
                     let destination = annotation
                         .as_ref()
-                        .map(|a| {
-                            Type::named(&a.name).ok_or_else(|| {
-                                Diagnostic::new(
-                                    a.span.clone(),
-                                    format!("unsupported integer type `{}`", a.name),
-                                )
-                            })
-                        })
-                        .transpose()?;
+                        .map(|a| Type::named(&a.name).expect("frontend validates integer types"));
                     let expression = self.check_expression(*initializer, scopes, destination)?;
                     let ty = expression.ty;
+                    let constant = if *mutable { None } else { expression.constant };
                     self.expressions.insert(*initializer, expression);
                     let binding = self.bindings.alloc(Binding {
                         ty,
                         mutable: *mutable,
+                        constant,
                     });
                     self.declarations.insert(statement, binding);
                     scopes.last_mut().unwrap().insert(*name, binding);
@@ -225,47 +226,107 @@ impl CheckedEntry<'_> {
     }
 
     fn check_expression(
-        &self,
+        &mut self,
         id: Idx<Expression>,
         scopes: &[HashMap<Spur, Idx<Binding>>],
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let expression = &self.syntax.expressions[id];
         let error = |message| Diagnostic::new(expression.span.clone(), message);
-        let (source_ty, value) = match &expression.kind {
+        let (source_ty, value, constant) = match &expression.kind {
             ExpressionKind::Integer(spelling) => {
                 let (base, digits, suffix) = integer_parts(spelling);
-                let ty = if suffix.is_empty() {
-                    destination.unwrap_or(Type::Int)
-                } else {
-                    Type::named(suffix)
-                        .ok_or_else(|| error(format!("unsupported integer suffix `{suffix}`")))?
-                };
-                let mut value = 0u64;
-                for digit in digits.chars() {
-                    let digit = digit
-                        .to_digit(base)
-                        .expect("frontend validated integer digits");
-                    value = value
-                        .checked_mul(u64::from(base))
-                        .and_then(|value| value.checked_add(u64::from(digit)))
-                        .filter(|value| *value <= ty.max())
-                        .ok_or_else(|| {
-                            error(format!("integer literal out of range for `{}`", ty.name()))
-                        })?;
+                debug_assert!(suffix.is_empty(), "frontend rejects literal suffixes");
+                let ty = destination.unwrap_or(Type::Int);
+                let value = BigUint::parse_bytes(digits.as_bytes(), base)
+                    .expect("frontend validated integer digits");
+                if value > BigUint::from(ty.max()) {
+                    return Err(error(format!(
+                        "integer literal out of range for `{}`",
+                        ty.name()
+                    )));
                 }
-                (ty, ExpressionValue::Integer(value))
+                let value = value
+                    .to_i128()
+                    .expect("integer value representable by every Fern type");
+                (ty, ExpressionValue::Integer(value), Some(value))
             }
             ExpressionKind::Reference(name) => {
                 let binding = self.resolve(*name, expression.span.clone(), scopes)?;
                 (
                     self.bindings[binding].ty,
                     ExpressionValue::Reference(binding),
+                    self.bindings[binding].constant,
                 )
+            }
+            ExpressionKind::Conversion {
+                destination: annotation,
+                truncating,
+                operand,
+            } => {
+                let destination =
+                    Type::named(&annotation.name).expect("frontend validates integer types");
+                if *truncating
+                    && matches!(
+                        self.syntax.expressions[*operand].kind,
+                        ExpressionKind::Integer(_)
+                    )
+                {
+                    let ExpressionKind::Integer(spelling) = &self.syntax.expressions[*operand].kind
+                    else {
+                        unreachable!()
+                    };
+                    let (base, digits, _) = integer_parts(spelling);
+                    let value = BigUint::parse_bytes(digits.as_bytes(), base)
+                        .expect("frontend validated integer digits");
+                    let modulus = BigUint::from(1u8) << destination.width();
+                    let bits = (value % modulus)
+                        .to_u64()
+                        .expect("truncated Fern integer fits in u64");
+                    let value = integer_from_bits(bits, destination);
+                    (destination, ExpressionValue::Integer(value), Some(value))
+                } else {
+                    let operand_destination = if !*truncating
+                        && matches!(
+                            self.syntax.expressions[*operand].kind,
+                            ExpressionKind::Integer(_)
+                        ) {
+                        Some(destination)
+                    } else {
+                        None
+                    };
+                    let operand_id = *operand;
+                    let checked_operand =
+                        self.check_expression(operand_id, scopes, operand_destination)?;
+                    let constant = checked_operand.constant;
+                    self.expressions.insert(operand_id, checked_operand);
+                    if let Some(value) = constant {
+                        let value = if *truncating {
+                            truncate_integer(value, destination)
+                        } else if integer_fits(value, destination) {
+                            value
+                        } else {
+                            return Err(error(format!(
+                                "constant conversion to `{}` would trap",
+                                destination.name()
+                            )));
+                        };
+                        (destination, ExpressionValue::Integer(value), Some(value))
+                    } else {
+                        (
+                            destination,
+                            ExpressionValue::Conversion {
+                                operand: operand_id,
+                                truncating: *truncating,
+                            },
+                            None,
+                        )
+                    }
+                }
             }
         };
         let ty = destination.unwrap_or(source_ty);
-        if !source_ty.converts_to(ty) {
+        if source_ty != ty {
             return Err(error(format!(
                 "cannot implicitly convert `{}` to `{}`",
                 source_ty.name(),
@@ -273,11 +334,34 @@ impl CheckedEntry<'_> {
             )));
         }
         Ok(CheckedExpression {
-            source_ty,
             ty,
             value,
+            constant,
         })
     }
+}
+
+fn integer_fits(value: i128, ty: Type) -> bool {
+    let minimum = if ty.signed() {
+        -(1i128 << (ty.width() - 1))
+    } else {
+        0
+    };
+    value >= minimum && value <= i128::from(ty.max())
+}
+
+fn integer_from_bits(bits: u64, ty: Type) -> i128 {
+    let value = i128::from(bits);
+    if ty.signed() && value >= (1i128 << (ty.width() - 1)) {
+        value - (1i128 << ty.width())
+    } else {
+        value
+    }
+}
+
+fn truncate_integer(value: i128, ty: Type) -> i128 {
+    let modulus = 1i128 << ty.width();
+    integer_from_bits(value.rem_euclid(modulus) as u64, ty)
 }
 
 #[cfg(test)]
@@ -285,10 +369,33 @@ mod tests {
     use super::*;
     use crate::frontend::parse;
 
+    const SPEC_INTEGER_TYPES: [(&str, Type); 10] = [
+        ("i8", Type::I8),
+        ("i16", Type::I16),
+        ("i32", Type::I32),
+        ("i64", Type::I64),
+        ("u8", Type::U8),
+        ("u16", Type::U16),
+        ("u32", Type::U32),
+        ("u64", Type::U64),
+        ("int", Type::Int),
+        ("uint", Type::Uint),
+    ];
+
+    fn literal(value: u128, base: u32) -> String {
+        match base {
+            2 => format!("0b{value:b}"),
+            8 => format!("0o{value:o}"),
+            10 => value.to_string(),
+            16 => format!("0x{value:X}"),
+            _ => unreachable!(),
+        }
+    }
+
     #[test]
     fn bindings_have_concrete_types_and_distinct_identities() {
         let text =
-            "fn main() -> void { const x = 1; var x: int = x; const x = x; exit(x); exit(0i); }";
+            "fn main() -> void { const x = 1; var x: int = x; const x = x; exit(x); exit(0); }";
         let syntax = parse(text).unwrap();
         let checked = check(&syntax).unwrap();
         assert!(std::ptr::eq(checked.syntax, &syntax));
@@ -332,7 +439,7 @@ mod tests {
             .iter()
             .filter_map(|(_, expression)| match expression.value {
                 ExpressionValue::Reference(id) => Some(id),
-                ExpressionValue::Integer(_) => None,
+                ExpressionValue::Integer(_) | ExpressionValue::Conversion { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -374,14 +481,9 @@ mod tests {
                 "unknown binding `missing`",
             ),
             (
-                "var x = 1; { x = 2147483648; }",
-                "2147483648",
-                "integer literal out of range for `int`",
-            ),
-            (
-                "var x = 1; { x = 1u8; }",
-                "1u8",
-                "cannot implicitly convert `u8` to `int`",
+                "var x: u8 = 1; { x = 256; }",
+                "256",
+                "integer literal out of range for `u8`",
             ),
         ] {
             rejects(body, offending, message);
@@ -431,230 +533,210 @@ mod tests {
     }
 
     #[test]
-    fn integer_ranges_cover_all_bases_and_supported_suffixes() {
-        for (prefix, max, overflow) in [
-            ("", "2147483647", "2147483648"),
-            ("0x", "7FFFFFFF", "80000000"),
-            ("0o", "17777777777", "20000000000"),
-            (
-                "0b",
-                "1111111111111111111111111111111",
-                "10000000000000000000000000000000",
-            ),
-        ] {
-            for suffix in ["", "i"] {
-                for (digits, expected) in [("0", 0), ("00000", 0), (max, i32::MAX as u64)] {
-                    for zeros in [String::new(), "0".repeat(1000)] {
-                        let literal = format!("{prefix}{zeros}{digits}{suffix}");
-                        for body in [
-                            format!("var x = {literal};"),
-                            format!("const x: int = {literal};"),
-                            format!("exit({literal});"),
-                        ] {
+    fn integer_contract_uses_contextual_literals_and_exact_references() {
+        for (name, ty) in SPEC_INTEGER_TYPES {
+            let max = u128::from(ty.max());
+            for base in [2, 8, 10, 16] {
+                let maximum = literal(max, base);
+                let syntax = parse(&format!(
+                    "fn main() -> void {{ var x: {name} = {maximum}; x = {maximum}; }}"
+                ))
+                .unwrap();
+                let checked = check(&syntax).unwrap();
+                assert!(checked.bindings.iter().all(|(_, binding)| binding.ty == ty));
+                assert!(
+                    checked
+                        .expressions
+                        .iter()
+                        .all(|(_, expression)| expression.ty == ty)
+                );
+
+                let overflow = literal(max + 1, base);
+                rejects(
+                    &format!("exit(0); var x: {name} = {overflow};"),
+                    &overflow,
+                    &format!("integer literal out of range for `{name}`"),
+                );
+            }
+        }
+
+        for (source_name, source) in SPEC_INTEGER_TYPES {
+            for (destination_name, destination) in SPEC_INTEGER_TYPES {
+                for target in [
+                    format!("const target: {destination_name} = source;"),
+                    format!("var target: {destination_name} = source;"),
+                    format!("var target: {destination_name} = 0; target = source;"),
+                ] {
+                    for scope in [target.clone(), format!("{{ exit(0); {target} }}")] {
+                        let body = format!("const source: {source_name} = 1; {scope}");
+                        if source == destination {
                             let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                            let checked = check(&syntax).unwrap();
-                            let (id, _) = syntax.expressions.iter().next().unwrap();
-                            assert_eq!(checked.expressions[id].ty, Type::Int);
-                            assert_eq!(
-                                checked.expressions[id].value,
-                                ExpressionValue::Integer(expected)
+                            check(&syntax).unwrap();
+                        } else {
+                            rejects(
+                                &body,
+                                "source",
+                                &format!(
+                                    "cannot implicitly convert `{source_name}` to `{destination_name}`"
+                                ),
                             );
                         }
                     }
                 }
-                for digits in [overflow.to_owned(), "1".repeat(1000)] {
-                    let literal = format!("{prefix}{digits}{suffix}");
-                    rejects(
-                        &format!("exit(0); const x = {literal};"),
-                        &literal,
-                        "integer literal out of range for `int`",
-                    );
-                }
             }
-        }
-    }
-
-    const INTEGER_TYPES: [(&str, &str, Type, u32, bool); 10] = [
-        ("i8", "i8", Type::I8, 8, true),
-        ("i16", "i16", Type::I16, 16, true),
-        ("i32", "i32", Type::I32, 32, true),
-        ("i64", "i64", Type::I64, 64, true),
-        ("u8", "u8", Type::U8, 8, false),
-        ("u16", "u16", Type::U16, 16, false),
-        ("u32", "u32", Type::U32, 32, false),
-        ("u64", "u64", Type::U64, 64, false),
-        ("int", "i", Type::Int, 32, true),
-        ("uint", "u", Type::Uint, 32, false),
-    ];
-
-    #[test]
-    fn all_integer_ranges_in_every_base() {
-        for (name, suffix, ty, width, signed) in INTEGER_TYPES {
-            let max = (1u128 << (width - u32::from(signed))) - 1;
-            for base in [2, 8, 10, 16] {
-                let literal = |value: u128| match base {
-                    2 => format!("0b{value:b}"),
-                    8 => format!("0o{value:o}"),
-                    10 => value.to_string(),
-                    16 => format!("0x{value:X}"),
-                    _ => unreachable!(),
-                };
-                for value in [0, max] {
-                    for body in [
-                        format!("const x = {}{suffix}; const copy = x;", literal(value)),
-                        format!(
-                            "var x: {name} = {}; x = {};",
-                            literal(value),
-                            literal(value)
-                        ),
-                    ] {
-                        let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                        let checked = check(&syntax).unwrap();
-                        assert!(checked.bindings.iter().all(|(_, b)| b.ty == ty));
-                        let first = checked.expressions.iter().next().unwrap().1;
-                        assert_eq!(first.source_ty, ty);
-                        assert_eq!(first.ty, ty);
-                        assert_eq!(first.value, ExpressionValue::Integer(value as u64));
-                    }
-                }
-                let overflow = literal(max + 1);
-                for (body, offending) in [
-                    (
-                        format!("const x = {overflow}{suffix};"),
-                        format!("{overflow}{suffix}"),
-                    ),
-                    (format!("const x: {name} = {overflow};"), overflow.clone()),
-                    (
-                        format!("var x: {name} = 0; x = {overflow};"),
-                        overflow.clone(),
-                    ),
-                ] {
-                    rejects(
-                        &body,
-                        &offending,
-                        &format!("integer literal out of range for `{name}`"),
-                    );
-                }
-            }
-            let literal = format!("{}1{suffix}", "0".repeat(1000));
-            let syntax = parse(&format!("fn main() -> void {{ const x = {literal}; }}")).unwrap();
-            check(&syntax).unwrap();
-            let huge = format!("{}{suffix}", "9".repeat(1000));
-            rejects(
-                &format!("const x = {huge};"),
-                &huge,
-                &format!("integer literal out of range for `{name}`"),
-            );
-        }
-        rejects("const x = 1z;", "1z", "unsupported integer suffix `z`");
-        // Context does not rescue a suffixed literal outside its own range.
-        rejects(
-            "const x: u64 = 256u8;",
-            "256u8",
-            "integer literal out of range for `u8`",
-        );
-    }
-
-    #[test]
-    fn conversions_in_initialization_assignment_and_exit() {
-        for (source_name, suffix, source_ty, source_width, source_signed) in INTEGER_TYPES {
-            for (destination_name, _, destination_ty, destination_width, destination_signed) in
-                INTEGER_TYPES
-            {
-                let allowed =
-                    source_signed == destination_signed && source_width <= destination_width;
-                for (body, offending) in [
-                    (
-                        format!("const target: {destination_name} = 1{suffix};"),
-                        format!("1{suffix}"),
-                    ),
-                    (
-                        format!(
-                            "const source = 1{suffix}; const target: {destination_name} = source;"
-                        ),
-                        "source".into(),
-                    ),
-                    (
-                        format!(
-                            "const source = 1{suffix}; var target: {destination_name} = 0; target = source;"
-                        ),
-                        "source".into(),
-                    ),
-                ] {
-                    if allowed {
-                        let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                        let checked = check(&syntax).unwrap();
-                        let last = checked.expressions.iter().last().unwrap().1;
-                        assert_eq!(last.source_ty, source_ty);
-                        assert_eq!(last.ty, destination_ty);
-                        assert_eq!(checked.bindings.iter().last().unwrap().1.ty, destination_ty);
-                    } else {
-                        let message = format!(
-                            "cannot implicitly convert `{source_name}` to `{destination_name}`"
-                        );
-                        rejects(&body, &offending, &message);
-                        rejects(&format!("{{ exit(0); {body} }}"), &offending, &message);
-                    }
-                }
-            }
-            for argument in [format!("1{suffix}"), "source".into()] {
-                let body = format!("const source = 1{suffix}; exit({argument});");
-                if source_signed && source_width <= 32 {
-                    let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                    let checked = check(&syntax).unwrap();
-                    let exit = checked.expressions.iter().last().unwrap().1;
-                    assert_eq!(exit.source_ty, source_ty);
-                    assert_eq!(exit.ty, Type::Int);
-                } else {
-                    rejects(
-                        &body,
-                        &argument,
-                        &format!("cannot implicitly convert `{source_name}` to `int`"),
-                    );
-                }
+            let body = format!("const source: {source_name} = 1; exit(source);");
+            if source == Type::Int {
+                let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
+                check(&syntax).unwrap();
+            } else {
+                rejects(
+                    &body,
+                    "source",
+                    &format!("cannot implicitly convert `{source_name}` to `int`"),
+                );
             }
         }
     }
 
     #[test]
-    fn typed_shadowing_copies_and_nested_assignments() {
+    fn conversions_evaluate_constants_and_preserve_runtime_operands() {
         let syntax = parse(
             "fn main() -> void {
-            var x = 1u8;
-            const saved = x;
-            { const x: u64 = x; var x = x; x = saved; }
-            x = 255;
-            { exit(0); const x: u16 = x; const copy = x; }
-            const x: u32 = x;
-            const x: uint = x;
-        }",
+                const literal: u8 = 42;
+                const reduced = u8.truncate(340282366920938463463374607431768211498);
+                const signed = i8.truncate(255);
+                const widened = u64(literal);
+                var runtime: u64 = 42;
+                const checked = u8(runtime);
+                const truncated = u8.truncate(runtime);
+                const later = u16(checked);
+            }",
         )
         .unwrap();
         let checked = check(&syntax).unwrap();
-        let types: Vec<_> = checked.bindings.iter().map(|(_, b)| b.ty).collect();
+        let constants: Vec<_> = checked
+            .bindings
+            .iter()
+            .map(|(_, binding)| binding.constant)
+            .collect();
         assert_eq!(
-            types,
+            constants,
             [
-                Type::U8,
-                Type::U8,
-                Type::U64,
-                Type::U64,
-                Type::U16,
-                Type::U16,
-                Type::U32,
-                Type::Uint
+                Some(42),
+                Some(42),
+                Some(-1),
+                Some(42),
+                None,
+                None,
+                None,
+                None
             ]
         );
+        assert_eq!(
+            checked
+                .expressions
+                .iter()
+                .filter(|(_, expression)| {
+                    matches!(expression.value, ExpressionValue::Conversion { .. })
+                })
+                .count(),
+            3
+        );
+
         rejects(
-            "const x = 1; const y: u8 = x;",
-            "x",
-            "cannot implicitly convert `int` to `u8`",
+            "const value: u64 = 18446744073709551615; const narrowed = u8(value);",
+            "u8(value)",
+            "constant conversion to `u8` would trap",
         );
         rejects(
-            "var x: u8 = 1; { const x: u64 = x; } x = 256;",
+            "const narrowed = u8(256);",
             "256",
             "integer literal out of range for `u8`",
         );
+        rejects(
+            "exit(0); const value: u64 = 256; const narrowed = u8(value);",
+            "u8(value)",
+            "constant conversion to `u8` would trap",
+        );
+    }
+
+    #[test]
+    fn truncating_constants_keep_at_least_256_bits_before_reduction() {
+        for literal in [
+            format!("0x{}", "F".repeat(64)),
+            format!("0b{}", "1".repeat(256)),
+            format!("0x1{}FF", "0".repeat(128)),
+        ] {
+            let syntax = parse(&format!(
+                "fn main() -> void {{ const result = int(u8.truncate({literal})); }}"
+            ))
+            .unwrap();
+            let checked = check(&syntax).unwrap();
+            assert_eq!(
+                checked.bindings.iter().next().unwrap().1.constant,
+                Some(255)
+            );
+            rejects(
+                &format!("exit(0); const result = u8.truncate(u64({literal}));"),
+                &literal,
+                "integer literal out of range for `u64`",
+            );
+        }
+    }
+
+    #[test]
+    fn constant_classification_follows_copies_and_shadowing() {
+        let syntax = parse(
+            "fn main() -> void {
+                const original: u64 = 255;
+                const copy = original;
+                { var original = copy;
+                  const saved = original;
+                  const converted = u8(saved); }
+                const folded = i8.truncate(copy);
+                const extended = i64(folded);
+                const wrapped = u64.truncate(extended);
+            }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant)
+                .collect::<Vec<_>>(),
+            [
+                Some(255),
+                Some(255),
+                None,
+                None,
+                None,
+                Some(-1),
+                Some(-1),
+                Some(i128::from(u64::MAX))
+            ],
+        );
+        for body in [
+            "const original: u64 = 256; const copy = original; const bad = u8(copy);",
+            "const original: u64 = 256; { var original: u64 = 1; } const bad = u8(original);",
+            "const negative = i8.truncate(255); const bad = u64(negative);",
+        ] {
+            let syntax = parse(&format!("fn main() -> void {{ exit(0); {body} }}")).unwrap();
+            assert!(check(&syntax).unwrap_err().message.contains("would trap"));
+        }
+    }
+
+    #[test]
+    fn native_integer_widths_follow_the_host_and_model_both_specified_widths() {
+        assert_eq!(Type::Int.width(), usize::BITS);
+        assert_eq!(Type::Uint.width(), usize::BITS);
+        for pointer_width in [32, 64] {
+            assert_eq!(Type::Int.width_on(pointer_width), pointer_width);
+            assert_eq!(Type::Uint.width_on(pointer_width), pointer_width);
+            assert_eq!(Type::I32.width_on(pointer_width), 32);
+            assert_eq!(Type::U64.width_on(pointer_width), 64);
+        }
     }
 
     #[test]

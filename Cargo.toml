@@ -9,6 +9,8 @@ ariadne = "0.6"
 la-arena = "0.3"
 lasso = "0.7"
 logos = "0.16"
+num-bigint = "0.4"
+num-traits = "0.2"
 tempfile = "3"
 
 [dev-dependencies]

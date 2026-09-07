@@ -63,8 +63,8 @@ fn cli_compiles_and_replaces_existing_output() {
 #[test]
 fn typed_values_after_exit_do_not_change_status() {
     for body in [
-        "exit(42); const value = 18446744073709551615u64;",
-        "{ exit(42); const value = 1i8; } const value: u64 = 1u8;",
+        "exit(42); const value: u64 = 18446744073709551615;",
+        "{ exit(42); const value: i8 = 1; } const value: u64 = 1;",
     ] {
         let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
         fern::compile(&input, &output).unwrap();
@@ -75,24 +75,21 @@ fn typed_values_after_exit_do_not_change_status() {
 #[test]
 fn typed_integer_diagnostics_precede_emission_and_preserve_output() {
     for (body, message) in [
-        (
-            "const x: u64 = 256u8;",
-            "integer literal out of range for `u8`",
-        ),
+        ("const x: u64 = 256u8;", "malformed integer literal"),
         (
             "var x: u8 = 0; { x = 256; }",
             "integer literal out of range for `u8`",
         ),
         (
-            "const x = 1u64; { exit(0); exit(x); }",
+            "const x: u64 = 1; { exit(0); exit(x); }",
             "cannot implicitly convert `u64` to `int`",
         ),
         (
-            "const x = 1i64; const y: int = x;",
+            "const x: i64 = 1; const y: int = x;",
             "cannot implicitly convert `i64` to `int`",
         ),
         (
-            "{ exit(0); } const x = 18446744073709551616u64;",
+            "{ exit(0); } const x: u64 = 18446744073709551616;",
             "integer literal out of range for `u64`",
         ),
     ] {
@@ -127,8 +124,8 @@ fn source_failures_preserve_output() {
             "unknown binding `missing`",
         ),
         (
-            "fn main() -> void { exit(0); var x = 2147483648; }",
-            "integer literal out of range for `int`",
+            "fn main() -> void { exit(0); var x: u8 = 256; }",
+            "integer literal out of range for `u8`",
         ),
         (
             "fn main() -> void { const x = 1; x = 2; }",
@@ -143,14 +140,14 @@ fn source_failures_preserve_output() {
             "unknown binding `missing`",
         ),
         (
-            "fn main() -> void { var x = 1; { exit(0); } x = 2147483648; }",
-            "integer literal out of range for `int`",
+            "fn main() -> void { var x: u8 = 1; { exit(0); } x = 256; }",
+            "integer literal out of range for `u8`",
         ),
         (
-            "fn main() -> void { var x = 1; { x = 1u8; } }",
-            "cannot implicitly convert `u8` to `int`",
+            "fn main() -> void { var x: u8 = 1; { x = 256; } }",
+            "integer literal out of range for `u8`",
         ),
-        ("fn main() -> void { x = ; }", "expected a name"),
+        ("fn main() -> void { x = ; }", "expected an expression"),
         ("fn main() -> void { x 1; }", "expected `=`"),
         ("fn main() -> void { x = 1 }", "expected `;`"),
         ("fn main() -> void { { }", "expected `}`"),
@@ -340,15 +337,18 @@ fn integer_programs_execute() {
             42,
         ),
     ];
-    for value in [0, 42, 255, 256, 257, i32::MAX] {
+    for value in [0, 42, 255, 256, 257, i64::from(i32::MAX), isize::MAX as i64] {
         for body in [
             format!("exit({value});"),
-            format!("const x: int = {value}i; var y = x; exit(y,);"),
+            format!("const x: int = {value}; var y = x; exit(y,);"),
         ] {
-            fixtures.push((format!("fn main() -> void {{ {body} }}"), value % 256));
+            fixtures.push((
+                format!("fn main() -> void {{ {body} }}"),
+                (value % 256) as i32,
+            ));
         }
     }
-    for literal in ["00042", "0x0002Ai", "0o00052", "0b000101010i"] {
+    for literal in ["00042", "0x0002A", "0o00052", "0b000101010"] {
         fixtures.push((
             format!("fn main() -> void {{ var x: int = {literal}; exit(x,); }}"),
             42,
@@ -400,42 +400,45 @@ fn assignments_and_nested_scopes_execute() {
 }
 
 #[test]
-fn typed_integer_programs_execute() {
+fn integer_type_programs_execute() {
     let mut fixtures = vec![(
         include_str!("../examples/integer_types.fern").to_owned(),
         42,
     )];
     for (body, expected) in [
         (
-            "var x = 42i8; const saved = x; x = 7; var status: int = x; status = saved; exit(status);",
+            "var x: i8 = 42; const saved = x; x = 7; var status = int(x); status = int(saved); exit(status);",
             42,
         ),
         (
-            "var x = 1i8; { x = 42; var x: i64 = x; x = 7i16; } exit(x);",
-            42,
-        ),
-        ("var x = 1i8; { { x = 42; exit(x); x = 7; } } exit(0);", 42),
-        (
-            "const x = 42; const y: i32 = x; const z: int = y; exit(z);",
+            "var x: i8 = 1; { x = 42; var x = i64(x); x = 7; } exit(int(x));",
             42,
         ),
         (
-            "const x = 4294967295u; const y: u32 = x; var z: uint = y; z = 255u8;",
+            "var x: i8 = 1; { { x = 42; exit(int(x)); x = 7; } } exit(0);",
+            42,
+        ),
+        (
+            "const x: i32 = 42; const y = i32(x); const z = int(y); exit(z);",
+            42,
+        ),
+        (
+            "const x: u32 = 4294967295; const y = u32(x); var z = uint(y); z = 255;",
             0,
         ),
     ] {
         fixtures.push((format!("fn main() -> void {{ {body} }}"), expected));
     }
-    for (suffix, max) in [
+    for (name, max) in [
         ("i8", 127),
         ("i16", 32767),
         ("i32", i32::MAX),
-        ("i", i32::MAX),
+        ("int", i32::MAX),
     ] {
         for value in [0, 42, max] {
             for body in [
-                format!("exit({value}{suffix});"),
-                format!("const x = {value}{suffix}; var y: int = 0; y = x; exit(y);"),
+                format!("const x: {name} = {value}; exit(int(x));"),
+                format!("const x: {name} = {value}; var y: int = int(x); exit(y);"),
             ] {
                 fixtures.push((format!("fn main() -> void {{ {body} }}"), value % 256));
             }
@@ -449,5 +452,69 @@ fn typed_integer_programs_execute() {
             Some(expected),
             "{source}"
         );
+    }
+}
+
+#[test]
+fn explicit_integer_conversions_execute_and_trap() {
+    let (_dir, input, output) = fixture(include_str!("../examples/integer_conversions.fern"));
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+
+    let (_dir, input, output) = fixture(
+        "fn main() -> void { var value: u64 = 256; const narrowed = u8(value); exit(42); }",
+    );
+    fern::compile(&input, &output).unwrap();
+    let result = Command::new(output).output().unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("checked integer conversion failed"));
+}
+
+#[test]
+fn runtime_diagnostics_identify_the_first_failing_conversion_on_stderr() {
+    for (value, source_type, destination, spelling) in [
+        (65536, "u64", "u16", "u16(value)"),
+        (256, "u16", "u8", "u8(u16(value))"),
+    ] {
+        let source = format!(
+            "/* 🌿 */ fn main() -> void {{\n  var value: u64 = {value};\n  var result = u8(u16(value));\n  exit(42);\n}}"
+        );
+        let (dir, _, output) = fixture(&source);
+        let input = dir.path().join("quoted\" path\\ 🌿.fern");
+        fs::write(&input, source).unwrap();
+        fern::compile(&input, &output).unwrap();
+        // The executable carries its diagnostic even if the source disappears.
+        fs::remove_file(&input).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(
+            stderr.contains(&format!(
+                "checked integer conversion failed: `{source_type}` to `{destination}`"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{}:3:", input.display())),
+            "{stderr}"
+        );
+        assert!(stderr.contains(spelling), "{stderr}");
+    }
+}
+
+#[test]
+fn excessive_nesting_reports_an_error_and_preserves_output() {
+    for body in [
+        format!("{}exit(42);{}", "{".repeat(100_000), "}".repeat(100_000)),
+        format!("exit({}42{});", "int(".repeat(100_000), ")".repeat(100_000)),
+    ] {
+        let (dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
+        fs::write(&output, "keep me").unwrap();
+        let result = cli(&input, &output).output().unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        failure(result, "source nesting exceeds compiler limit of 128");
+        assert_eq!(fs::read_to_string(&output).unwrap(), "keep me");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 }

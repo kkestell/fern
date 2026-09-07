@@ -2,7 +2,14 @@
 
 This specification defines Fern's language behavior. It is authoritative
 wherever it is explicit. An invalid program must be rejected during compilation.
-A trap halts execution with a diagnostic identifying the failing operation.
+A trap halts execution with a diagnostic on standard error identifying the
+failing operation and its source location.
+
+Implementations may impose documented limits on source nesting and compile-time
+resource use. Source exceeding such a limit must be rejected with a compilation
+diagnostic, rather than crashing the compiler or silently changing a value.
+
+The [roadmap](../eng/roadmap.md) records implementation status.
 
 Fern is a low-level programming language in the spirit of C. Its goals are
 clarity, defined behavior, and safe default semantics.
@@ -46,9 +53,9 @@ var x = 10; // int
 
 ### Keywords
 
-`fn`, `void`, `const`, and `exit` are reserved. The ten integer type names
-listed under Integer types and `bool` are reserved and cannot be identifiers.
-`var` introduces a mutable binding in a declaration.
+`fn`, `void`, `var`, `const`, `exit`, `true`, and `false` are reserved. The ten
+integer type names listed under Integer types and `bool` are also reserved.
+Reserved words cannot be identifiers.
 
 ### Integer literals
 
@@ -56,6 +63,9 @@ An integer literal contains digits in one of four bases: decimal with no prefix,
 hexadecimal with `0x`, binary with `0b`, or octal with `0o`. A prefix must be
 followed by at least one digit valid in that base. Hexadecimal digits include
 `a`–`f` and `A`–`F`. Digit separators are not allowed.
+
+Leading zeros do not change the base of a decimal literal: `00052` is decimal
+52. Octal requires the `0o` prefix, so `0o52` is decimal 42.
 
 Integer literals are untyped and do not accept type suffixes. Use a binding
 annotation or an explicit conversion to select an integer type.
@@ -171,7 +181,8 @@ Design principles:
 
 1. Every integer operation has exactly one meaning, given its operand types.
 2. No implicit conversions between integer types, in either direction.
-3. Out-of-range results trap. Wraparound happens only when requested by name.
+3. Ordinary typed arithmetic traps on out-of-range results. Wrapping operators,
+   truncating conversions, and runtime shifts follow their specified bit rules.
 4. Exactly two types, `int` and `uint`, have a platform-dependent width. They are distinct from every fixed-width type, so code that mixes them with fixed-width types fails to compile on every platform, not just some.
 
 ### Integer types
@@ -207,10 +218,14 @@ Signed types use two's complement representation.
 
 #### Untyped constants
 
-Integer literals and ordinary arithmetic, bitwise, and shift expressions built entirely from untyped constants are *untyped*. Parentheses
-preserve the enclosed expression's type and value. An untyped constant is an
-exact mathematical integer with no fixed width; the compiler must represent at
-least 256 bits of precision.
+Integer literals and ordinary arithmetic and bitwise expressions built entirely
+from untyped constants are *untyped*. Constant shifts follow the typing rules
+under [Constant shifts](#constant-shifts). Parentheses preserve the enclosed
+expression's type and value. An untyped constant is an exact mathematical integer
+with no fixed width; the compiler must represent at least 256 bits of precision.
+This is a minimum precision guarantee, not a 256-bit integer type. Larger
+supported values remain exact, subject to the compiler resource limits described
+above. Exceeding a resource limit is distinct from arithmetic overflow.
 
 Untyped constant expressions are evaluated at compile time with exact
 arithmetic. Overflow cannot occur in an untyped constant expression. Their
@@ -259,7 +274,8 @@ Code intended to be portable to 32-bit targets should use `i64` for such values.
 
 #### Default type
 
-When no context determines a type, an untyped integer constant becomes `int`:
+When an untyped integer constant needs a concrete type and no context determines
+that type, it becomes `int`:
 
 ```fern
 var n = 42; // n: int
@@ -351,7 +367,8 @@ var p = n + m; // error: int and i64, on every platform
 As a mathematical identity, division and remainder satisfy
 `(a / b) * b + a % b == a` whenever both are defined.
 
-Division by a constant zero, and any constant expression that would trap, is a
+Division or remainder by a constant zero is a compile-time error, including when
+the dividend is not constant. Any constant expression that would trap is also a
 compile-time error.
 
 #### Overflow
@@ -411,27 +428,34 @@ operations use an unbounded two's-complement interpretation; unary `^x` is
 
 ### Integer shifts
 
-`x << n` and `x >> n` shift `x` by `n` bit positions. Non-constant shifts
-follow these rules; constant shifts are specified separately below.
+`x << n` and `x >> n` shift `x` by `n` bit positions. The count may have any
+integer type or be an untyped constant. Its type does not determine the left
+operand's type or the result type. An untyped count remains an exact integer in
+both constant and non-constant shifts; it need not first fit `int` or any other
+concrete type.
+
+Non-constant shifts follow these execution rules; constant shifts are specified
+separately below.
 
 - The result type is the type of the left operand.
-- The right operand may be any integer type; it need not match the left operand.
 - A negative shift count traps.
 - A shift count greater than or equal to the width of the left operand's type is defined: `<<` yields `0`; `>>` yields `0` for unsigned and for non-negative signed values, and `-1` for negative signed values. It does not trap.
 - `>>` is arithmetic (sign-filling) for signed types and logical (zero-filling) for unsigned types.
-- `<<` discards bits shifted out and never traps. It is a bit operation, not multiplication.
+- For a non-negative count, `<<` discards bits shifted out and never traps. It is a bit operation, not multiplication.
 
 #### Constant shifts
 
-If both operands are untyped constants, the shift is a constant expression and
-is evaluated exactly before any type is assigned. `1 << 40` is the untyped
-integer 2⁴⁰; `1 << 100` is 2¹⁰⁰. The result then acquires a type from context in
-the ordinary way (Typing by context) and must be representable in it:
+If both operands are constant expressions and the left operand is untyped, the
+shift is evaluated exactly and its result remains untyped. This applies whether
+the count is typed or untyped. `1 << 40` is the untyped integer 2⁴⁰;
+`1 << u8(100)` is the untyped integer 2¹⁰⁰. The result then acquires a type from
+context in the ordinary way (Typing by context) and must be representable in it:
 
 ```fern
 var a: i64 = 1 << 40; // ok
 var b = 1 << 40; // int; ok on 64-bit, compile error on 32-bit
 var c: i32 = 1 << 40; // compile error on every platform
+var reduced: u8 = 256 >> u8(8); // 1; only the final result must fit u8
 ```
 
 If both operands are constant expressions and the left operand is typed, the
@@ -462,16 +486,19 @@ var e = 1 << n; // int(1) shifted by n; 0 if n >= width
 var f: u64 = 1 << n; // u64(1) shifted by n
 ```
 
-A typed left operand retains its type regardless of the destination. The count
-does not force the left operand to adopt its type.
+A typed left operand retains its type regardless of the destination.
 
 ### Comparison
 
 `bool` is a distinct type whose values are `true` and `false`. The comparisons
 `== != < <= > >=` require identical operand types and yield `bool`. Untyped
-constants adopt the type of the other operand, so `x < 0` is a compile-time
-error when `x` is unsigned (0 fits, but the comparison is flagged as
-always-false).
+constants adopt the type of the other operand when their values fit.
+
+A well-typed comparison remains valid when the operand types make its result
+always true or always false. For unsigned `x`, `x < 0` and `0 > x` yield `false`,
+and `x >= 0` yields `true`. For `x: u8`, `x <= 255` yields `true`. A constant
+that does not fit the other operand's type still makes the comparison invalid;
+for example, `x < -1` is invalid when `x` is unsigned.
 
 ### Assignment
 

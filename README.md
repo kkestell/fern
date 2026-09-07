@@ -3,15 +3,18 @@
 Fern is a low-level programming language. The
 [language specification](docs/spec.md) defines its behavior; the
 [roadmap](eng/roadmap.md) tracks implementation scope and completion gates.
+The specification includes language features ahead of the compiler. See the
+roadmap's completed milestones for the currently supported subset.
 
 See [the empty entry](examples/empty.fern),
 [integer literals](examples/integer_literals.fern) for bases, annotations,
-suffixes, comments, and a trailing call comma, and
+comments, and a trailing call comma, and
 [shadowing](examples/shadowing.fern) for binding copies and initializer
 visibility. See [assignment and scopes](examples/assignment_and_scopes.fern) for
 reassignment, saved copies, and nested shadowing, and
-[integer types](examples/integer_types.fern) for typed literals and implicit
-conversions. The nonempty examples exit with status 42.
+[integer types](examples/integer_types.fern) for typed literals and explicit
+conversions. See [integer conversions](examples/integer_conversions.fern) for
+checked and truncating forms. The nonempty examples exit with status 42.
 
 ## Build and run
 
@@ -40,6 +43,10 @@ compiler status; tool failures include stderr. The compiler uses temporary
 intermediates beside the requested output and publishes the executable only
 after QBE and the C toolchain succeed. A failed compilation preserves an
 existing output, and an output aliasing the input is rejected.
+
+The compiler accepts up to 128 enclosing blocks and conversion expressions
+combined, counting the function body. Deeper nesting produces a source
+diagnostic before recursive compiler phases can exhaust the stack.
 
 ## Development
 

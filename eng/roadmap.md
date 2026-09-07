@@ -169,47 +169,13 @@ continues to target the development host; this work does not add cross-compilati
 
 ### Example
 
-Create `examples/integer_conversions.fern` when this milestone is implemented.
-
-```fern
-fn main() -> void {
-    const literal: u8 = 42;
-    const limit: u64 = 18446744073709551615;
-    const reduced = u8.truncate(340282366920938463463374607431768211498);
-    const signed = i8.truncate(255);
-
-    var small: u8 = literal;
-    var wide: u64 = u64(small);
-    var status = int(wide);
-    const saved = status;
-    {
-        var status: u8 = u8(saved);
-        status = reduced;
-        small = status;
-        wide = u64(small);
-    }
-    status = int(wide);
-
-    // Uncomment individually to try compile-time diagnostics.
-    // const suffix = 42u8;
-    // const implicit: u64 = small;
-    // const wrong_exit: i64 = status;
-    // const out_of_range = u8(256);
-    // const constant_failure = u8(limit);
-
-    // Uncomment to try a runtime conversion failure.
-    // var large: u64 = limit;
-    // status = int(u8(large));
-
-    exit(status);
-}
-```
+See [the example](../examples/integer_conversions.fern).
 
 Expected exit status: 42.
 
 ### Tasks
 
-- [ ] **Align literal syntax and reserved names**
+- [x] **Align literal syntax and reserved names**
 
   - Reject removed literal suffixes and retain base validation and useful source
     spans for malformed integer tokens.
@@ -217,7 +183,7 @@ Expected exit status: 42.
   - Update affected parser fixtures and snapshots without changing declaration,
     assignment, block, or exit syntax.
 
-- [ ] **Align integer widths and assignment compatibility**
+- [x] **Align integer widths and assignment compatibility**
 
   - Apply the integer type contract consistently in semantic checking, Fern IR
     verification, and native emission for the supported host target.
@@ -226,7 +192,7 @@ Expected exit status: 42.
   - Update affected tests for contextual literals, type identity, range checks,
     native values, and exit statuses. Explicit conversions are added next.
 
-- [ ] **Parse and check explicit integer conversions**
+- [x] **Parse and check explicit integer conversions**
 
   - Accept checked and truncating conversion expressions, including nesting,
     wherever the existing expressions are accepted.
@@ -238,7 +204,7 @@ Expected exit status: 42.
   - Cover malformed conversion syntax, large literal inputs, constant failures,
     and source after exits. Native execution is completed in the next task.
 
-- [ ] **Lower and execute explicit integer conversions**
+- [x] **Lower and execute explicit integer conversions**
 
   - Carry checked and truncating conversions through Fern IR and its verifier,
     and emit their specified values and runtime failures.
@@ -247,7 +213,7 @@ Expected exit status: 42.
   - Preserve assignment, saved-copy, shadowing, and exit behavior, including
     termination before subsequent runtime work after a failed conversion.
 
-- [ ] **Migrate examples and validate compiler alignment**
+- [x] **Migrate examples and validate compiler alignment**
 
   - Migrate existing source examples, README descriptions, tests, and snapshots
     from removed syntax and implicit conversions to the revised contracts.

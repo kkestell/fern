@@ -5,6 +5,7 @@ expression: entry.entry()
 Entry {
     values: [
         Value {
+            span: None,
             ty: I8,
             kind: Copy(
                 Integer {
@@ -14,28 +15,37 @@ Entry {
             ),
         },
         Value {
+            span: Some(
+                70..80,
+            ),
             ty: I16,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         0,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: Some(
+                109..120,
+            ),
             ty: I64,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         1,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
-            ty: U64,
-            kind: Convert(
+            span: None,
+            ty: U8,
+            kind: Copy(
                 Integer {
                     value: 255,
                     ty: U8,
@@ -43,6 +53,21 @@ Entry {
             ),
         },
         Value {
+            span: Some(
+                182..195,
+            ),
+            ty: U64,
+            kind: Convert {
+                operand: Value(
+                    ValueId(
+                        3,
+                    ),
+                ),
+                truncating: false,
+            },
+        },
+        Value {
+            span: None,
             ty: Int,
             kind: Copy(
                 Integer {
@@ -52,26 +77,35 @@ Entry {
             ),
         },
         Value {
-            ty: I32,
-            kind: Convert(
-                Value(
-                    ValueId(
-                        4,
-                    ),
-                ),
+            span: Some(
+                226..237,
             ),
-        },
-        Value {
-            ty: Int,
-            kind: Convert(
-                Value(
+            ty: I32,
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         5,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: Some(
+                266..276,
+            ),
+            ty: Int,
+            kind: Convert {
+                operand: Value(
+                    ValueId(
+                        6,
+                    ),
+                ),
+                truncating: false,
+            },
+        },
+        Value {
+            span: None,
             ty: Uint,
             kind: Copy(
                 Integer {
@@ -81,39 +115,51 @@ Entry {
             ),
         },
         Value {
-            ty: U32,
-            kind: Convert(
-                Value(
-                    ValueId(
-                        7,
-                    ),
-                ),
+            span: Some(
+                321..327,
             ),
-        },
-        Value {
-            ty: Uint,
-            kind: Convert(
-                Value(
+            ty: U32,
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         8,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
         Value {
+            span: Some(
+                338..346,
+            ),
+            ty: Uint,
+            kind: Convert {
+                operand: Value(
+                    ValueId(
+                        9,
+                    ),
+                ),
+                truncating: false,
+            },
+        },
+        Value {
+            span: Some(
+                369..379,
+            ),
             ty: Int,
-            kind: Convert(
-                Value(
+            kind: Convert {
+                operand: Value(
                     ValueId(
                         0,
                     ),
                 ),
-            ),
+                truncating: false,
+            },
         },
     ],
     exit: Value(
         ValueId(
-            10,
+            11,
         ),
     ),
 }

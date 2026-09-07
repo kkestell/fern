@@ -1,0 +1,13 @@
+fn main() -> void {
+    // The same value in every supported base.
+    const decimal = 42;
+    const hexadecimal: int = 0x2A;
+    var binary = 0b101010i;
+    var octal: int = 0o52;
+
+    /* Leading zeroes are allowed.
+       /* They do not change the base. */
+    */
+    const leading_zeroes = 00042;
+    exit(decimal,);
+}

@@ -34,7 +34,8 @@ missing. The architecture document is not required to begin planning.
 - `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests.
-- `examples/` — runnable Fern programs.
+- `examples/` — Fern programs demonstrating supported syntax and semantics;
+  executable support is documented in `README.md`.
 
 ## Development Commands
 

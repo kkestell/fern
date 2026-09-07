@@ -13,6 +13,11 @@ Executable compilation currently supports only an empty body. Nonempty bodies
 receive semantic diagnostics first, then an unsupported-lowering diagnostic if
 checking succeeds. See [examples/empty.fern](examples/empty.fern).
 
+[Integer literals](examples/integer_literals.fern) demonstrates bases,
+annotations, suffixes, comments, and a trailing call comma.
+[Shadowing](examples/shadowing.fern) demonstrates binding copies and initializer
+visibility. Both pass semantic checking but currently stop at lowering.
+
 ## Build and run
 
 Install Rust with Cargo, [QBE](https://c9x.me/compile/), and a host C toolchain

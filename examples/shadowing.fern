@@ -1,0 +1,10 @@
+fn main() -> void {
+    const status = 42;
+    // The initializer reads the preceding binding named status.
+    var status: int = status;
+    const copy = status;
+    const status = 0;
+
+    // The copy still refers to the value from before the final shadowing.
+    exit(copy);
+}

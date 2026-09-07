@@ -31,7 +31,7 @@ missing. The architecture document is not required to begin planning.
 
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
 - `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
-- `src/ir.rs`, `src/backend.rs` — verified Fern IR and native compilation.
+- `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests.
 - `examples/` — runnable Fern programs.
@@ -84,9 +84,18 @@ implementation depends on them.
 When `eng/architecture.md` exists, read it before changing the program's
 structure. Do not invent architectural constraints when it does not exist.
 
-Build software in narrow, end-to-end vertical slices. A feature is not
-implemented until every part of the codebase it touches, and their tests, agree
-on it. Do not reserve names, add extension points, or build infrastructure for
+Prioritize language features and a clear compiler architecture. A feature or
+milestone is the completion boundary; plans are implementation steps and may
+leave that feature partially integrated. Preserve existing supported behavior
+and state unfinished integration clearly. Add temporary guards only when needed
+to prevent incorrect execution, not to make each phase a standalone deliverable.
+
+Use focused checks during implementation. Run broad validation when the feature
+or milestone is integrated, or earlier when a concrete risk warrants it. Review
+the completed milestone once for correctness and architectural simplicity. A
+feature is complete only when its affected phases and tests agree.
+
+Do not reserve names, add extension points, or build infrastructure for
 hypothetical future features.
 
 Use `kplan` to plan substantial work and `kwork` to execute an implementation

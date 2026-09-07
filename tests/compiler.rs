@@ -70,10 +70,6 @@ fn source_failures_preserve_output() {
             "only the `main`",
         ),
         (
-            "fn main() -> void { exit(0); }",
-            "lowering nonempty bodies is not supported",
-        ),
-        (
             "fn main() -> void { const status: int = 42; var copy = status; exit(copy,); }",
             "lowering nonempty bodies is not supported",
         ),

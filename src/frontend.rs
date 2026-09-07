@@ -87,8 +87,10 @@ pub(crate) struct Statement {
 #[derive(Debug)]
 pub(crate) enum StatementKind {
     Binding {
+        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         mutable: bool,
         name: Spur,
+        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         name_span: Range<usize>,
         int_annotation: Option<Range<usize>>,
         initializer: Idx<Expression>,

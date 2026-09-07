@@ -1,14 +1,14 @@
-use crate::{CompileError, ir::VerifiedEntry};
+use crate::{CompileError, ir::Entry};
 use std::{env, fs, path::Path, process::Command};
 
-pub(crate) fn emit(entry: &VerifiedEntry) -> String {
+pub(crate) fn emit(entry: &Entry) -> String {
     format!(
         "export function w $main() {{\n@start\n    ret {}\n}}\n",
-        entry.status()
+        entry.status
     )
 }
 
-pub(crate) fn build(entry: &VerifiedEntry, output: &Path) -> Result<(), CompileError> {
+pub(crate) fn build(entry: &Entry, output: &Path) -> Result<(), CompileError> {
     let parent = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

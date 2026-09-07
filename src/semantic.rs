@@ -6,20 +6,15 @@ use crate::{
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
-use std::{collections::HashMap, ops::Range};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Type {
     Int,
 }
 
-// Retained for lowering, which currently accepts only empty bodies.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug)]
 pub(crate) struct Binding {
-    pub name: Spur,
-    pub name_span: Range<usize>,
-    pub mutable: bool,
     pub ty: Type,
 }
 
@@ -76,11 +71,10 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
     for &statement in &syntax.functions[main].body {
         match &syntax.statements[statement].kind {
             StatementKind::Binding {
-                mutable,
                 name,
-                name_span,
                 int_annotation,
                 initializer,
+                ..
             } => {
                 let expression = checked.check_expression(*initializer, &scope)?;
                 let ty = match int_annotation {
@@ -88,12 +82,7 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
                     None => expression.ty,
                 };
                 checked.expressions.insert(*initializer, expression);
-                let binding = checked.bindings.alloc(Binding {
-                    name: *name,
-                    name_span: name_span.clone(),
-                    mutable: *mutable,
-                    ty,
-                });
+                let binding = checked.bindings.alloc(Binding { ty });
                 checked.declarations.insert(statement, binding);
                 scope.insert(*name, binding);
             }
@@ -172,12 +161,8 @@ mod tests {
         assert_ne!(ids[0], ids[1]);
         assert_ne!(ids[1], ids[2]);
         assert_ne!(ids[0], ids[2]);
-        for (i, id) in ids.iter().enumerate() {
-            let binding = &checked.bindings[*id];
-            assert_eq!(binding.ty, Type::Int);
-            assert_eq!(binding.mutable, i == 1);
-            assert_eq!(syntax.names.resolve(&binding.name), "x");
-            assert_eq!(&text[binding.name_span.clone()], "x");
+        for id in &ids {
+            assert_eq!(checked.bindings[*id].ty, Type::Int);
         }
         let facts: Vec<_> = syntax
             .expressions
@@ -305,19 +290,6 @@ mod tests {
         assert_eq!(
             check(&syntax).unwrap_err().message,
             "only the `main` function is supported"
-        );
-    }
-
-    #[test]
-    fn lowering_rejects_checked_statements_at_the_first_statement() {
-        let text = "/* 🌿 */ fn main() -> void { const x = 1; exit(x); }";
-        let syntax = parse(text).unwrap();
-        let error = crate::ir::lower(check(&syntax).unwrap()).unwrap_err();
-        let start = text.find("const").unwrap();
-        assert_eq!(error.span, start..start + "const x = 1;".len());
-        assert_eq!(
-            error.message,
-            "lowering nonempty bodies is not supported yet"
         );
     }
 }

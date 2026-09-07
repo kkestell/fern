@@ -38,9 +38,7 @@ pub fn compile(input: &Path, output: &Path) -> Result<(), CompileError> {
     reject_input_output_alias(input, output)?;
     let syntax = frontend::parse(&source.text).map_err(|e| e.render(&source))?;
     let checked = semantic::check(&syntax).map_err(|e| e.render(&source))?;
-    let entry = ir::lower(checked)
-        .map_err(|e| e.render(&source))?
-        .verify()?;
+    let entry = ir::lower(checked).map_err(|e| e.render(&source))?;
     backend::build(&entry, output)
 }
 

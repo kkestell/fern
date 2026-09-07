@@ -6,8 +6,8 @@ rendering, and Insta for syntax and IR snapshots. The parser is handwritten, and
 native compilation uses a Fern-owned IR and QBE.
 
 Every milestone compares its implemented behavior against the corresponding
-sections of [the specification](../docs/spec.md). The gates listed under each
-task are the behavior that task must prove on top of that.
+sections of [the specification](../docs/spec.md). The milestone gates below
+prove its integrated outcome.
 
 ## Current milestone: Compile the executable integer subset
 
@@ -36,13 +36,6 @@ remain outside this milestone.
 - Add Logos, la-arena, lasso, Ariadne, and Insta for their stated roles.
 - Accept valid UTF-8 Fern source and reject invalid source text.
 
-**Gates**
-
-- An empty `main` compiles to a native executable that exits with status 0.
-- Invalid UTF-8, unreadable input, invalid compiler input, and unavailable
-  backend tools fail without producing a successful executable.
-- Diagnostics identify the source and relevant byte span through Ariadne.
-
 ### Parse the initial syntax
 
 **Build**
@@ -51,14 +44,6 @@ remain outside this milestone.
   declarations with optional `int` annotations, integer literals, binding
   references, and `exit` calls.
 - Preserve source spans and literal spellings in an arena-backed syntax tree.
-
-**Gates**
-
-- Valid programs cover whitespace, nested comments, every integer base, leading
-  zeroes, optional `i` suffixes, and trailing call commas.
-- Invalid tokens, malformed literals, unterminated comments, and malformed
-  declarations or calls are rejected at their source spans.
-- Insta snapshots cover representative syntax trees and remain deterministic.
 
 ### Check initialized integer bindings
 
@@ -71,15 +56,6 @@ remain outside this milestone.
 - Check inferred and explicit `int` initializers, references, literal suffixes,
   and literal ranges.
 
-**Gates**
-
-- Same-block shadowing and initializer visibility follow
-  [Scope and shadowing](../docs/spec.md#scope-and-shadowing).
-- Missing or duplicate entry points, additional functions, unresolved names,
-  unsupported suffixes, and out-of-range literals are rejected.
-- Checking continues after an `exit` call so later source errors are not hidden
-  by runtime reachability.
-
 ### Lower and execute checked programs
 
 **Build**
@@ -88,7 +64,25 @@ remain outside this milestone.
   Fern IR.
 - Emit QBE from verified IR and produce a native executable.
 
-**Gates**
+### Milestone completion gates
+
+- An empty `main` compiles to a native executable that exits with status 0.
+- Invalid UTF-8, unreadable input, invalid compiler input, and unavailable
+  backend tools fail without producing a successful executable.
+- Diagnostics identify the source and relevant byte span through Ariadne.
+
+- Valid programs cover whitespace, nested comments, every integer base, leading
+  zeroes, optional `i` suffixes, and trailing call commas.
+- Invalid tokens, malformed literals, unterminated comments, and malformed
+  declarations or calls are rejected at their source spans.
+- Insta snapshots cover representative syntax trees and remain deterministic.
+
+- Same-block shadowing and initializer visibility follow
+  [Scope and shadowing](../docs/spec.md#scope-and-shadowing).
+- Missing or duplicate entry points, additional functions, unresolved names,
+  unsupported suffixes, and out-of-range literals are rejected.
+- Checking continues after an `exit` call so later source errors are not hidden
+  by runtime reachability.
 
 - Native execution covers literal initialization, copying bindings, and exit
   through a binding.

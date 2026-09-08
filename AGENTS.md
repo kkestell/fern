@@ -83,6 +83,15 @@ This project is optimized for clarity, correctness, and ease of reasoning rather
 than execution speed. Treat simplicity as a maintained project invariant, not a
 cleanup activity.
 
+When removing a special case, enum variant, or separate code path, inspect the
+surrounding code for structure it made redundant. Collapse newly identical paths
+and use existing helpers in the same change.
+
+Describe Fern and roadmap work in terms of the intended end state. Do not record
+superseded syntax, migration steps, compatibility behavior, or design history.
+Fern has no source-compatibility constraints until real users and programs create
+them.
+
 Read the owning document before making a behavioral decision. For language
 changes, use `kspec` to resolve missing rules in `docs/spec.md` before
 implementation depends on them.

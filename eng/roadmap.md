@@ -5,10 +5,10 @@ la-arena for syntax storage, lasso for identifier interning, Ariadne for
 diagnostic rendering, and Insta for syntax and IR snapshots. The parser is
 handwritten, and native compilation uses a Fern-owned IR and QBE.
 
-Every milestone compares its implemented behavior against the corresponding
-sections of [the specification](../docs/spec.md). The milestone gates below
-prove its integrated outcome. Task checkboxes record progress; milestones
-remain in implementation order.
+Every milestone implements the corresponding sections of
+[the specification](../docs/spec.md). The milestone gates below prove its
+integrated outcome. Task checkboxes record progress; milestones remain in
+implementation order.
 
 Do not add incremental queries, lossless syntax, control-flow infrastructure, or
 alternate backends before a milestone needs them.
@@ -17,12 +17,11 @@ alternate backends before a milestone needs them.
 
 ## Executable integer subset
 
-Build the initial native compiler for parameterless `main`, initialized `int`
-bindings, binding references, and process exit against
+Build a native compiler for parameterless `main`, initialized `int` bindings,
+binding references, and process exit against
 [Functions](../docs/spec.md#functions),
 [Variable declarations](../docs/spec.md#variable-declarations), and
-[Process exit](../docs/spec.md#process-exit). This milestone records the first
-completed compiler slice.
+[Process exit](../docs/spec.md#process-exit).
 
 ### Examples
 
@@ -38,7 +37,7 @@ completed compiler slice.
     semantic, IR, backend, and driver boundaries.
   - Compile an empty entry point through QBE and the host C toolchain.
 
-- [x] **Parse and check the initial syntax**
+- [x] **Parse and check entry syntax**
 
   - Parse the entry point, initialized bindings, integer literals, references,
     and `exit` while preserving source spans.
@@ -115,18 +114,15 @@ Expected exit status: 42.
 
 ---
 
-## Integer types and implicit conversions
-
-This milestone records work completed against the earlier specification. Its
-suffix and implicit-conversion details are historical; Align existing compiler
-behavior with the specification below owns their replacement.
+## Integer types
 
 Support every fixed-width integer type plus `int` and `uint`, including
-annotations, suffixes, range checking, inference, and specified implicit
-conversions. Extend initialization, assignment, and `exit` argument checking and
-native execution against [Integer types](../docs/spec.md#integer-types),
-[Integer conversions](../docs/spec.md#integer-conversions), and
-[Untyped constants](../docs/spec.md#untyped-constants). Operators, explicit casts,
+annotations, range checking, inference, and contextual literals. Extend
+initialization, assignment, and `exit` argument checking and native execution
+against [Integer types](../docs/spec.md#integer-types),
+[Untyped constants](../docs/spec.md#untyped-constants),
+[Assignment](../docs/spec.md#assignment), and
+[Process exit](../docs/spec.md#process-exit). Operators, explicit conversions,
 `size`, `uintptr`, and rune values remain outside this milestone.
 
 ### Example
@@ -137,69 +133,63 @@ Expected exit status: 42.
 
 ### Tasks
 
-- [x] **Check integer types and implicit conversions**
+- [x] **Check integer types**
 
-  - Check literal ranges, suffix types, contextual typing, and inferred binding
-    types against the specification sections linked above.
-  - Preserve the existing implementation's `int` width and apply it consistently
-    to `uint`, range checks, and conversions.
-  - Apply the specified conversions to initialization, assignment, and `exit`
-    arguments, with source diagnostics for invalid values and conversions.
-  - Retain the source and destination typing needed to lower each checked
-    conversion, including conversions of binding references.
+  - Check literal ranges, contextual typing, and inferred binding types against
+    the specification sections linked above.
+  - Apply the host pointer width consistently to `int`, `uint`, and range
+    checks.
+  - Require matching concrete types for initialization, assignment, binding
+    copies, and `exit` arguments, while allowing contextual untyped literals.
   - Cover typing across binding copies, shadowing, nested scopes, and source
     after exits. Lowering and native execution remain unfinished at this
     boundary.
 
-- [x] **Lower typed integers and conversions**
+- [x] **Lower typed integers**
 
-  - Carry checked integer values and conversions through Fern IR.
-  - Preserve full-width values and conversion results through initialization,
-    assignment, binding copies, shadowing, and nested exits.
+  - Carry checked integer values through Fern IR.
+  - Preserve full-width values through initialization, assignment, binding
+    copies, shadowing, and nested exits.
   - Extend IR verification and snapshots to cover value types, ranges, copies,
-    conversions, and exits. Reject malformed typed values and conversions before
-    emission. Native emission belongs to the following task.
-  - Preserve existing executable behavior and reject programs the backend cannot
-    yet emit without replacing an existing output file.
+    and exits. Reject malformed typed values before emission. Native emission
+    belongs to the following task.
+  - Reject programs the backend cannot emit without replacing an output file.
 
 - [x] **Execute typed integer programs**
 
-  - Extend native emission to support the checked integer types and conversions.
-  - Verify full-width values and signed and unsigned widening at the backend
-    boundary, alongside native execution of source programs.
+  - Extend native emission to support every checked integer type.
+  - Verify full-width signed and unsigned values at the backend boundary,
+    alongside native execution of source programs.
   - Add execution coverage and move the milestone example into
     `examples/integer_types.fern`, then validate the integrated milestone
     against the completion gates below.
 
 ### Completion gates
 
-- Annotations, suffixes, inference, and contextual literals cover every integer
-  type in scope, with range boundaries exercised across literal bases.
+- Annotations, inference, and contextual literals cover every integer type in
+  scope, with range boundaries exercised across literal bases.
 - Source tests cover zero, positive maxima, and out-of-range magnitudes;
   negative signed boundaries are covered through internal IR and backend tests
   until integer expressions add source syntax for negative values.
-- Initialization, assignment, and exit checking accept and reject conversions
-  according to the linked specification, including distinct equal-width types.
-- Coverage distinguishes contextual literals from suffixed literals and binding
-  references, including a literal invalid for its suffix despite fitting the
-  destination type.
+- Initialization, assignment, and exit checking require identical concrete
+  types, including for distinct equal-width types.
+- Coverage distinguishes contextual literals from binding references.
 - Large unsigned values retain their full range through checking, IR, and native
   emission. Coverage checks high-bit preservation beyond observable exit bytes.
-- Invalid literals and conversions produce source diagnostics, including in
-  nested scopes and after exits.
-- Native execution covers conversions combined with reassignment, saved copies,
-  shadowing, and nested exits. Existing executable behavior remains covered.
+- Invalid literals and type combinations produce source diagnostics, including
+  in nested scopes and after exits.
+- Native execution covers reassignment, saved copies, shadowing, and nested
+  exits.
 - Syntax and IR snapshots are deterministic and generated IR passes
   verification.
 
 ---
 
-## Align existing compiler behavior with the specification
+## Integer conversions
 
-Bring the existing integer declarations, binding copies, assignments, scopes,
-and process exit into agreement with the revised specification. Add explicit
-integer conversions so existing programs can express the transfers previously
-performed implicitly. The contracts are
+Support integer literal validation, reserved names, and explicit integer
+conversions across parsing, checking, Fern IR, and native execution. The
+contracts are
 [Integer literals](../docs/spec.md#integer-literals),
 [Keywords](../docs/spec.md#keywords),
 [Integer types](../docs/spec.md#integer-types),
@@ -223,27 +213,27 @@ Expected exit status: 42.
 
 ### Tasks
 
-- [x] **Align literal syntax and reserved names**
+- [x] **Validate literal syntax and reserved names**
 
-  - Reject removed literal suffixes and retain base validation and useful source
-    spans for malformed integer tokens.
-  - Align reserved-name checks with the remaining lexical contract.
-  - Update affected parser fixtures and snapshots without changing declaration,
-    assignment, block, or exit syntax.
+  - Accept the specified literal bases, reject suffixes, and preserve useful
+    source spans for malformed integer tokens.
+  - Apply the lexical contract consistently to reserved-name checks.
+  - Cover declarations, assignments, blocks, and exits in parser fixtures and
+    snapshots.
 
-- [x] **Align integer widths and assignment compatibility**
+- [x] **Check integer compatibility**
 
   - Apply the integer type contract consistently in semantic checking, Fern IR
     verification, and native emission for the supported host target.
-  - Replace implicit conversion acceptance with the specified compatibility
-    checks for initialization, assignment, binding copies, and exit arguments.
-  - Update affected tests for contextual literals, type identity, range checks,
-    native values, and exit statuses. Explicit conversions are added next.
+  - Require explicit conversions between concrete integer types in
+    initialization, assignment, binding copies, and exit arguments.
+  - Cover contextual literals, type identity, range checks, native values, and
+    exit statuses.
 
 - [x] **Parse and check explicit integer conversions**
 
   - Accept checked and truncating conversion expressions, including nesting,
-    wherever the existing expressions are accepted.
+    wherever integer expressions are accepted.
   - Evaluate constant conversions using the specified precision and range rules.
     Distinguish constant binding references from runtime binding references
     through copies and shadowing.
@@ -261,24 +251,24 @@ Expected exit status: 42.
   - Preserve assignment, saved-copy, shadowing, and exit behavior, including
     termination before subsequent runtime work after a failed conversion.
 
-- [x] **Migrate examples and validate compiler alignment**
+- [x] **Add examples and validate integer conversions**
 
-  - Migrate existing source examples, README descriptions, tests, and snapshots
-    from removed syntax and implicit conversions to the revised contracts.
-  - Create the example above and replace its snippet with a link to the file.
+  - Keep source examples, README descriptions, tests, and snapshots consistent
+    with the linked contracts.
+  - Create the example above and link to the file.
   - Validate the integrated compiler against the completion gates and review
     the milestone once for correctness and simplicity.
 
 ### Completion gates
 
-- The parser accepts the retained literal bases and conversion forms, rejects
-  removed suffixes, and agrees with the specification's reserved names.
+- The parser accepts the specified literal bases and conversion forms, rejects
+  suffixes, and agrees with the specification's reserved names.
 - All ten integer types agree across checking, IR verification, and native
   execution. Width-sensitive checks cover both specified pointer widths without
   claiming native execution on targets the toolchain does not support.
 - Contextual literal typing and every source/destination type pair are covered
-  in initialization, assignment, and exit checking. Removed implicit conversion
-  behavior has regression coverage, including equal-width distinct types.
+  in initialization, assignment, and exit checking, including equal-width
+  distinct types.
 - Constant conversion coverage includes the specified precision, values beyond
   the machine integer range, nested conversions, constant binding references,
   runtime-initialized immutable bindings, and unreachable source.
@@ -286,13 +276,13 @@ Expected exit status: 42.
   failure and truncating-conversion results at signed and unsigned boundaries.
   Runtime failures identify the operation and occur in every build configuration.
 - Scope, mutability, copies, and process exit retain their specified behavior.
-  Host-width exit arguments preserve the existing externally reported statuses.
+  Host-width exit arguments produce the specified externally reported statuses.
 - Invalid source and runtime conversion failures remain distinct. Failed
   compilation preserves existing output files, and malformed IR is rejected
   before emission.
-- Existing examples and the new example compile and produce their documented
-  results. Tests and snapshots agree with the revised contracts, and the
-  integrated milestone receives one correctness and simplicity review.
+- The examples compile and produce their documented results. Tests and snapshots
+  agree with the linked contracts, and the integrated milestone receives one
+  correctness and simplicity review.
 
 ---
 
@@ -324,7 +314,7 @@ Expected exit status: 42.
 - [x] **Parse integer operators and grouping**
 
   - Accept the specified unary and binary operators and parentheses wherever
-    the existing integer expressions are accepted.
+    integer expressions are accepted.
   - Preserve operator and operand source locations for later diagnostics.
   - Cover precedence, associativity, unary chains, negative literal syntax,
     comments adjacent to operators, and malformed expressions in parser tests
@@ -354,14 +344,14 @@ Expected exit status: 42.
   - Distinguish constant shifts from runtime shifts, and ordinary arithmetic
     from explicitly wrapping operations during constant evaluation. Runtime lowering remains unfinished at this boundary.
 
-- [x] **Correct revised integer expression boundaries**
+- [x] **Check shift and wrapping boundaries**
 
-  - Apply the revised precedence and typed wrapping-operand contracts across
-    parsing and checking, with focused regression coverage.
+  - Apply the precedence and typed wrapping-operand contracts across parsing
+    and checking, with focused boundary coverage.
   - Make typed constant shifts agree with runtime shifts while retaining exact
     untyped constant shifts and their final range checks.
   - Preserve constant-expression classification, source diagnostics, and
-    unreachable-source checking across the corrected boundaries.
+    unreachable-source checking across these boundaries.
 
 - [x] **Lower checked integer operations**
 
@@ -370,8 +360,8 @@ Expected exit status: 42.
   - Extend IR verification and snapshots to cover the supported operations,
     operand and result types, and failure behavior. Malformed IR must be
     rejected before native emission.
-  - Preserve existing executable behavior while native support is incomplete;
-    reject unsupported emission without replacing an existing output file.
+  - Reject unsupported emission without replacing an output file while native
+    support is incomplete.
 
 - [x] **Execute integer expressions and failures**
 
@@ -407,18 +397,16 @@ Expected exit status: 42.
 - Constant folding preserves the specified distinction between required
   compile-time evaluation and runtime operations involving binding references.
 - Deterministic syntax and IR snapshots, IR verification, native tests, and the
-  example agree with the linked contracts. Existing supported programs remain
-  covered, and the completed milestone receives one correctness and simplicity
-  review.
+  example agree with the linked contracts, and the completed milestone receives
+  one correctness and simplicity review.
 
 ---
 
 ## Harden integer compilation
 
-Remove crash and resource-amplification paths exposed by adversarial integer
-expressions while preserving the integer contracts linked by the preceding
-milestone. This work also removes duplicated compiler machinery that obscures
-the corrected boundaries.
+Compile adversarial integer expressions within documented resource bounds while
+following the integer contracts linked by the preceding milestone. Keep the
+compiler paths that enforce those bounds direct and shared.
 
 ### Example
 
@@ -434,7 +422,7 @@ Expected exit status: 42.
     diagnose out-of-range counts in reachable and unreachable source.
   - Bound literal parsing and untyped constant folding with documented compiler
     limits, including checks before predictably large allocations.
-  - Stop retaining redundant folded values and simplify constant lowering.
+  - Store each folded value once and keep constant lowering direct.
 
 - [x] **Bound source diagnostic rendering**
 
@@ -456,10 +444,10 @@ Expected exit status: 42.
   - Remove redundant lowering matches and dead QBE copies where focused native
     checks prove them unnecessary.
 
-- [x] **Repair compiler documentation and validate stabilization**
+- [x] **Document compiler limits and validate integer compilation**
 
-  - Document current compiler limits, update the repository map and stale test
-    comments, and remove duplicated README behavior claims.
+  - Document compiler limits, keep the repository map and test comments
+    accurate, and keep behavior claims in their owning document.
   - Add the milestone example and validate the integrated compiler and its
     resource bounds.
 
@@ -480,62 +468,47 @@ Expected exit status: 42.
 
 ## Operator spelling and precedence
 
-Bring the implemented operators into agreement with the revised operator
-contracts:
+Support the operator spellings and precedence defined by
 [Precedence, associativity, and evaluation order](../docs/spec.md#precedence-associativity-and-evaluation-order),
 [Integer operators](../docs/spec.md#integer-operators), and
-[Bitwise operations](../docs/spec.md#bitwise-operations). The wrapping operators
-are respelled `+%`, `-%`, and `*%` so that no operator can absorb a following
-unary operator, the and-not operator is removed in favor of `a & ^b`, and the
-six precedence levels collapse to three.
+[Bitwise operations](../docs/spec.md#bitwise-operations).
 
 The scope is lexing, parsing, and the operator spellings and precedence used by
-the existing checking, IR, and backend paths. Operand typing, trapping, and
-wrapping semantics are unchanged. Comparisons appear in the precedence table but
-their implementation belongs to the following control-flow milestone.
+checking, IR, and backend emission. Comparisons appear in the precedence table,
+but their implementation belongs to the control-flow milestone.
 
 ### Example
 
-```fern
-fn main() -> void {
-    var wrapped: u8 = 250 +% u8(10);        // 4: wraps at the operand width
-    var zero: u8 = u8(1) +% -%u8(1);        // 0: wrapping negation
-    var scaled = 1 + 1 << 5;                // 33: `<<` binds as tightly as `*`
-    var cleared: u8 = u8(0x0F) & ^u8(0x0A);  // 5: and-not without `&^`
-    exit(int(wrapped) + int(zero) + scaled + int(cleared));
-}
-```
+See [the example](../examples/wrapping_operators.fern).
 
-Expected exit status: 42. Future file: `examples/wrapping_operators.fern`.
+Expected exit status: 42.
 
 ### Tasks
 
-- [x] **Lex and parse the revised operator spellings**
+- [x] **Lex and parse operator spellings**
 
   - Accept `+%`, `-%`, and `*%` as binary operators and `-%` as a unary
-    operator, and stop accepting `&+`, `&-`, `&*`, and `&^`.
-  - Preserve operator spans and update parser tests and snapshots, including
-    programs that mix `&` with a following unary `-` or `^`.
+    operator.
+  - Preserve operator spans and cover programs that mix `&` with a following
+    unary `-` or `^` in parser tests and snapshots.
 
-- [x] **Apply the revised precedence levels**
+- [x] **Apply operator precedence levels**
 
   - Parse `* / % *% << >> &` at the highest binary level, `+ - +% -% | ^` at the
     next, and preserve left associativity and grouping.
   - Cover each level and its boundaries in parser tests and snapshots,
     including `a + b << c`, `a | b + c`, and `a & ^b`.
 
-- [x] **Carry the spellings through checking and execution**
+- [x] **Check and execute the operators**
 
-  - Update operator spelling in diagnostics and shared operator metadata.
-  - Update `examples/integer_expressions.fern`, add the milestone example, and
-    validate the integrated compiler.
+  - Use the specified spellings in diagnostics and shared operator metadata.
+  - Cover the operators in both examples and validate the integrated compiler.
 
 ### Completion gates
 
-- The removed spellings are rejected with source diagnostics, and the new
-  spellings execute with the values the operator contracts specify.
-- Parser snapshots distinguish every precedence level, and `a & ^b` produces the
-  values the removed and-not operator produced.
+- The operator spellings execute with the values their contracts specify.
+- Parser snapshots distinguish every precedence level, including `&` followed
+  by unary `-` or `^`.
 - Both examples compile and exit 42, and IR snapshots stay deterministic.
 
 ---

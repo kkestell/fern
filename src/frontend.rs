@@ -795,26 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn removed_operator_spellings_are_separate_tokens() {
-        let tokens = Token::lexer("&+ &- &* &^")
-            .map(|token| token.unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            tokens,
-            [
-                Token::Ampersand,
-                Token::Plus,
-                Token::Ampersand,
-                Token::Minus,
-                Token::Ampersand,
-                Token::Star,
-                Token::Ampersand,
-                Token::Caret,
-            ]
-        );
-    }
-
-    #[test]
     fn malformed_annotations_report_the_offending_token() {
         for spelling in [
             "size",
@@ -1016,8 +996,6 @@ mod tests {
             "x «.»field = 1;",
             "x «[»0] = 1;",
             "const x = 1 + «;»",
-            "const x = 1 &«+» 2;",
-            "const x = 1 &«*» 2;",
             "exit(-«)»);",
             "var x = (1 + 2«;»",
             "var x = 1«»",

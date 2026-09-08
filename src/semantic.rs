@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn revised_precedence_wrapping_and_shift_boundaries_are_preserved() {
+    fn precedence_wrapping_and_shift_boundaries_follow_the_integer_contract() {
         let text = "fn main() -> void {
             const precedence_left = 1 + 2 << 1;
             const precedence_right = 1 << 2 + 1;

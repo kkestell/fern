@@ -1,6 +1,6 @@
 use crate::{
     CompileError,
-    diagnostic::Diagnostic,
+    diagnostic::{Diagnostic, DiagnosticRenderer},
     frontend::{BinaryOperator, UnaryOperator},
     ir::{Operand, ValueId, ValueKind, VerifiedEntry},
     semantic::Type,
@@ -19,16 +19,27 @@ fn qbe_type(ty: Type) -> char {
     if ty.width() == 64 { 'l' } else { 'w' }
 }
 
+struct Emitter<'a> {
+    text: String,
+    data: String,
+    diagnostics: Option<DiagnosticRenderer<'a>>,
+}
+
 pub(crate) fn emit(verified: &VerifiedEntry, source_file: Option<&Source>) -> String {
     let entry = verified.entry();
-    let mut text = String::new();
-    let mut data = String::new();
-    text.push_str("export function w $main() {\n@start\n");
+    let mut emitter = Emitter {
+        text: String::new(),
+        data: String::new(),
+        diagnostics: source_file.map(DiagnosticRenderer::new),
+    };
+    emitter
+        .text
+        .push_str("export function w $main() {\n@start\n");
     for (id, value) in entry.values.iter().enumerate() {
         match value.kind {
             ValueKind::Copy(source) => {
                 writeln!(
-                    text,
+                    emitter.text,
                     "    %v{id} ={} copy {}",
                     qbe_type(value.ty),
                     operand(source)
@@ -41,85 +52,49 @@ pub(crate) fn emit(verified: &VerifiedEntry, source_file: Option<&Source>) -> St
             } => {
                 let source_ty = operand_type(entry, source);
                 if truncating || conversion_fits(source_ty, value.ty) {
-                    emit_truncation(&mut text, id, source, source_ty, value.ty);
+                    emit_truncation(&mut emitter.text, id, source, source_ty, value.ty);
                 } else {
                     let message = format!(
                         "checked integer conversion failed: `{}` to `{}`",
                         source_ty.name(),
                         value.ty.name()
                     );
-                    let message = match (&value.span, source_file) {
-                        (Some(span), Some(source)) => Diagnostic::new(span.clone(), message)
-                            .render(source)
-                            .to_string(),
-                        _ => format!("{message}\n"),
-                    };
-                    write!(data, "data $fern_conversion{id}_message = {{ ").unwrap();
-                    // Numeric bytes also handle quotes, backslashes, and UTF-8 in source paths.
-                    for byte in message.bytes() {
-                        write!(data, "b {byte}, ").unwrap();
-                    }
-                    data.push_str("b 0 }\n");
+                    let message = operation_message(value, emitter.diagnostics.as_ref(), &message);
                     emit_checked_conversion(
-                        &mut text,
+                        &mut emitter.text,
+                        &mut emitter.data,
                         id,
                         source,
                         source_ty,
                         value.ty,
-                        message.len(),
+                        message,
                     );
                 }
             }
             ValueKind::Unary { operator, operand } => {
-                emit_unary_operation(
-                    &mut text,
-                    &mut data,
-                    id,
-                    value,
-                    operator,
-                    operand,
-                    source_file,
-                );
+                emit_unary_operation(&mut emitter, id, value, operator, operand);
             }
             ValueKind::Binary {
                 operator,
                 left,
                 right,
             } => {
-                emit_binary_operation(
-                    &mut text,
-                    &mut data,
-                    id,
-                    value,
-                    operator,
-                    left,
-                    right,
-                    entry,
-                    source_file,
-                );
+                emit_binary_operation(&mut emitter, id, value, operator, left, right, entry);
             }
         }
     }
     let exit = operand(entry.exit);
-    let exit = if Type::Int.width() == 64 {
-        writeln!(text, "    %exit_status =w copy {exit}").unwrap();
-        "%exit_status"
-    } else {
-        exit.as_str()
-    };
-    writeln!(text, "    %status =w and {exit}, 255").unwrap();
-    text.push_str("    ret %status\n}\n");
-    data + &text
+    writeln!(emitter.text, "    %status =w and {exit}, 255").unwrap();
+    emitter.text.push_str("    ret %status\n}\n");
+    emitter.data + &emitter.text
 }
 
 fn emit_unary_operation(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     value: &crate::ir::Value,
     operator: UnaryOperator,
     source: Operand,
-    source_file: Option<&Source>,
 ) {
     let ty = value.ty;
     let width = qbe_type(ty);
@@ -127,49 +102,54 @@ fn emit_unary_operation(
     match operator {
         UnaryOperator::Negate => {
             writeln!(
-                text,
+                emitter.text,
                 "    %operation{id}_minimum =w ceq{width} {source}, {}",
-                type_minimum(ty)
+                ty.min()
             )
             .unwrap();
             emit_conditional_trap(
-                text,
-                data,
+                &mut emitter.text,
+                &mut emitter.data,
                 id,
                 "overflow",
                 &format!("%operation{id}_minimum"),
-                operation_message(value, source_file, "integer unary `-` overflowed"),
+                operation_message(
+                    value,
+                    emitter.diagnostics.as_ref(),
+                    "integer unary `-` overflowed",
+                ),
             );
-            writeln!(text, "    %operation{id}_raw ={width} neg {source}").unwrap();
+            writeln!(emitter.text, "    %operation{id}_raw ={width} neg {source}").unwrap();
         }
         UnaryOperator::WrappingNegate => {
-            writeln!(text, "    %operation{id}_raw ={width} neg {source}").unwrap();
+            writeln!(emitter.text, "    %operation{id}_raw ={width} neg {source}").unwrap();
         }
         UnaryOperator::Complement => {
-            writeln!(text, "    %operation{id}_raw ={width} xor {source}, -1").unwrap();
+            writeln!(
+                emitter.text,
+                "    %operation{id}_raw ={width} xor {source}, -1"
+            )
+            .unwrap();
         }
     }
-    emit_normalized(text, id, &format!("%operation{id}_raw"), ty);
+    emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_binary_operation(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
     left: Operand,
     right: Operand,
     entry: &crate::ir::Entry,
-    source_file: Option<&Source>,
 ) {
     match operator {
         BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply => {
-            emit_checked_arithmetic(text, data, id, value, operator, left, right, source_file);
+            emit_checked_arithmetic(emitter, id, value, operator, left, right);
         }
         BinaryOperator::Divide | BinaryOperator::Remainder => {
-            emit_division(text, data, id, value, operator, left, right, source_file)
+            emit_division(emitter, id, value, operator, left, right)
         }
         BinaryOperator::WrappingAdd
         | BinaryOperator::WrappingSubtract
@@ -180,28 +160,29 @@ fn emit_binary_operation(
                 BinaryOperator::WrappingMultiply => "mul",
                 _ => unreachable!(),
             };
-            emit_binary_raw(text, id, value.ty, instruction, left, right);
-            emit_normalized(text, id, &format!("%operation{id}_raw"), value.ty);
+            emit_binary_raw(&mut emitter.text, id, value.ty, instruction, left, right);
+            emit_normalized(
+                &mut emitter.text,
+                id,
+                &format!("%operation{id}_raw"),
+                value.ty,
+            );
         }
-        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => emit_shift(
-            text,
-            data,
-            id,
-            value,
-            operator,
-            left,
-            right,
-            entry,
-            source_file,
-        ),
+        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+            emit_shift(emitter, id, value, operator, left, right, entry)
+        }
         BinaryOperator::And | BinaryOperator::AndNot | BinaryOperator::Xor | BinaryOperator::Or => {
             let width = qbe_type(value.ty);
             let left = operand(left);
             let right = operand(right);
             if operator == BinaryOperator::AndNot {
-                writeln!(text, "    %operation{id}_inverse ={width} xor {right}, -1").unwrap();
                 writeln!(
-                    text,
+                    emitter.text,
+                    "    %operation{id}_inverse ={width} xor {right}, -1"
+                )
+                .unwrap();
+                writeln!(
+                    emitter.text,
                     "    %operation{id}_raw ={width} and {left}, %operation{id}_inverse"
                 )
                 .unwrap();
@@ -213,12 +194,17 @@ fn emit_binary_operation(
                     _ => unreachable!(),
                 };
                 writeln!(
-                    text,
+                    emitter.text,
                     "    %operation{id}_raw ={width} {instruction} {left}, {right}"
                 )
                 .unwrap();
             }
-            emit_normalized(text, id, &format!("%operation{id}_raw"), value.ty);
+            emit_normalized(
+                &mut emitter.text,
+                id,
+                &format!("%operation{id}_raw"),
+                value.ty,
+            );
         }
     }
 }
@@ -241,16 +227,13 @@ fn emit_binary_raw(
     .unwrap();
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_checked_arithmetic(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
     left: Operand,
     right: Operand,
-    source_file: Option<&Source>,
 ) {
     let ty = value.ty;
     let instruction = match operator {
@@ -260,28 +243,28 @@ fn emit_checked_arithmetic(
         _ => unreachable!(),
     };
     if operator == BinaryOperator::Multiply && ty.width() == 32 {
-        emit_wide_word_multiply(text, id, ty, left, right);
+        emit_wide_word_multiply(&mut emitter.text, id, ty, left, right);
     } else {
-        emit_binary_raw(text, id, ty, instruction, left, right);
+        emit_binary_raw(&mut emitter.text, id, ty, instruction, left, right);
         if operator == BinaryOperator::Multiply && ty.width() == 64 {
-            emit_long_multiply_overflow(text, id, ty, left, right);
+            emit_long_multiply_overflow(&mut emitter.text, id, ty, left, right);
         } else {
-            emit_arithmetic_overflow(text, id, ty, operator, left, right);
+            emit_arithmetic_overflow(&mut emitter.text, id, ty, operator, left, right);
         }
     }
     emit_conditional_trap(
-        text,
-        data,
+        &mut emitter.text,
+        &mut emitter.data,
         id,
         "overflow",
         &format!("%operation{id}_overflow"),
         operation_message(
             value,
-            source_file,
-            &format!("integer `{}` overflowed", operation_spelling(operator)),
+            emitter.diagnostics.as_ref(),
+            &format!("integer `{}` overflowed", operator.spelling()),
         ),
     );
-    emit_normalized(text, id, &format!("%operation{id}_raw"), ty);
+    emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
 fn emit_wide_word_multiply(text: &mut String, id: usize, ty: Type, left: Operand, right: Operand) {
@@ -307,7 +290,7 @@ fn emit_wide_word_multiply(text: &mut String, id: usize, ty: Type, left: Operand
         writeln!(
             text,
             "    %operation{id}_too_small =w csltl %operation{id}_wide, {}",
-            type_minimum(ty)
+            ty.min()
         )
         .unwrap();
         writeln!(
@@ -349,7 +332,7 @@ fn emit_arithmetic_overflow(
             writeln!(
                 text,
                 "    %operation{id}_too_small =w csltw {raw}, {}",
-                type_minimum(ty)
+                ty.min()
             )
             .unwrap();
             writeln!(
@@ -443,7 +426,7 @@ fn emit_long_multiply_overflow(
         writeln!(
             text,
             "    %operation{id}_raw_minimum =w ceql %operation{id}_raw, {}",
-            type_minimum(ty)
+            ty.min()
         )
         .unwrap();
         writeln!(
@@ -503,68 +486,62 @@ fn emit_long_multiply_overflow(
     .unwrap();
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_division(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
     left: Operand,
     right: Operand,
-    source_file: Option<&Source>,
 ) {
     let ty = value.ty;
     let width = qbe_type(ty);
     let left_text = operand(left);
     let right_text = operand(right);
     writeln!(
-        text,
+        emitter.text,
         "    %operation{id}_zero =w ceq{width} {right_text}, 0"
     )
     .unwrap();
     emit_conditional_trap(
-        text,
-        data,
+        &mut emitter.text,
+        &mut emitter.data,
         id,
         "zero",
         &format!("%operation{id}_zero"),
         operation_message(
             value,
-            source_file,
-            &format!(
-                "integer `{}` has a zero divisor",
-                operation_spelling(operator)
-            ),
+            emitter.diagnostics.as_ref(),
+            &format!("integer `{}` has a zero divisor", operator.spelling()),
         ),
     );
     if ty.signed() {
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_minimum =w ceq{width} {left_text}, {}",
-            type_minimum(ty)
+            ty.min()
         )
         .unwrap();
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_negative_one =w ceq{width} {right_text}, -1"
         )
         .unwrap();
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_overflow =w and %operation{id}_minimum, %operation{id}_negative_one"
         )
         .unwrap();
         emit_conditional_trap(
-            text,
-            data,
+            &mut emitter.text,
+            &mut emitter.data,
             id,
             "overflow",
             &format!("%operation{id}_overflow"),
             operation_message(
                 value,
-                source_file,
-                &format!("integer `{}` overflowed", operation_spelling(operator)),
+                emitter.diagnostics.as_ref(),
+                &format!("integer `{}` overflowed", operator.spelling()),
             ),
         );
     }
@@ -575,21 +552,18 @@ fn emit_division(
         (BinaryOperator::Remainder, false) => "urem",
         _ => unreachable!(),
     };
-    emit_binary_raw(text, id, ty, instruction, left, right);
-    emit_normalized(text, id, &format!("%operation{id}_raw"), ty);
+    emit_binary_raw(&mut emitter.text, id, ty, instruction, left, right);
+    emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_shift(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
     left: Operand,
     right: Operand,
     entry: &crate::ir::Entry,
-    source_file: Option<&Source>,
 ) {
     let ty = value.ty;
     let count_ty = operand_type(entry, right);
@@ -598,34 +572,38 @@ fn emit_shift(
     let right = operand(right);
     if count_ty.signed() {
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_negative =w cslt{count_width} {right}, 0"
         )
         .unwrap();
         emit_conditional_trap(
-            text,
-            data,
+            &mut emitter.text,
+            &mut emitter.data,
             id,
             "negative",
             &format!("%operation{id}_negative"),
-            operation_message(value, source_file, "integer shift count is negative"),
+            operation_message(
+                value,
+                emitter.diagnostics.as_ref(),
+                "integer shift count is negative",
+            ),
         );
     }
     writeln!(
-        text,
+        emitter.text,
         "    %operation{id}_large =w cuge{count_width} {right}, {}",
         ty.width()
     )
     .unwrap();
     writeln!(
-        text,
+        emitter.text,
         "    jnz %operation{id}_large, @operation{id}_overshift, @operation{id}_within"
     )
     .unwrap();
-    writeln!(text, "@operation{id}_overshift").unwrap();
+    writeln!(emitter.text, "@operation{id}_overshift").unwrap();
     if operator == BinaryOperator::ShiftRight && ty.signed() {
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_overshift_value ={} sar {left}, {}",
             qbe_type(ty),
             ty.width() - 1
@@ -633,16 +611,16 @@ fn emit_shift(
         .unwrap();
     } else {
         writeln!(
-            text,
+            emitter.text,
             "    %operation{id}_overshift_value ={} copy 0",
             qbe_type(ty)
         )
         .unwrap();
     }
-    writeln!(text, "    jmp @operation{id}_shift_done").unwrap();
-    writeln!(text, "@operation{id}_within").unwrap();
+    writeln!(emitter.text, "    jmp @operation{id}_shift_done").unwrap();
+    writeln!(emitter.text, "@operation{id}_within").unwrap();
     let count = if count_width == 'l' {
-        writeln!(text, "    %operation{id}_count =w copy {right}").unwrap();
+        writeln!(emitter.text, "    %operation{id}_count =w copy {right}").unwrap();
         format!("%operation{id}_count")
     } else {
         right
@@ -654,54 +632,33 @@ fn emit_shift(
         _ => unreachable!(),
     };
     writeln!(
-        text,
+        emitter.text,
         "    %operation{id}_within_value ={} {instruction} {left}, {count}",
         qbe_type(ty)
     )
     .unwrap();
-    writeln!(text, "    jmp @operation{id}_shift_done").unwrap();
-    writeln!(text, "@operation{id}_shift_done").unwrap();
+    writeln!(emitter.text, "    jmp @operation{id}_shift_done").unwrap();
+    writeln!(emitter.text, "@operation{id}_shift_done").unwrap();
     writeln!(
-        text,
+        emitter.text,
         "    %operation{id}_raw ={} phi @operation{id}_overshift %operation{id}_overshift_value, @operation{id}_within %operation{id}_within_value",
         qbe_type(ty)
     )
     .unwrap();
-    emit_normalized(text, id, &format!("%operation{id}_raw"), ty);
+    emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
 fn emit_normalized(text: &mut String, id: usize, source: &str, ty: Type) {
     emit_truncation_operand(text, id, source, ty, ty);
 }
 
-fn operation_spelling(operator: BinaryOperator) -> &'static str {
-    match operator {
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-        BinaryOperator::Remainder => "%",
-        BinaryOperator::WrappingMultiply => "&*",
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::WrappingAdd => "&+",
-        BinaryOperator::WrappingSubtract => "&-",
-        BinaryOperator::ShiftLeft => "<<",
-        BinaryOperator::ShiftRight => ">>",
-        BinaryOperator::And => "&",
-        BinaryOperator::AndNot => "&^",
-        BinaryOperator::Xor => "^",
-        BinaryOperator::Or => "|",
-    }
-}
-
 fn operation_message(
     value: &crate::ir::Value,
-    source_file: Option<&Source>,
+    diagnostic_renderer: Option<&DiagnosticRenderer<'_>>,
     message: &str,
 ) -> String {
-    match (&value.span, source_file) {
-        (Some(span), Some(source)) => Diagnostic::new(span.clone(), message)
-            .render(source)
-            .to_string(),
+    match (&value.span, diagnostic_renderer) {
+        (Some(span), Some(renderer)) => renderer.render(&Diagnostic::new(span.clone(), message)),
         _ => format!("{message}\n"),
     }
 }
@@ -719,24 +676,46 @@ fn emit_conditional_trap(
     let symbol = format!("fern_operation{id}_{cause}_message");
     writeln!(text, "    jnz {condition}, @{failed}, @{ready}").unwrap();
     writeln!(text, "@{failed}").unwrap();
-    write!(data, "data ${symbol} = {{ ").unwrap();
-    for byte in message.bytes() {
-        write!(data, "b {byte}, ").unwrap();
-    }
-    data.push_str("b 0 }\n");
+    emit_message_data(data, &symbol, &message);
     writeln!(
         text,
-        "    call $write(w 2, l ${symbol}, {} {})",
-        qbe_type(Type::Uint),
-        message.len()
+        "    call $write(w 2, l ${symbol}, l {})",
+        message.len(),
     )
     .unwrap();
     text.push_str("    call $abort()\n    ret 1\n");
     writeln!(text, "@{ready}").unwrap();
 }
 
+fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
+    write!(data, "data ${symbol} = {{ ").unwrap();
+    let bytes = message.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], b' '..=b'~') && !matches!(bytes[index], b'"' | b'\\') {
+            let start = index;
+            while index < bytes.len()
+                && matches!(bytes[index], b' '..=b'~')
+                && !matches!(bytes[index], b'"' | b'\\')
+            {
+                index += 1;
+            }
+            write!(
+                data,
+                "b \"{}\", ",
+                std::str::from_utf8(&bytes[start..index]).expect("printable ASCII is UTF-8")
+            )
+            .unwrap();
+        } else {
+            write!(data, "b {}, ", bytes[index]).unwrap();
+            index += 1;
+        }
+    }
+    data.push_str("b 0 }\n");
+}
+
 fn conversion_fits(source: Type, destination: Type) -> bool {
-    type_minimum(source) >= type_minimum(destination) && source.max() <= destination.max()
+    source.min() >= destination.min() && source.max() <= destination.max()
 }
 
 fn operand_type(entry: &crate::ir::Entry, operand: Operand) -> Type {
@@ -746,36 +725,24 @@ fn operand_type(entry: &crate::ir::Entry, operand: Operand) -> Type {
     }
 }
 
-fn type_minimum(ty: Type) -> i128 {
-    if ty.signed() {
-        -(1i128 << (ty.width() - 1))
-    } else {
-        0
-    }
-}
-
 fn comparison_name(signed: bool, ty: Type) -> String {
     format!("c{}lt{}", if signed { "s" } else { "u" }, qbe_type(ty))
 }
 
 fn emit_checked_conversion(
     text: &mut String,
+    data: &mut String,
     id: usize,
     source: Operand,
     source_ty: Type,
     destination: Type,
-    message_len: usize,
+    message: String,
 ) {
     let source = operand(source);
-    let source_minimum = type_minimum(source_ty);
+    let source_minimum = source_ty.min();
     let source_maximum = i128::from(source_ty.max());
-    let destination_minimum = type_minimum(destination);
+    let destination_minimum = destination.min();
     let destination_maximum = i128::from(destination.max());
-    let failure = format!("conversion{id}_failed");
-    let ready = format!("conversion{id}_ready");
-    let done = format!("conversion{id}_done");
-    let upper = format!("conversion{id}_upper");
-
     if source_maximum > destination_maximum {
         writeln!(
             text,
@@ -785,16 +752,8 @@ fn emit_checked_conversion(
             source
         )
         .unwrap();
-        writeln!(
-            text,
-            "    jnz %conversion{id}_too_large, @{failure}, @{upper}"
-        )
-        .unwrap();
     }
     if source_minimum < destination_minimum {
-        if source_maximum > destination_maximum {
-            writeln!(text, "@{upper}").unwrap();
-        }
         writeln!(
             text,
             "    %conversion{id}_too_small =w {} {}, {}",
@@ -803,27 +762,25 @@ fn emit_checked_conversion(
             destination_minimum
         )
         .unwrap();
-        writeln!(
-            text,
-            "    jnz %conversion{id}_too_small, @{failure}, @{ready}"
-        )
-        .unwrap();
-    } else if source_maximum > destination_maximum {
-        writeln!(text, "@{upper}").unwrap();
     }
-    writeln!(text, "@{ready}").unwrap();
+    let condition = match (
+        source_maximum > destination_maximum,
+        source_minimum < destination_minimum,
+    ) {
+        (true, true) => {
+            writeln!(
+                text,
+                "    %conversion{id}_failed =w or %conversion{id}_too_large, %conversion{id}_too_small"
+            )
+            .unwrap();
+            format!("%conversion{id}_failed")
+        }
+        (true, false) => format!("%conversion{id}_too_large"),
+        (false, true) => format!("%conversion{id}_too_small"),
+        (false, false) => unreachable!("checked conversion requires a possible failure"),
+    };
+    emit_conditional_trap(text, data, id, "conversion", &condition, message);
     emit_truncation_operand(text, id, &source, source_ty, destination);
-    writeln!(text, "    jmp @{done}").unwrap();
-    writeln!(text, "@{failure}").unwrap();
-    // Write directly to stderr: abort does not reliably flush C stdio buffers.
-    writeln!(
-        text,
-        "    call $write(w 2, l $fern_conversion{id}_message, {} {message_len})",
-        qbe_type(Type::Uint)
-    )
-    .unwrap();
-    text.push_str("    call $abort()\n    ret 1\n");
-    writeln!(text, "@{done}").unwrap();
 }
 
 fn emit_truncation(
@@ -846,12 +803,6 @@ fn emit_truncation_operand(
     let raw = format!("%conversion{id}_raw");
     match destination.width() {
         8 | 16 => {
-            let input = if source_ty.width() == 64 {
-                writeln!(text, "    {raw} =w copy {source}").unwrap();
-                raw.as_str()
-            } else {
-                source
-            };
             let instruction = match (destination.width(), destination.signed()) {
                 (8, true) => "extsb",
                 (8, false) => "extub",
@@ -859,7 +810,7 @@ fn emit_truncation_operand(
                 (16, false) => "extuh",
                 _ => unreachable!(),
             };
-            writeln!(text, "    %v{id} =w {instruction} {input}").unwrap();
+            writeln!(text, "    %v{id} =w {instruction} {source}").unwrap();
         }
         32 => {
             writeln!(text, "    %v{id} =w copy {source}").unwrap();
@@ -952,6 +903,7 @@ fn run(command: &mut Command) -> Result<(), CompileError> {
 mod tests {
     use super::*;
     use crate::ir::{Entry, Value};
+    use std::path::PathBuf;
 
     fn integer(value: i32) -> Operand {
         Operand::Integer {
@@ -1005,23 +957,45 @@ mod tests {
     }
 
     #[test]
+    fn message_data_uses_quoted_runs_and_numeric_exception_bytes() {
+        let message = format!("{}\"\\é\n", "printable text ".repeat(1_000));
+        let mut data = String::new();
+        emit_message_data(&mut data, "message", &message);
+        assert!(data.len() < message.len() + 100);
+        assert!(data.contains("b \"printable text printable text"));
+        for byte in [b'"', b'\\', 0xc3, 0xa9, b'\n'] {
+            assert!(data.contains(&format!("b {byte},")));
+        }
+
+        let mut qbe = data;
+        qbe.push_str("export function w $main() {\n@start\n    ret 0\n}\n");
+        let dir = tempfile::tempdir().unwrap();
+        build_text(&qbe, &dir.path().join("program")).unwrap();
+    }
+
+    #[test]
+    fn many_traps_do_not_expand_qbe_byte_by_byte() {
+        let mut text = String::from("fn main() -> void {\nvar left = 1; var right = 2;\n");
+        for id in 0..3_000 {
+            writeln!(text, "const value{id} = left + right;").unwrap();
+        }
+        text.push_str("}\n");
+        let syntax = crate::frontend::parse(&text).unwrap();
+        let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+            .verify()
+            .unwrap();
+        let source = Source {
+            path: PathBuf::from("many_traps.fern"),
+            text,
+        };
+        let qbe = emit(&entry, Some(&source));
+        assert!(qbe.len() < 5_000_000, "QBE was {} bytes", qbe.len());
+        assert!(qbe.contains("b \"Error"));
+    }
+
+    #[test]
     fn full_width_integer_copies_and_conversions_execute() {
-        let ranges = [
-            (Type::I8, -128, 127),
-            (Type::I16, -32768, 32767),
-            (Type::I32, -2147483648, 2147483647),
-            (Type::I64, -9223372036854775808, 9223372036854775807),
-            (Type::U8, 0, 255),
-            (Type::U16, 0, 65535),
-            (Type::U32, 0, 4294967295),
-            (Type::U64, 0, 18446744073709551615),
-            (
-                Type::Int,
-                type_minimum(Type::Int),
-                i128::from(Type::Int.max()),
-            ),
-            (Type::Uint, 0, i128::from(Type::Uint.max())),
-        ];
+        let ranges = Type::ALL.map(|ty| (ty, ty.min(), i128::from(ty.max())));
         let mut entry = Entry {
             values: vec![],
             exit: integer(0),
@@ -1085,25 +1059,14 @@ mod tests {
 
     #[test]
     fn truncating_conversions_preserve_each_destination_bit_pattern() {
-        let types = [
-            Type::I8,
-            Type::I16,
-            Type::I32,
-            Type::I64,
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::Int,
-            Type::Uint,
-        ];
+        let types = Type::ALL;
         let mut entry = Entry {
             values: vec![],
             exit: integer(0),
         };
         let mut expected = Vec::new();
         for source in types {
-            let minimum = type_minimum(source);
+            let minimum = source.min();
             let maximum = i128::from(source.max());
             for value in [minimum, if source.signed() { -1 } else { 1 }, maximum] {
                 let source_id = entry.values.len();
@@ -1131,21 +1094,10 @@ mod tests {
 
     #[test]
     fn native_integer_operations_preserve_values_for_every_type() {
-        let types = [
-            Type::I8,
-            Type::I16,
-            Type::I32,
-            Type::I64,
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::Int,
-            Type::Uint,
-        ];
+        let types = Type::ALL;
         for ty in types {
             let name = ty.name();
-            let minimum = type_minimum(ty);
+            let minimum = ty.min();
             let maximum = i128::from(ty.max());
             let signed_operations = if ty.signed() {
                 format!(
@@ -1203,21 +1155,10 @@ mod tests {
 
     #[test]
     fn checked_arithmetic_traps_at_each_integer_width() {
-        let types = [
-            Type::I8,
-            Type::I16,
-            Type::I32,
-            Type::I64,
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::Int,
-            Type::Uint,
-        ];
+        let types = Type::ALL;
         for ty in types {
             let name = ty.name();
-            let minimum = type_minimum(ty);
+            let minimum = ty.min();
             let maximum = i128::from(ty.max());
             for (operator, left, right) in [("+", maximum, 1), ("-", minimum, 1), ("*", maximum, 2)]
             {
@@ -1245,18 +1186,7 @@ mod tests {
 
     #[test]
     fn division_remainder_and_shift_failures_are_explicit() {
-        let types = [
-            Type::I8,
-            Type::I16,
-            Type::I32,
-            Type::I64,
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::Int,
-            Type::Uint,
-        ];
+        let types = Type::ALL;
         for ty in types {
             let name = ty.name();
             for operator in ["/", "%"] {
@@ -1274,7 +1204,7 @@ mod tests {
                 "integer shift count is negative",
             );
             if ty.signed() {
-                let minimum = type_minimum(ty);
+                let minimum = ty.min();
                 for operator in ["/", "%"] {
                     assert_native_failure(
                         &format!(
@@ -1332,23 +1262,12 @@ mod tests {
 
     #[test]
     fn checked_conversions_trap_outside_each_destination_range() {
-        let types = [
-            Type::I8,
-            Type::I16,
-            Type::I32,
-            Type::I64,
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::Int,
-            Type::Uint,
-        ];
+        let types = Type::ALL;
         for source in types {
-            let minimum = type_minimum(source);
+            let minimum = source.min();
             let maximum = i128::from(source.max());
             for destination in types {
-                let lower = type_minimum(destination);
+                let lower = destination.min();
                 let upper = i128::from(destination.max());
                 let mut failures = vec![minimum, lower - 1, upper + 1, maximum];
                 failures.retain(|value| {
@@ -1358,7 +1277,7 @@ mod tests {
                 failures.dedup();
                 for value in failures {
                     // Source execution also checks semantic classification and lowering.
-                    // Truncation expresses negative values before unary syntax is supported.
+                    // Truncation constructs every source bit pattern uniformly.
                     let bits = value.rem_euclid(1i128 << source.width());
                     let text = format!(
                         "fn main() -> void {{ var value = {}.truncate({bits}); \
@@ -1527,13 +1446,8 @@ mod tests {
                 } else {
                     value.to_string()
                 };
-                let expected_mask = if Type::Int.width() == 64 {
-                    format!(
-                        "%exit_status =w copy {expected_operand}\n    %status =w and %exit_status, 255\n    ret %status"
-                    )
-                } else {
-                    format!("%status =w and {expected_operand}, 255\n    ret %status")
-                };
+                let expected_mask =
+                    format!("%status =w and {expected_operand}, 255\n    ret %status");
                 assert!(qbe.contains(&expected_mask));
                 if through_copy {
                     let ty = qbe_type(Type::Int);

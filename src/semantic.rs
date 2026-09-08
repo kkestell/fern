@@ -26,6 +26,20 @@ pub(crate) enum Type {
 }
 
 impl Type {
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 10] = [
+        Self::I8,
+        Self::I16,
+        Self::I32,
+        Self::I64,
+        Self::U8,
+        Self::U16,
+        Self::U32,
+        Self::U64,
+        Self::Int,
+        Self::Uint,
+    ];
+
     fn named(name: &str) -> Option<Self> {
         Some(match name {
             "i8" => Self::I8,
@@ -81,6 +95,14 @@ impl Type {
     pub(crate) fn max(self) -> u64 {
         u64::MAX >> (64 - self.width() + u32::from(self.signed()))
     }
+
+    pub(crate) fn min(self) -> i128 {
+        if self.signed() {
+            -(1i128 << (self.width() - 1))
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -92,7 +114,7 @@ pub(crate) struct Binding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
-    Integer(BigInt),
+    Integer,
     Reference(Idx<Binding>),
     Grouping {
         expression: Idx<Expression>,
@@ -103,10 +125,12 @@ pub(crate) enum ExpressionValue {
     },
     Unary {
         operator: UnaryOperator,
+        operator_span: std::ops::Range<usize>,
         operand: Idx<Expression>,
     },
     Binary {
         operator: BinaryOperator,
+        operator_span: std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
     },
@@ -284,8 +308,8 @@ impl CheckedEntry<'_> {
                 CheckedExpression {
                     ty: Type::Int,
                     untyped: true,
-                    value: ExpressionValue::Integer(value.clone()),
-                    constant: Some(value.clone()),
+                    value: ExpressionValue::Integer,
+                    constant: Some(value),
                 }
             }
             ExpressionKind::Reference(name) => {
@@ -298,13 +322,16 @@ impl CheckedEntry<'_> {
                 }
             }
             ExpressionKind::Grouping { expression: inner } => {
-                let checked = self.infer_expression(*inner, scopes)?;
+                let mut checked = self.infer_expression(*inner, scopes)?;
                 let result = CheckedExpression {
                     ty: checked.ty,
                     untyped: checked.untyped,
                     value: ExpressionValue::Grouping { expression: *inner },
                     constant: checked.constant.clone(),
                 };
+                if result.constant.is_some() {
+                    checked.constant = None;
+                }
                 self.expressions.insert(*inner, checked);
                 result
             }
@@ -314,7 +341,7 @@ impl CheckedEntry<'_> {
                 operand,
             } => {
                 let operand_id = *operand;
-                let checked_operand = self.infer_expression(operand_id, scopes)?;
+                let mut checked_operand = self.infer_expression(operand_id, scopes)?;
                 if *operator == UnaryOperator::Negate
                     && !checked_operand.untyped
                     && !checked_operand.ty.signed()
@@ -340,10 +367,14 @@ impl CheckedEntry<'_> {
                     untyped: checked_operand.untyped,
                     value: ExpressionValue::Unary {
                         operator: *operator,
+                        operator_span: operator_span.clone(),
                         operand: operand_id,
                     },
                     constant,
                 };
+                if result.constant.is_some() {
+                    checked_operand.constant = None;
+                }
                 self.expressions.insert(operand_id, checked_operand);
                 result
             }
@@ -393,6 +424,10 @@ impl CheckedEntry<'_> {
                         }
                         _ => {}
                     }
+                } else if (checked_left.constant.is_none() || checked_right.constant.is_none())
+                    && checked_right.untyped
+                {
+                    self.concretize(right_id, &mut checked_right, Type::Int)?;
                 }
                 let (ty, untyped) = if shift {
                     (checked_left.ty, checked_left.untyped)
@@ -409,18 +444,24 @@ impl CheckedEntry<'_> {
                     &checked_left,
                     &checked_right,
                 )?;
-                self.expressions.insert(left_id, checked_left);
-                self.expressions.insert(right_id, checked_right);
-                CheckedExpression {
+                let result = CheckedExpression {
                     ty,
                     untyped,
                     value: ExpressionValue::Binary {
                         operator: *operator,
+                        operator_span: operator_span.clone(),
                         left: left_id,
                         right: right_id,
                     },
                     constant,
+                };
+                if result.constant.is_some() {
+                    checked_left.constant = None;
+                    checked_right.constant = None;
                 }
+                self.expressions.insert(left_id, checked_left);
+                self.expressions.insert(right_id, checked_right);
+                result
             }
             ExpressionKind::Conversion {
                 destination: annotation,
@@ -449,14 +490,17 @@ impl CheckedEntry<'_> {
                 } else {
                     None
                 };
-                let value = if let Some(value) = constant.as_ref() {
-                    ExpressionValue::Integer(value.clone())
+                let value = if constant.is_some() {
+                    ExpressionValue::Integer
                 } else {
                     ExpressionValue::Conversion {
                         operand: operand_id,
                         truncating: *truncating,
                     }
                 };
+                if constant.is_some() {
+                    checked_operand.constant = None;
+                }
                 self.expressions.insert(operand_id, checked_operand);
                 CheckedExpression {
                     ty: destination,
@@ -476,14 +520,9 @@ impl CheckedEntry<'_> {
         destination: Type,
     ) -> Result<(), Diagnostic> {
         debug_assert!(checked.untyped);
-        if let Some(value) = checked.constant.as_ref()
-            && !integer_fits(value, destination)
-        {
-            return Err(out_of_range(self.syntax, id, destination));
-        }
-        checked.ty = destination;
-        checked.untyped = false;
-        self.concretize_children(id, destination, checked.constant.is_some())?;
+        let constant = concretize_value(self.syntax, id, checked, destination)?
+            .expect("caller provides an untyped expression");
+        self.concretize_children(id, destination, constant)?;
         Ok(())
     }
 
@@ -492,21 +531,11 @@ impl CheckedEntry<'_> {
         id: Idx<Expression>,
         destination: Type,
     ) -> Result<(), Diagnostic> {
-        let checked = &self.expressions[id];
-        if !checked.untyped {
+        let Some(constant) =
+            concretize_value(self.syntax, id, &mut self.expressions[id], destination)?
+        else {
             return Ok(());
-        }
-        if checked
-            .constant
-            .as_ref()
-            .is_some_and(|value| !integer_fits(value, destination))
-        {
-            return Err(out_of_range(self.syntax, id, destination));
-        }
-        let constant = checked.constant.is_some();
-        let checked = &mut self.expressions[id];
-        checked.ty = destination;
-        checked.untyped = false;
+        };
         self.concretize_children(id, destination, constant)?;
         Ok(())
     }
@@ -561,6 +590,12 @@ impl CheckedEntry<'_> {
             UnaryOperator::Complement if operand.untyped => !value,
             UnaryOperator::Complement => truncate_integer(&!value, operand.ty),
         };
+        if operand.untyped && result.bits() > MAX_UNTYPED_INTEGER_BITS {
+            return Err(Diagnostic::new(
+                operator_span,
+                "constant expression exceeds compiler resource limit",
+            ));
+        }
         if operator == UnaryOperator::Negate
             && !operand.untyped
             && !integer_fits(&result, operand.ty)
@@ -588,7 +623,7 @@ impl CheckedEntry<'_> {
         {
             return Err(Diagnostic::new(
                 operator_span,
-                format!("constant `{}` divisor is zero", binary_spelling(operator)),
+                format!("constant `{}` divisor is zero", operator.spelling()),
             ));
         }
         if matches!(
@@ -605,6 +640,15 @@ impl CheckedEntry<'_> {
         let (Some(left), Some(right)) = (left.constant.as_ref(), right_constant) else {
             return Ok(None);
         };
+        if untyped
+            && operator == BinaryOperator::Multiply
+            && left.bits().saturating_add(right.bits()).saturating_sub(1) > MAX_UNTYPED_INTEGER_BITS
+        {
+            return Err(Diagnostic::new(
+                operator_span,
+                "constant expression exceeds compiler resource limit",
+            ));
+        }
         let result = match operator {
             BinaryOperator::Multiply => left * right,
             BinaryOperator::Divide => {
@@ -647,9 +691,15 @@ impl CheckedEntry<'_> {
                 operator_span,
                 format!(
                     "constant `{}` on `{}` would overflow",
-                    binary_spelling(operator),
+                    operator.spelling(),
                     ty.name()
                 ),
+            ));
+        }
+        if untyped && result.bits() > MAX_UNTYPED_INTEGER_BITS {
+            return Err(Diagnostic::new(
+                operator_span,
+                "constant expression exceeds compiler resource limit",
             ));
         }
         Ok(Some(result))
@@ -681,10 +731,17 @@ impl CheckedEntry<'_> {
                     "constant shift exceeds compiler resource limit",
                 ));
             };
-            if operator == BinaryOperator::ShiftLeft && count > MAX_CONSTANT_SHIFT {
+            if operator == BinaryOperator::ShiftLeft
+                && (count > MAX_CONSTANT_SHIFT
+                    || count
+                        .try_into()
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(left.bits())
+                        > MAX_UNTYPED_INTEGER_BITS)
+            {
                 return Err(Diagnostic::new(
                     operator_span,
-                    "constant shift exceeds compiler resource limit",
+                    "constant expression exceeds compiler resource limit",
                 ));
             }
             return Ok(Some(if operator == BinaryOperator::ShiftLeft {
@@ -717,23 +774,28 @@ impl CheckedEntry<'_> {
     }
 }
 
-fn binary_spelling(operator: BinaryOperator) -> &'static str {
-    match operator {
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-        BinaryOperator::Remainder => "%",
-        BinaryOperator::WrappingMultiply => "&*",
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::WrappingAdd => "&+",
-        BinaryOperator::WrappingSubtract => "&-",
-        BinaryOperator::ShiftLeft => "<<",
-        BinaryOperator::ShiftRight => ">>",
-        BinaryOperator::And => "&",
-        BinaryOperator::AndNot => "&^",
-        BinaryOperator::Xor => "^",
-        BinaryOperator::Or => "|",
+const MAX_UNTYPED_INTEGER_BITS: u64 = 2_000_000;
+
+fn concretize_value(
+    syntax: &Syntax,
+    id: Idx<Expression>,
+    checked: &mut CheckedExpression,
+    destination: Type,
+) -> Result<Option<bool>, Diagnostic> {
+    if !checked.untyped {
+        return Ok(None);
     }
+    if checked
+        .constant
+        .as_ref()
+        .is_some_and(|value| !integer_fits(value, destination))
+    {
+        return Err(out_of_range(syntax, id, destination));
+    }
+    let constant = checked.constant.is_some();
+    checked.ty = destination;
+    checked.untyped = false;
+    Ok(Some(constant))
 }
 
 fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Type) -> Diagnostic {
@@ -749,16 +811,11 @@ fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Type) -> Diag
 }
 
 fn is_minimum(value: &BigInt, ty: Type) -> bool {
-    ty.signed() && value == &-(BigInt::from(1u8) << (ty.width() - 1))
+    value == &BigInt::from(ty.min())
 }
 
 fn integer_fits(value: &BigInt, ty: Type) -> bool {
-    let minimum = if ty.signed() {
-        -(BigInt::from(1u8) << (ty.width() - 1))
-    } else {
-        BigInt::from(0u8)
-    };
-    value >= &minimum && value <= &BigInt::from(ty.max())
+    value >= &BigInt::from(ty.min()) && value <= &BigInt::from(ty.max())
 }
 
 fn integer_from_bits(bits: BigInt, ty: Type) -> BigInt {
@@ -779,19 +836,6 @@ fn truncate_integer(value: &BigInt, ty: Type) -> BigInt {
 mod tests {
     use super::*;
     use crate::frontend::parse;
-
-    const SPEC_INTEGER_TYPES: [(&str, Type); 10] = [
-        ("i8", Type::I8),
-        ("i16", Type::I16),
-        ("i32", Type::I32),
-        ("i64", Type::I64),
-        ("u8", Type::U8),
-        ("u16", Type::U16),
-        ("u32", Type::U32),
-        ("u64", Type::U64),
-        ("int", Type::Int),
-        ("uint", Type::Uint),
-    ];
 
     fn literal(value: u128, base: u32) -> String {
         match base {
@@ -832,11 +876,11 @@ mod tests {
             .collect();
         assert_eq!(facts.len(), 5);
         assert!(facts.iter().all(|fact| fact.ty == Type::Int));
-        assert_eq!(facts[0].value, ExpressionValue::Integer(big(1)));
+        assert_eq!(facts[0].value, ExpressionValue::Integer);
         assert_eq!(facts[1].value, ExpressionValue::Reference(ids[0]));
         assert_eq!(facts[2].value, ExpressionValue::Reference(ids[1]));
         assert_eq!(facts[3].value, ExpressionValue::Reference(ids[2]));
-        assert_eq!(facts[4].value, ExpressionValue::Integer(big(0)));
+        assert_eq!(facts[4].value, ExpressionValue::Integer);
     }
 
     #[test]
@@ -854,7 +898,7 @@ mod tests {
             .iter()
             .filter_map(|(_, expression)| match &expression.value {
                 ExpressionValue::Reference(id) => Some(*id),
-                ExpressionValue::Integer(_)
+                ExpressionValue::Integer
                 | ExpressionValue::Conversion { .. }
                 | ExpressionValue::Grouping { .. }
                 | ExpressionValue::Unary { .. }
@@ -973,8 +1017,10 @@ mod tests {
             ]
         );
 
-        for (left_name, left) in SPEC_INTEGER_TYPES {
-            for (right_name, right) in SPEC_INTEGER_TYPES {
+        for left in Type::ALL {
+            let left_name = left.name();
+            for right in Type::ALL {
+                let right_name = right.name();
                 let body = format!(
                     "var left: {left_name} = 1; var right: {right_name} = 1; const result = left + right;"
                 );
@@ -1350,6 +1396,51 @@ mod tests {
     }
 
     #[test]
+    fn nonconstant_untyped_shift_counts_are_concretized_and_range_checked() {
+        accepts("var value: u8 = 1; var n = 1; const shifted = value << ((1 << 2) << n);");
+
+        for body in [
+            "var value: u8 = 1; var n = 1; const shifted = value << ((1 << 200) << n);",
+            "var value: u8 = 1; var n = 1; const shifted = value << ((1 << 63) << n);",
+            "exit(0); var value: u8 = 1; var n = 1; const shifted = value << ((1 << 200) << n);",
+        ] {
+            let text = format!("fn main() -> void {{ {body} }}");
+            let syntax = parse(&text).unwrap();
+            let error = check(&syntax).unwrap_err();
+            assert_eq!(error.message, "integer value out of range for `int`");
+            assert!(text[error.span].contains("1 <<"));
+        }
+    }
+
+    #[test]
+    fn untyped_constant_folding_is_bounded_and_discards_child_values() {
+        for body in [
+            "const value = (1 << 1000000) * (1 << 1000000);",
+            "exit(0); const value = (1 << 1000000) * (1 << 1000000);",
+        ] {
+            rejects(
+                body,
+                "*",
+                "constant expression exceeds compiler resource limit",
+            );
+        }
+
+        let syntax = parse("fn main() -> void { const value = (1 + 2) * (3 + 4); }").unwrap();
+        let checked = check(&syntax).unwrap();
+        let root = match syntax.statements[syntax.functions[checked.main].body[0]].kind {
+            StatementKind::Binding { initializer, .. } => initializer,
+            _ => unreachable!(),
+        };
+        assert_eq!(checked.expressions[root].constant, Some(big(21)));
+        assert!(
+            checked
+                .expressions
+                .iter()
+                .all(|(id, expression)| id == root || expression.constant.is_none())
+        );
+    }
+
+    #[test]
     fn names_require_a_preceding_binding_even_after_exit() {
         for body in [
             "const x = x;",
@@ -1374,7 +1465,8 @@ mod tests {
 
     #[test]
     fn integer_contract_uses_contextual_literals_and_exact_references() {
-        for (name, ty) in SPEC_INTEGER_TYPES {
+        for ty in Type::ALL {
+            let name = ty.name();
             let max = u128::from(ty.max());
             for base in [2, 8, 10, 16] {
                 let maximum = literal(max, base);
@@ -1400,8 +1492,10 @@ mod tests {
             }
         }
 
-        for (source_name, source) in SPEC_INTEGER_TYPES {
-            for (destination_name, destination) in SPEC_INTEGER_TYPES {
+        for source in Type::ALL {
+            let source_name = source.name();
+            for destination in Type::ALL {
+                let destination_name = destination.name();
                 for target in [
                     format!("const target: {destination_name} = source;"),
                     format!("var target: {destination_name} = source;"),

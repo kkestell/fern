@@ -15,6 +15,54 @@ alternate backends before a milestone needs them.
 
 ---
 
+## Executable integer subset
+
+Build the initial native compiler for parameterless `main`, initialized `int`
+bindings, binding references, and process exit against
+[Functions](../docs/spec.md#functions),
+[Variable declarations](../docs/spec.md#variable-declarations), and
+[Process exit](../docs/spec.md#process-exit). This milestone records the first
+completed compiler slice.
+
+### Examples
+
+- [Empty entry](../examples/empty.fern), expected exit status 0.
+- [Integer literals](../examples/integer_literals.fern), expected exit status 42.
+- [Shadowing](../examples/shadowing.fern), expected exit status 42.
+
+### Tasks
+
+- [x] **Establish the Rust compiler**
+
+  - Load UTF-8 source, report source diagnostics, and establish the frontend,
+    semantic, IR, backend, and driver boundaries.
+  - Compile an empty entry point through QBE and the host C toolchain.
+
+- [x] **Parse and check the initial syntax**
+
+  - Parse the entry point, initialized bindings, integer literals, references,
+    and `exit` while preserving source spans.
+  - Resolve bindings in source order and reject invalid entry points, names,
+    literals, declarations, and calls.
+
+- [x] **Lower and execute integer programs**
+
+  - Lower checked constants and binding copies into verified Fern IR.
+  - Preserve shadowing, source checking after `exit`, and observable exit
+    statuses through native execution.
+
+### Completion gates
+
+- The three examples compile and produce their expected statuses.
+- Invalid source text, syntax, names, literals, and entry points produce source
+  diagnostics without publishing an executable.
+- Binding identity, initializer visibility, same-block shadowing, and checking
+  after `exit` agree across semantic checking, IR snapshots, and native tests.
+- File and native-tool failures preserve an existing output, and malformed IR
+  is rejected before emission.
+
+---
+
 ## Assignment and nested scopes
 
 Support assignment to mutable local bindings and nested statement blocks against
@@ -365,10 +413,204 @@ Expected exit status: 42.
 
 ---
 
+## Harden integer compilation
+
+Remove crash and resource-amplification paths exposed by adversarial integer
+expressions while preserving the integer contracts linked by the preceding
+milestone. This work also removes duplicated compiler machinery that obscures
+the corrected boundaries.
+
+### Example
+
+See [the example](../examples/hardened_integers.fern).
+
+Expected exit status: 42.
+
+### Tasks
+
+- [x] **Bound and correct semantic constant handling**
+
+  - Type non-constant untyped shift counts according to the specification and
+    diagnose out-of-range counts in reachable and unreachable source.
+  - Bound literal parsing and untyped constant folding with documented compiler
+    limits, including checks before predictably large allocations.
+  - Stop retaining redundant folded values and simplify constant lowering.
+
+- [x] **Bound source diagnostic rendering**
+
+  - Render bounded excerpts for very long source lines while preserving the
+    source path and useful byte locations.
+  - Cover oversized tokens and long-line errors through the compiler boundary.
+
+- [x] **Compact and share backend trap emission**
+
+  - Reuse one indexed source during emission and one path for operation and
+    conversion diagnostics.
+  - Emit compact QBE message data and share conditional trap bodies without
+    changing first-failure behavior.
+
+- [x] **Consolidate integer compiler metadata and lowering**
+
+  - Share integer type ranges, integer type iteration, operator spelling, and
+    reserved-name classification.
+  - Remove redundant lowering matches and dead QBE copies where focused native
+    checks prove them unnecessary.
+
+- [x] **Repair compiler documentation and validate stabilization**
+
+  - Document current compiler limits, update the repository map and stale test
+    comments, and remove duplicated README behavior claims.
+  - Add the milestone example and validate the integrated compiler and its
+    resource bounds.
+
+### Completion gates
+
+- Reported nested shift counts produce source diagnostics instead of panics or
+  internal errors, including after `exit`.
+- Oversized literals, folded constants, and diagnostics stay within documented
+  resource bounds and fail with source diagnostics.
+- Generated trap data grows proportionally to message text and every trap family
+  retains its source location and first-failure behavior.
+- Shared type and operator metadata agrees across parsing, checking, IR, backend
+  emission, and tests without broadening the supported language.
+- The example exits with status 42, snapshots are deterministic, and all compiler
+  checks pass.
+
+---
+
+## Operator spelling and precedence
+
+Bring the implemented operators into agreement with the revised operator
+contracts:
+[Precedence, associativity, and evaluation order](../docs/spec.md#precedence-associativity-and-evaluation-order),
+[Integer operators](../docs/spec.md#integer-operators), and
+[Bitwise operations](../docs/spec.md#bitwise-operations). The wrapping operators
+are respelled `+%`, `-%`, and `*%` so that no operator can absorb a following
+unary operator, the and-not operator is removed in favor of `a & ^b`, and the
+six precedence levels collapse to three.
+
+The scope is lexing, parsing, and the operator spellings and precedence used by
+the existing checking, IR, and backend paths. Operand typing, trapping, and
+wrapping semantics are unchanged. Comparisons appear in the precedence table but
+their implementation belongs to the following control-flow milestone.
+
+### Example
+
+```fern
+fn main() -> void {
+    var wrapped: u8 = 250 +% u8(10);        // 4: wraps at the operand width
+    var zero: u8 = u8(1) +% -%u8(1);        // 0: wrapping negation
+    var scaled = 1 + 1 << 5;                // 33: `<<` binds as tightly as `*`
+    var cleared: u8 = u8(0x0F) & ^u8(0x0A);  // 5: and-not without `&^`
+    exit(int(wrapped) + int(zero) + scaled + int(cleared));
+}
+```
+
+Expected exit status: 42. Future file: `examples/wrapping_operators.fern`.
+
+### Tasks
+
+- [ ] **Lex and parse the revised operator spellings**
+
+  - Accept `+%`, `-%`, and `*%` as binary operators and `-%` as a unary
+    operator, and stop accepting `&+`, `&-`, `&*`, and `&^`.
+  - Preserve operator spans and update parser tests and snapshots, including
+    programs that mix `&` with a following unary `-` or `^`.
+
+- [ ] **Apply the revised precedence levels**
+
+  - Parse `* / % *% << >> &` at the highest binary level, `+ - +% -% | ^` at the
+    next, and preserve left associativity and grouping.
+  - Cover each level and its boundaries in parser tests and snapshots,
+    including `a + b << c`, `a | b + c`, and `a & ^b`.
+
+- [ ] **Carry the spellings through checking and execution**
+
+  - Update operator spelling in diagnostics and shared operator metadata.
+  - Update `examples/integer_expressions.fern`, add the milestone example, and
+    validate the integrated compiler.
+
+### Completion gates
+
+- The removed spellings are rejected with source diagnostics, and the new
+  spellings execute with the values the operator contracts specify.
+- Parser snapshots distinguish every precedence level, and `a & ^b` produces the
+  values the removed and-not operator produced.
+- Both examples compile and exit 42, and IR snapshots stay deterministic.
+
+---
+
+## Module-level declarations
+
+Support `var` and `const` declarations at the top level of a source file against
+[Module-level declarations](../docs/spec.md#module-level-declarations),
+[Scope and shadowing](../docs/spec.md#scope-and-shadowing),
+[Integer constant expressions](../docs/spec.md#integer-constant-expressions),
+and [Assignment](../docs/spec.md#assignment).
+
+The scope is file-scope bindings whose initializers are constant expressions,
+their visibility independent of declaration order, and their initialization
+before `main` runs. Multiple source files, imports, and non-constant
+initializers remain outside this milestone.
+
+### Example
+
+```fern
+var counter = start;
+const start: int = 40;
+const step = 2;
+
+fn main() -> void {
+    counter = counter + step;
+    exit(counter); // reports 42
+}
+```
+
+Expected exit status: 42. Future file:
+`examples/module_level_declarations.fern`.
+
+### Tasks
+
+- [ ] **Parse top-level bindings**
+
+  - Accept `var` and `const` declarations interleaved with `fn` declarations,
+    preserving spans, and reject statements at the top level.
+  - Cover ordering, annotations, and malformed top-level source in parser tests
+    and snapshots.
+
+- [ ] **Resolve and check module-level bindings**
+
+  - Resolve references to module-level bindings from any declaration in the
+    file, regardless of order, and from every function body.
+  - Diagnose duplicate module-level names, initializer cycles, and initializers
+    that are not constant expressions.
+  - Preserve local shadowing of module-level bindings and permit assignment to a
+    module-level `var` from a function body.
+
+- [ ] **Lower and execute module-level bindings**
+
+  - Initialize module-level bindings before `main` runs and preserve their
+    values and mutations through IR verification, snapshots, and native
+    execution.
+  - Add the milestone example and validate the integrated milestone.
+
+### Completion gates
+
+- A module-level binding referenced before its own declaration compiles and
+  executes; a duplicate name, an initializer cycle, and a non-constant
+  initializer each produce a source diagnostic.
+- A local binding shadows a module-level binding without modifying it, and an
+  assignment in a function body updates the module-level `var`.
+- The example compiles and exits 42.
+
+---
+
 ## Branches and loops
 
-Add branches and loops after their control-flow rules are specified. Define
-this milestone's tasks with kroadmap once those language decisions are settled.
+Add branches, loops, comparisons, and boolean values after their control-flow
+rules are specified. This milestone owns the implementation of
+[Comparison](../docs/spec.md#comparison). Define this milestone's tasks with
+kroadmap once those language decisions are settled.
 
 ---
 
@@ -377,3 +619,11 @@ this milestone's tasks with kroadmap once those language decisions are settled.
 Add parameters, calls, and return values after the remaining function rules
 are specified. Define this milestone's tasks with kroadmap once those language
 decisions are settled.
+
+---
+
+## Modules and imports
+
+Add module directories and `use` declarations after the open module questions in
+[the specification](../docs/spec.md#open-module-questions) are settled. Define
+this milestone's tasks with kroadmap once those language decisions are settled.

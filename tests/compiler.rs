@@ -180,6 +180,22 @@ fn source_failures_preserve_output() {
 }
 
 #[test]
+fn oversized_integer_diagnostics_are_bounded() {
+    let digits = "9".repeat(200_000);
+    let (_dir, input, output) = fixture(format!("fn main() -> void {{ const value = {digits}; }}"));
+    let result = cli(&input, &output).output().unwrap();
+    assert!(!result.status.success());
+    assert!(
+        result.stderr.len() < 2_000,
+        "stderr was {} bytes",
+        result.stderr.len()
+    );
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("integer literal exceeds compiler limit"));
+    assert!(stderr.contains("bytes "));
+}
+
+#[test]
 fn runtime_integer_expressions_execute_and_replace_output() {
     let (_dir, input, output) = fixture(include_str!("../examples/integer_expressions.fern"));
     fs::write(&output, "keep me").unwrap();
@@ -197,15 +213,16 @@ fn grouped_contextual_integer_expressions_execute() {
 }
 
 #[test]
-fn nested_contextual_expressions_and_exact_overshifts_execute() {
+fn nested_contextual_expressions_and_typed_overshifts_execute() {
     let (_dir, input, output) = fixture(
         "fn main() -> void {
             var count: uint = 1;
             const nested: i64 = -(1 << count);
             var unsigned: u8 = 1;
             var signed: i8 = -1;
-            const left = unsigned << 99999999999999999999999999999999999999999999999999;
-            const right = signed >> 99999999999999999999999999999999999999999999999999;
+            var overshift: u64 = 18446744073709551615;
+            const left = unsigned << overshift;
+            const right = signed >> overshift;
             exit(int(nested) + int(left) + int(right) + 45);
         }",
     );

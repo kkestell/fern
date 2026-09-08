@@ -36,8 +36,8 @@ impl std::error::Error for CompileError {}
 pub fn compile(input: &Path, output: &Path) -> Result<(), CompileError> {
     let source = source::Source::load(input)?;
     reject_input_output_alias(input, output)?;
-    let syntax = frontend::parse(&source.text).map_err(|e| e.render(&source))?;
-    let checked = semantic::check(&syntax).map_err(|e| e.render(&source))?;
+    let syntax = frontend::parse(&source.text).map_err(|e| CompileError::new(e.render(&source)))?;
+    let checked = semantic::check(&syntax).map_err(|e| CompileError::new(e.render(&source)))?;
     let entry = ir::lower(checked).verify()?;
     backend::build(&entry, &source, output)
 }

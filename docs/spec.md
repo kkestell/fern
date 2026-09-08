@@ -3,7 +3,9 @@
 This specification defines Fern's language behavior. It is authoritative
 wherever it is explicit. An invalid program must be rejected during compilation.
 A trap halts execution with a diagnostic on standard error identifying the
-failing operation and its source location.
+failing operation and its source location. It terminates the process abnormally
+through the platform's abort mechanism. The resulting termination status is
+platform-defined and is never a status that `exit` can report.
 
 Implementations may impose documented limits on source nesting and compile-time
 resource use. Source exceeding such a limit must be rejected with a compilation
@@ -80,14 +82,6 @@ var a: u8 = 42;
 var b = u8(42);
 ```
 
-### Trailing commas
-
-A trailing comma is permitted in the argument list of `exit`:
-
-```fern
-exit(42,);
-```
-
 ## Declarations
 
 ### Functions
@@ -114,18 +108,44 @@ var name: T = e;
 const name: T = e;
 ```
 
-A declaration introduces a local binding initialized to the value of `e`. A type
+A declaration introduces a binding initialized to the value of `e`. A type
 annotation determines the binding's type. Without an annotation, the binding
 takes the initializer's type, with untyped integer constants defaulting to
 `int`. A binding reference has the binding's type. Initialization copies the
 integer value; later assignment to the source binding does not change the copy.
+
+### Module-level declarations
+
+A source file contains function declarations and module-level `var` and `const`
+declarations, in any order. Statements appear only in function bodies.
+
+A module-level declaration uses the declaration syntax above, and its
+initializer must be a constant expression. Module-level bindings are initialized
+before `main` runs.
+
+A module-level binding is visible throughout its file, including in declarations
+that appear before it. Two module-level declarations in a file may not use the
+same name. A module-level initializer that refers to the binding it initializes,
+directly or through other module-level bindings, is a compile-time error.
+
+```fern
+var counter = base;
+const base = 40;
+
+fn main() -> void {
+    counter = counter + 2;
+    exit(counter); // reports 42
+}
+```
 
 ### Scope and shadowing
 
 Bindings use lexical block scope. Each brace-delimited statement block,
 including a function body, introduces a scope. A binding declared in a block is
 not visible outside that block. Nested blocks can access bindings in enclosing
-scopes unless those bindings are shadowed.
+scopes unless those bindings are shadowed. The bindings of a file's module-level
+declarations enclose every function body in that file, and a local binding may
+shadow one of them.
 
 A local binding becomes visible only after its initializer. The initializer
 resolves names using the bindings already in scope, including any earlier
@@ -133,9 +153,11 @@ binding with the same name. A reference to a name with no visible declaration is
 invalid.
 
 ```text
-const x = 10;
-const x = x; // initializes the new x to 10 using the earlier x
-const y = y; // invalid: no earlier y is visible
+fn main() -> void {
+    const x = 10;
+    const x = x; // initializes the new x to 10 using the earlier x
+    const y = y; // invalid: no earlier y is visible
+}
 ```
 
 A declaration may reuse the name of an existing binding, whether that binding
@@ -145,31 +167,37 @@ may have a different type or mutability. The earlier binding is not modified.
 When a nested block ends, any outer binding it shadowed becomes visible again.
 
 ```text
-const x = 10;
-const x = 20;
+fn main() -> void {
+    const x = 10;
+    const x = 20;
+}
 ```
 
 ```text
-const x: int = 10;
-{
-    var x: u8 = 20;
-    x = 30;
+fn main() -> void {
+    const x: int = 10;
+    {
+        var x: u8 = 20;
+        x = 30;
+    }
+    exit(x); // reports 10: the outer binding is visible again
 }
-exit(x); // reports 10: the outer binding is visible again
 ```
 
 ### Immutability
 
 A `var` binding may be reassigned. A `const` binding cannot be reassigned. A
-`const` binding may be initialized from a runtime value; immutability does not
-require compile-time evaluation. Integer constant expressions defines when a
+local `const` binding may be initialized from a runtime value; immutability does
+not require compile-time evaluation. Integer constant expressions defines when a
 binding can be used in a constant expression.
 
 ```fern
-var value = 7;
-const saved = value;
-value = 42;
-exit(saved); // reports 7
+fn main() -> void {
+    var value = 7;
+    const saved = value;
+    value = 42;
+    exit(saved); // reports 7
+}
 ```
 
 ## Integer Semantics
@@ -220,12 +248,14 @@ Signed types use two's complement representation.
 
 Integer literals and ordinary arithmetic and bitwise expressions built entirely
 from untyped constants are *untyped*. Constant shifts follow the typing rules
-under [Constant shifts](#constant-shifts). Parentheses preserve the enclosed
-expression's type and value. An untyped constant is an exact mathematical integer
-with no fixed width; the compiler must represent at least 256 bits of precision.
-This is a minimum precision guarantee, not a 256-bit integer type. Larger
-supported values remain exact, subject to the compiler resource limits described
-above. Exceeding a resource limit is distinct from arithmetic overflow.
+under [Constant shifts](#constant-shifts): a constant shift with an untyped left
+operand stays untyped even when its count is a typed constant. Parentheses
+preserve the enclosed expression's type and value. An untyped constant is an
+exact mathematical integer with no fixed width; the compiler must represent at
+least 256 bits of precision. This is a minimum precision guarantee, not a
+256-bit integer type. Larger supported values remain exact, subject to the
+compiler resource limits described above. Exceeding a resource limit is distinct
+from arithmetic overflow.
 
 Untyped constant expressions are evaluated at compile time with exact
 arithmetic. Overflow cannot occur in an untyped constant expression. Their
@@ -233,12 +263,12 @@ intermediate values need not fit the eventual type; the final value must fit
 when it acquires a type. For example, `var x: u8 = (250 + 10) / 2;` initializes
 `x` to 130.
 
-Integer literals, integer conversions of constant expressions, integer
-operations on constant expressions, and parentheses around constant expressions
-are constant expressions. A reference to a `const` binding initialized by a
-constant expression is a typed constant expression. References to `var` bindings
-and to `const` bindings initialized from runtime values are not constant
-expressions.
+Integer literals, integer conversions of constant expressions, and parentheses
+around constant expressions are constant expressions. So is an arithmetic,
+wrapping, bitwise, shift, or unary operation whose operands are all constant
+expressions. A reference to a `const` binding initialized by a constant
+expression is a typed constant expression. References to `var` bindings and to
+`const` bindings initialized from runtime values are not constant expressions.
 
 Constant expressions and constant subexpressions are checked during compilation,
 including in unreachable statements. Typed operations obey their type's range
@@ -288,8 +318,8 @@ representable in that type. It follows the same operand type rules as a
 variable of that type, with evaluation governed by Integer constant expressions:
 
 ```fern
-const Limit: u16 = 65535;
-const Bad: u16 = 65536; // error
+const limit: u16 = 65535;
+const bad: u16 = 65536; // error
 ```
 
 ### Integer conversions
@@ -336,18 +366,20 @@ var d = i8.truncate(200); // -56
 
 #### Precedence, associativity, and evaluation order
 
-Unary operators have the highest precedence. Binary integer operators have six
+Unary operators have the highest precedence. Binary operators have three
 precedence levels, from highest to lowest:
 
-1. `* / % &*`
-2. `+ - &+ &-`
-3. `<< >>`
-4. `& &^`
-5. `^`
-6. `|`
+1. `* / % *% << >> &`
+2. `+ - +% -% | ^`
+3. `== != < <= > >=`
 
 Binary operators at the same precedence level associate from left to right.
 Parentheses override precedence and associativity.
+
+Every comparison binds less tightly than every arithmetic and bitwise operator,
+so `x & 1 == 0` is `(x & 1) == 0`. Shifts bind as tightly as multiplication, so
+`a + b << c` is `a + (b << c)`. Bitwise or and exclusive or bind as loosely as
+addition, so `a | b + c` is `(a | b) + c`.
 
 The left operand of a binary expression is evaluated before the right operand.
 Each operand is fully evaluated, including any runtime failure, before evaluation
@@ -378,16 +410,17 @@ var p = n + m; // error: int and i64, on every platform
 | `+ - *` | Addition, subtraction, multiplication. Trap on overflow. |
 | `/` | Division, truncating toward zero. Traps on division by zero and on `MIN / -1`. |
 | `%` | Remainder. Result has the sign of the dividend. Traps when `/` would. |
-| `&+ &- &*` | Wrapping addition, subtraction, multiplication (two's complement). Never trap. |
+| `+% -% *%` | Wrapping addition, subtraction, multiplication (two's complement). Never trap. |
 | unary `-` | Negation. Traps on `-MIN`. Not permitted on unsigned types. |
-| unary `&-` | Wrapping negation. Permitted on all types. |
+| unary `-%` | Wrapping negation. Permitted on all types. |
 
 As a mathematical identity, division and remainder satisfy
 `(a / b) * b + a % b == a` whenever both are defined.
 
 Division or remainder by a constant zero is a compile-time error, including when
-the dividend is not constant. Any constant expression that would trap is also a
-compile-time error.
+the dividend is not constant. That rejection is deliberate and does not depend
+on the whole expression being a constant expression. Separately, any constant
+expression that would trap is also a compile-time error.
 
 #### Overflow
 
@@ -402,18 +435,19 @@ range.
 Wrapping operators explicitly request modular arithmetic at the operand type's
 width. The retained bits are interpreted using that type's signedness. A binary
 wrapping operation requires at least one typed operand; an untyped operand adopts
-the other operand's type and must fit it before the operation. A destination type
-does not supply the operation's width, so `var x: u8 = 250 &+ 10;` is invalid.
-Unary wrapping negation likewise requires a typed operand. `&-u8(1)` is `u8(255)`,
-while `&-1` is invalid.
+the other operand's type and must fit it before the operation. In
+`var x: u8 = 250 +% 10;` both operands are untyped, and a destination type does
+not supply the operation's width, so the declaration is invalid.
+Unary wrapping negation likewise requires a typed operand. `-%u8(1)` is
+`u8(255)`, while `-%1` is invalid.
 
 ```fern
 var x: u8 = 255;
 var y = x + 1; // trap
-var z = x &+ 1; // 0
+var z = x +% 1; // 0
 
 var h: u64 = 14695981039346656037;
-var h2 = h &* 1099511628211; // FNV hashing, wraps by design
+var h2 = h *% 1099511628211; // FNV hashing, wraps by design
 ```
 
 Because `int` overflow traps rather than wraps, code that overflows a 32-bit
@@ -421,6 +455,9 @@ Because `int` overflow traps rather than wraps, code that overflows a 32-bit
 computing a different result.
 
 ### Indexing and lengths
+
+Arrays, slices, and strings are specified ahead of their implementation; the
+[roadmap](../eng/roadmap.md) records implementation status.
 
 The length of any array, slice, or string has type `int`. Indices and slice
 bounds have type `int`.
@@ -440,22 +477,21 @@ sizes follows Integer conversions.
 | `&` | And |
 | `\|` | Or |
 | `^` | Exclusive or |
-| `&^` | And-not (bit clear) |
 | unary `^` | Complement |
 
 Binary bitwise operators require identical operand types, with untyped constants
 adopting the other operand's type when it fits. Typed operations use that type's
 two's-complement bit representation and cannot overflow. Untyped bitwise
 operations use an unbounded two's-complement interpretation; unary `^x` is
-`-x - 1`.
+`-x - 1`. There is no and-not operator; `a & ^b` clears the bits set in `b`.
 
 ### Integer shifts
 
 `x << n` and `x >> n` shift `x` by `n` bit positions. The count may have any
 integer type or be an untyped constant. Its type does not determine the left
-operand's type or the result type. An untyped count remains an exact integer in
-both constant and non-constant shifts; it need not first fit `int` or any other
-concrete type.
+operand's type or the result type. In a constant shift, an untyped count remains
+an exact integer and need not fit a concrete type. In a non-constant shift, an
+untyped count acquires type `int`.
 
 Typed shifts and non-constant shifts follow these execution rules; untyped
 constant shifts are specified separately below.
@@ -483,7 +519,10 @@ var reduced: u8 = 256 >> u8(8); // 1; only the final result must fit u8
 
 If the left operand is typed, a constant shift uses the same bit-discarding,
 sign-filling, and overshift rules as a non-constant shift. Changing a binding
-from `const` to `var` does not change the result of a typed shift.
+from `const` to `var` does not change the result of a typed shift. Only a typed
+left operand is invariant this way. With an untyped left operand, a `var`
+reference makes the shift non-constant, and
+[Non-constant shifts](#non-constant-shifts) apply.
 
 ```fern
 const high: u8 = 128;
@@ -501,7 +540,8 @@ left operand is not constant.
 
 If either operand is not a constant expression, the shift is evaluated at
 runtime under the rules above. An untyped constant on the left takes its type
-from context first, defaulting to `int`:
+from context first, defaulting to `int`. An untyped expression used as the count
+also defaults to `int` and must be representable in that type:
 
 ```fern
 var n = 40; // a variable reference is not a constant expression
@@ -515,7 +555,8 @@ A typed left operand retains its type regardless of the destination.
 
 `bool` is a distinct type whose values are `true` and `false`. The comparisons
 `== != < <= > >=` require identical operand types and yield `bool`. Untyped
-constants adopt the type of the other operand when their values fit.
+constants adopt the type of the other operand when their values fit. Comparison
+precedence is given under Precedence, associativity, and evaluation order.
 
 A well-typed comparison remains valid when the operand types make its result
 always true or always false. For unsigned `x`, `x < 0` and `0 > x` yield `false`,
@@ -523,15 +564,25 @@ and `x >= 0` yields `true`. For `x: u8`, `x <= 255` yields `true`. A constant
 that does not fit the other operand's type still makes the comparison invalid;
 for example, `x < -1` is invalid when `x` is unsigned.
 
+`true` and `false` are untyped boolean constants. An untyped boolean constant
+acquires type `bool` from the context in which it is used, and `bool` is its
+default type. A `var` or `const` binding may have type `bool`.
+
+A comparison is a constant expression when both of its operands are constant
+expressions, and its result is then an untyped boolean constant. A comparison
+with an operand that is not a constant expression is evaluated at runtime, even
+when its result is always true or always false.
+
 ### Assignment
 
-`x = e;` stores the value of `e` in the mutable local binding `x`. It requires
+`x = e;` stores the value of `e` in the mutable binding `x`. It requires
 `e` to have the type of `x`, or to be an untyped constant that fits. Assignment
 is a statement and ends with a semicolon.
 
-Compound assignments `+= -= *= /= %= &= |= ^= &^= <<= >>=` and their wrapping
-forms `&+= &-= &*=` are equivalent to the corresponding binary operation
-followed by assignment, and trap under the same conditions.
+Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
+`+%= -%= *%=` are equivalent to the corresponding binary operation
+followed by assignment, and trap under the same conditions. The diagnostic for a
+trapping compound assignment identifies the compound operator.
 
 There are no `++` or `--` operators.
 
@@ -584,11 +635,14 @@ execution.
 exit(e);
 ```
 
-The built-in `exit` takes one argument of type `int` and terminates the program.
-An untyped constant argument must fit `int`; a differently typed integer
-requires an explicit checked or truncating conversion. The reported exit status
-is the argument modulo 256, in the range zero through 255, on every host.
-`exit(256);` reports zero and `exit(-1);` reports 255. It does not return.
+`exit` is a statement and a reserved word. It uses call syntax without being a
+call, as an integer conversion does. Its argument has type `int`: an untyped
+constant argument must fit `int`, and a differently typed integer requires an
+explicit checked or truncating conversion. A trailing comma after the argument
+is permitted, as in `exit(42,);`. The statement terminates the program and does
+not return. The reported exit status is the argument modulo 256, in the range
+zero through 255, on every host. `exit(256);` reports zero and `exit(-1);`
+reports 255.
 
 ```fern
 fn main() -> void {
@@ -609,7 +663,9 @@ own imports.
 The directory defines the namespace; source filenames do not introduce
 namespaces. For example, `example/print.fern` belongs to module `example`. A
 function named `println` declared in that file has the qualified name
-`example::println`.
+`example::println`. Module and function names in this section,
+`example::println` included, are illustrative; the specification does not define
+a standard library.
 
 ### Use declarations
 
@@ -631,16 +687,18 @@ files, even when those files belong to the same module.
 
 ### Module resolution and dependencies
 
-Module resolution is path-based. `FERNPATH` is a colon-delimited list of module
-search roots, searched in order. The default search order is the current
-directory, the standard library, and then third-party modules. Typical locations
-for the latter two roots are `/usr/src/fern/stdlib` and
-`/usr/src/fern/third-party`.
+Module resolution is path-based. An implementation resolves imports against an
+ordered list of module search roots. It must document how callers supply those
+roots and what defaults apply. A command-line implementation may accept roots
+through flags or `FERNPATH`; a build tool may construct them from project
+metadata. The working directory is not an implicit dependency source when an
+explicit root list is supplied.
 
-Fern has no manifest, package manager, or lockfile. Installing a dependency
-means placing its source tree under a module search root. Fern does not provide
-a package registry or perform dependency version resolution. Projects manage
-their own dependency source trees, for example through copies or Git submodules.
+Fern source imports do not name dependency versions. Build tools may use
+manifests, lockfiles, registries, vendored source, or other metadata to select
+versions and construct module search roots. Those facilities are outside the
+Fern source language and do not change module identity within a chosen root
+list.
 
 ### Open module questions
 

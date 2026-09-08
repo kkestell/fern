@@ -176,6 +176,27 @@ pub(crate) enum BinaryOperator {
     Or,
 }
 
+impl BinaryOperator {
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            Self::Multiply => "*",
+            Self::Divide => "/",
+            Self::Remainder => "%",
+            Self::WrappingMultiply => "&*",
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::WrappingAdd => "&+",
+            Self::WrappingSubtract => "&-",
+            Self::ShiftLeft => "<<",
+            Self::ShiftRight => ">>",
+            Self::And => "&",
+            Self::AndNot => "&^",
+            Self::Xor => "^",
+            Self::Or => "|",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
@@ -212,32 +233,16 @@ pub(crate) struct Syntax {
 fn reserved(name: &str) -> bool {
     matches!(
         name,
-        "const"
-            | "var"
-            | "true"
-            | "false"
-            | "fn"
-            | "void"
-            | "exit"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "int"
-            | "uint"
-            | "bool"
-    )
+        "const" | "var" | "true" | "false" | "fn" | "void" | "exit" | "bool"
+    ) || integer_type(name)
 }
 
+const INTEGER_TYPE_NAMES: [&str; 10] = [
+    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint",
+];
+
 fn integer_type(name: &str) -> bool {
-    matches!(
-        name,
-        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "int" | "uint"
-    )
+    INTEGER_TYPE_NAMES.contains(&name)
 }
 
 pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
@@ -257,9 +262,17 @@ pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
     (base, &digits[..end], &digits[end..])
 }
 
-fn valid_integer(spelling: &str) -> bool {
+pub(crate) const MAX_INTEGER_LITERAL_DIGITS: usize = 4_096;
+
+fn valid_integer(spelling: &str) -> Result<(), &'static str> {
     let (_, digits, suffix) = integer_parts(spelling);
-    !digits.is_empty() && suffix.is_empty()
+    if digits.is_empty() || !suffix.is_empty() {
+        return Err("malformed integer literal");
+    }
+    if digits.len() > MAX_INTEGER_LITERAL_DIGITS {
+        return Err("integer literal exceeds compiler limit of 4096 digits");
+    }
+    Ok(())
 }
 
 struct Parser<'a> {
@@ -305,8 +318,11 @@ impl Parser<'_> {
             self.lexer.source().len()..self.lexer.source().len()
         };
         self.current = match token {
-            Some(Ok(Token::Integer)) if !valid_integer(self.lexer.slice()) => {
-                return Err(self.error("malformed integer literal"));
+            Some(Ok(Token::Integer)) => {
+                if let Err(message) = valid_integer(self.lexer.slice()) {
+                    return Err(self.error(message));
+                }
+                Some(Token::Integer)
             }
             Some(Ok(token)) => Some(token),
             Some(Err(())) => {
@@ -762,9 +778,7 @@ mod tests {
     #[test]
     fn integer_annotations_snapshot() {
         let mut source = String::from("/* 🌿 */ fn main() -> void {\n");
-        for name in [
-            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint",
-        ] {
+        for name in INTEGER_TYPE_NAMES {
             source.push_str(&format!("var value: {name} = 0x2A;\n"));
             source.push_str(&format!("{{ const copy: /* type */ {name} = value; }}\n"));
         }
@@ -832,6 +846,24 @@ mod tests {
             assert_eq!(actual, digits);
             assert_eq!(&source[expression.span.clone()], digits);
         }
+    }
+
+    #[test]
+    fn integer_literal_digit_limit_is_checked_before_semantic_parsing() {
+        let accepted = "9".repeat(MAX_INTEGER_LITERAL_DIGITS);
+        parse(&format!(
+            "fn main() -> void {{ const value = {accepted}; }}"
+        ))
+        .unwrap();
+
+        let rejected = "9".repeat(MAX_INTEGER_LITERAL_DIGITS + 1);
+        let text = format!("fn main() -> void {{ const value = {rejected}; }}");
+        let error = parse(&text).unwrap_err();
+        assert_eq!(error.span.len(), rejected.len());
+        assert_eq!(
+            error.message,
+            "integer literal exceeds compiler limit of 4096 digits"
+        );
     }
 
     #[test]

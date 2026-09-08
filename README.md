@@ -16,7 +16,9 @@ reassignment, saved copies, and nested shadowing, and
 conversions. See [integer conversions](examples/integer_conversions.fern) for
 checked and truncating forms, and
 [integer expressions](examples/integer_expressions.fern) for arithmetic,
-bitwise, and shift operators. The nonempty examples exit with status 42.
+bitwise, and shift operators. See
+[hardened integers](examples/hardened_integers.fern) for a runtime shift with an
+inferred count.
 
 ## Build and run
 
@@ -31,9 +33,8 @@ target/empty
 echo $?
 ```
 
-The example exits with status zero. The CLI is `fern <input.fern> -o <output>`.
-The output directory must already exist. Prefix filenames beginning with `-`
-with `./`.
+The CLI is `fern <input.fern> -o <output>`. The output directory must already
+exist. Prefix filenames beginning with `-` with `./`.
 
 `QBE` and `CC` can each specify a tool executable name or path. They do not
 accept command-line flags. QBE must default to the development host's target;
@@ -51,6 +52,9 @@ function body, blocks, conversions, parenthesized groups, unary operators, and
 binary expression-tree depth. Deeper nesting produces a source diagnostic
 before recursive compiler phases can exhaust the stack. Untyped constant
 left-shift counts above 1,000,000 produce a compiler resource-limit diagnostic.
+Integer literals are limited to 4,096 digits, and untyped constant-folding
+results are limited to 2,000,000 significant bits. Diagnostics excerpt source
+lines longer than 240 bytes.
 
 ## Development
 

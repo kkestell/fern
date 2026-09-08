@@ -32,6 +32,7 @@ missing. The architecture document is not required to begin work.
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
 - `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
 - `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
+- `src/snapshots/` — checked-in frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests.
 - `examples/` — Fern programs demonstrating supported syntax and semantics;

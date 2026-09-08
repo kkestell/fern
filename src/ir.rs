@@ -1,8 +1,6 @@
 use crate::{
     CompileError,
-    frontend::{
-        BinaryOperator, Expression, ExpressionKind, Statement, StatementKind, UnaryOperator,
-    },
+    frontend::{BinaryOperator, Expression, Statement, StatementKind, UnaryOperator},
     semantic::{Binding, CheckedEntry, ExpressionValue, Type},
 };
 use la_arena::Idx;
@@ -64,12 +62,7 @@ impl Operand {
     fn verify(self, preceding: &[Value]) -> Result<Type, CompileError> {
         match self {
             Self::Integer { value, ty } => {
-                let min = if ty.signed() {
-                    -(1i128 << (ty.width() - 1))
-                } else {
-                    0
-                };
-                if value < min || value > i128::from(ty.max()) {
+                if value < ty.min() || value > i128::from(ty.max()) {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR integer {value} out of range for {ty:?}"
                     )));
@@ -165,8 +158,19 @@ fn lower_expression(
     entry: &mut Entry,
 ) -> Value {
     let expression = &checked.expressions[id];
+    if matches!(
+        expression.value,
+        ExpressionValue::Integer
+            | ExpressionValue::Grouping { .. }
+            | ExpressionValue::Conversion { .. }
+            | ExpressionValue::Unary { .. }
+            | ExpressionValue::Binary { .. }
+    ) && let Some(constant) = expression.constant.as_ref()
+    {
+        return constant_value(constant, expression.ty);
+    }
     match &expression.value {
-        ExpressionValue::Integer(value) => constant_value(value, expression.ty),
+        ExpressionValue::Integer => unreachable!("integer expressions are constant"),
         ExpressionValue::Reference(binding) => Value {
             span: None,
             ty: expression.ty,
@@ -175,11 +179,11 @@ fn lower_expression(
         ExpressionValue::Grouping { expression } => {
             lower_expression(checked, *expression, bindings, entry)
         }
-        ExpressionValue::Conversion { operand, .. } => {
+        ExpressionValue::Conversion {
+            operand,
+            truncating,
+        } => {
             let operand = lower_operand(checked, *operand, bindings, entry);
-            let ExpressionValue::Conversion { truncating, .. } = &expression.value else {
-                unreachable!()
-            };
             Value {
                 span: Some(checked.syntax.expressions[id].span.clone()),
                 ty: expression.ty,
@@ -189,15 +193,12 @@ fn lower_expression(
                 },
             }
         }
-        ExpressionValue::Unary { operator, operand } => {
-            if let Some(constant) = expression.constant.as_ref() {
-                return constant_value(constant, expression.ty);
-            }
+        ExpressionValue::Unary {
+            operator,
+            operator_span,
+            operand,
+        } => {
             let operand = lower_operand(checked, *operand, bindings, entry);
-            let ExpressionKind::Unary { operator_span, .. } = &checked.syntax.expressions[id].kind
-            else {
-                unreachable!()
-            };
             Value {
                 span: Some(operator_span.clone()),
                 ty: expression.ty,
@@ -209,36 +210,12 @@ fn lower_expression(
         }
         ExpressionValue::Binary {
             operator,
+            operator_span,
             left,
             right,
         } => {
-            if let Some(constant) = expression.constant.as_ref() {
-                return constant_value(constant, expression.ty);
-            }
             let left = lower_operand(checked, *left, bindings, entry);
-            let checked_right = &checked.expressions[*right];
-            let right = if matches!(
-                operator,
-                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
-            ) && checked_right.untyped
-                && checked_right
-                    .constant
-                    .as_ref()
-                    .is_some_and(|count| count >= &num_bigint::BigInt::from(expression.ty.width()))
-            {
-                // Runtime overshifts depend only on the count reaching the value width.
-                // Keep exact untyped counts out of the fixed-width IR representation.
-                Operand::Integer {
-                    value: i128::from(expression.ty.width()),
-                    ty: Type::Int,
-                }
-            } else {
-                lower_operand(checked, *right, bindings, entry)
-            };
-            let ExpressionKind::Binary { operator_span, .. } = &checked.syntax.expressions[id].kind
-            else {
-                unreachable!()
-            };
+            let right = lower_operand(checked, *right, bindings, entry);
             Value {
                 span: Some(operator_span.clone()),
                 ty: expression.ty,
@@ -302,11 +279,7 @@ fn lower_body(
                 }
             }
             StatementKind::Exit { argument } => {
-                let value = lower_expression(checked, *argument, bindings, entry);
-                entry.exit = match value.kind {
-                    ValueKind::Copy(operand) => operand,
-                    _ => Operand::Value(entry.push(value)),
-                };
+                entry.exit = lower_operand(checked, *argument, bindings, entry);
                 return true;
             }
         }
@@ -489,22 +462,7 @@ mod tests {
     }
 
     fn ranges() -> [(Type, i128, i128); 10] {
-        [
-            (Type::I8, -128, 127),
-            (Type::I16, -32768, 32767),
-            (Type::I32, -2147483648, 2147483647),
-            (Type::I64, -9223372036854775808, 9223372036854775807),
-            (Type::U8, 0, 255),
-            (Type::U16, 0, 65535),
-            (Type::U32, 0, 4294967295),
-            (Type::U64, 0, 18446744073709551615),
-            (
-                Type::Int,
-                -(1i128 << (Type::Int.width() - 1)),
-                i128::from(Type::Int.max()),
-            ),
-            (Type::Uint, 0, i128::from(Type::Uint.max())),
-        ]
+        Type::ALL.map(|ty| (ty, ty.min(), i128::from(ty.max())))
     }
 
     #[test]
@@ -713,26 +671,6 @@ mod tests {
             }
         );
         assert_eq!(entry.entry().values[2].ty, Type::U64);
-    }
-
-    #[test]
-    fn lowering_canonicalizes_exact_runtime_overshift_counts() {
-        let syntax = frontend::parse(
-            "fn main() -> void {
-                var value: u8 = 1;
-                const shifted = value << 99999999999999999999999999999999999999999999999999;
-            }",
-        )
-        .unwrap();
-        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
-        assert_eq!(
-            entry.entry().values[1].kind,
-            ValueKind::Binary {
-                operator: BinaryOperator::ShiftLeft,
-                left: Operand::Value(ValueId(0)),
-                right: integer(8, Type::Int),
-            }
-        );
     }
 
     #[test]

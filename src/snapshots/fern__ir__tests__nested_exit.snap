@@ -7,27 +7,55 @@ Entry {
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 1,
-                    ty: Int,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 42,
-                    ty: Int,
-                },
+            kind: Load(
+                LocalId(
+                    0,
+                ),
             ),
         },
     ],
-    exit: Value(
-        ValueId(
-            1,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
         ),
-    ),
+        locals: [
+            Int,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 42,
+                            ty: Int,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                },
+            },
+        ],
+    },
 }

@@ -17,8 +17,12 @@ conversions. See [integer conversions](examples/integer_conversions.fern) for
 checked and truncating forms, and
 [integer expressions](examples/integer_expressions.fern) for arithmetic,
 bitwise, and shift operators. See
-[hardened integers](examples/hardened_integers.fern) for a runtime shift with an
-inferred count.
+[hardened integers](examples/hardened_integers.fern) for a runtime shift with
+an inferred count,
+[module-level declarations](examples/module_level_declarations.fern) for
+file-scope initialization and mutation, and
+[branches and loops](examples/branches_and_loops.fern) for boolean expressions,
+conditionals, and loop control.
 
 ## Build and run
 

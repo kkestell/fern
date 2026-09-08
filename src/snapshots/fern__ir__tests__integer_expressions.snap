@@ -7,21 +7,19 @@ Entry {
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 40,
-                    ty: Int,
-                },
+            kind: Load(
+                LocalId(
+                    0,
+                ),
             ),
         },
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 2,
-                    ty: Int,
-                },
+            kind: Load(
+                LocalId(
+                    1,
+                ),
             ),
         },
         Value {
@@ -31,6 +29,7 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Add,
+                form: Infix,
                 left: Value(
                     ValueId(
                         0,
@@ -42,6 +41,24 @@ Entry {
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -50,17 +67,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Subtract,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        3,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        4,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -69,17 +105,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Multiply,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        6,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        7,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -88,17 +143,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Divide,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        9,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        10,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -107,17 +181,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Remainder,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        12,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        13,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -126,17 +219,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: WrappingAdd,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        15,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        16,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -145,17 +257,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: WrappingSubtract,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        18,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        19,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -164,17 +295,27 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: WrappingMultiply,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        21,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        22,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -185,10 +326,19 @@ Entry {
                 operator: Negate,
                 operand: Value(
                     ValueId(
-                        0,
+                        24,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -199,10 +349,19 @@ Entry {
                 operator: WrappingNegate,
                 operand: Value(
                     ValueId(
-                        0,
+                        26,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -213,10 +372,28 @@ Entry {
                 operator: Complement,
                 operand: Value(
                     ValueId(
-                        0,
+                        28,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -225,17 +402,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: And,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        30,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        31,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -246,7 +442,7 @@ Entry {
                 operator: Complement,
                 operand: Value(
                     ValueId(
-                        1,
+                        34,
                     ),
                 ),
             },
@@ -258,17 +454,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: And,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        33,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        14,
+                        35,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -277,17 +492,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Xor,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        37,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        38,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -296,17 +530,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Or,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        40,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        41,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -315,17 +568,36 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: ShiftLeft,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        43,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        44,
                     ),
                 ),
             },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -334,14 +606,15 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: ShiftRight,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        0,
+                        46,
                     ),
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        47,
                     ),
                 ),
             },
@@ -349,17 +622,488 @@ Entry {
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 130,
-                    ty: Int,
-                },
+            kind: Load(
+                LocalId(
+                    2,
+                ),
             ),
         },
     ],
-    exit: Value(
-        ValueId(
-            2,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
         ),
-    ),
+        locals: [
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 40,
+                            ty: Int,
+                        },
+                    },
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Integer {
+                            value: 2,
+                            ty: Int,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            2,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            3,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            4,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            5,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            3,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                5,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            6,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            7,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            8,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            4,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                8,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            9,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            10,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            11,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            5,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                11,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            12,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            13,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            14,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            6,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                14,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            15,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            16,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            17,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            7,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                17,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            18,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            19,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            20,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            8,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                20,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            21,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            22,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            23,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            9,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                23,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            24,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            25,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            10,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                25,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            26,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            27,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            11,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                27,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            28,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            29,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            12,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                29,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            30,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            31,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            32,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            13,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                32,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            33,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            34,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            35,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            36,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            14,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                36,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            37,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            38,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            39,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            15,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                39,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            40,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            41,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            42,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            16,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                42,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            43,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            44,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            45,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            17,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                45,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            46,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            47,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            48,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            18,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                48,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            49,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            49,
+                        ),
+                    ),
+                },
+            },
+        ],
+    },
 }

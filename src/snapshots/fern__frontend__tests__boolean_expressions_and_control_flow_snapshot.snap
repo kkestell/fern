@@ -1,0 +1,77 @@
+---
+source: src/frontend.rs
+expression: project(&parse(source).unwrap())
+---
+fn main name=3..7 span=0..356
+  var ready name=24..29 annotation=Some(TypeAnnotation { ty: Bool, span: 31..35 }) span=20..43
+    boolean true span=38..42
+  const stopped name=50..57 annotation=None span=44..66
+    boolean false span=60..65
+  const result name=73..79 annotation=None span=67..122
+    logical Or operator=104..106 span=82..121
+      logical And operator=92..94 span=82..103
+        comparison Less operator=88..89 span=82..91
+          binary Add operator=84..85 span=82..87
+            integer 1 span=82..83
+            integer 2 span=86..87
+          integer 4 span=90..91
+        logical Not operator=95..96 span=95..103
+          reference stopped span=96..103
+      comparison Equal operator=113..115 span=107..121
+        reference ready span=107..112
+        boolean false span=116..121
+  if span=123..181
+    reference ready span=126..131
+  then
+    exit span=134..142
+      integer 1 span=139..140
+  else
+    if span=150..181
+      reference stopped span=153..160
+    then
+      exit span=163..171
+        integer 2 span=168..169
+    else
+      block span=179..181
+  for label=- label_span=None span=182..196
+    infinite
+    body
+      break label=- label_span=None span=188..194
+  for label=- label_span=None span=197..220
+    condition
+      reference ready span=201..206
+    body
+      continue label=- label_span=None span=209..218
+  for label=rows label_span=Some(226..230) span=221..291
+    initializer
+      var i name=235..236 annotation=Some(TypeAnnotation { ty: Int, span: 238..241 }) span=231..246
+        integer 0 span=244..245
+    condition
+      comparison Less operator=249..250 span=247..252
+        reference i span=247..248
+        integer 4 span=251..252
+    post
+      compound assign i Add= name=254..255 operator=256..258 span=254..260
+        integer 1 span=259..260
+    body
+      if span=263..289
+        comparison GreaterEqual operator=268..270 span=266..272
+          reference i span=266..267
+          integer 2 span=271..272
+      then
+        break label=rows label_span=Some(282..286) span=275..287
+  for label=- label_span=None span=292..354
+    initializer
+      assign cursor name=296..302 span=296..307
+        integer 0 span=305..306
+    condition
+      comparison NotEqual operator=315..317 span=308..319
+        reference cursor span=308..314
+        integer 2 span=318..319
+    post
+      assign cursor name=321..327 span=321..340
+        binary Add operator=337..338 span=330..340
+          reference cursor span=330..336
+          integer 1 span=339..340
+    body
+      continue label=- label_span=None span=343..352

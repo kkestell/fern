@@ -3,21 +3,22 @@ source: src/ir.rs
 expression: entry.entry()
 ---
 Entry {
-    values: [
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 42,
-                    ty: Int,
-                },
-            ),
-        },
-    ],
-    exit: Value(
-        ValueId(
+    values: [],
+    flow: ControlFlow {
+        entry: BlockId(
             0,
         ),
-    ),
+        locals: [],
+        blocks: [
+            Block {
+                instructions: [],
+                terminator: Exit {
+                    status: Integer {
+                        value: 42,
+                        ty: Int,
+                    },
+                },
+            },
+        ],
+    },
 }

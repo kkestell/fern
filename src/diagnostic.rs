@@ -41,7 +41,7 @@ impl<'a> DiagnosticRenderer<'a> {
     pub(crate) fn render(&self, diagnostic: &Diagnostic) -> String {
         if let Some((line, line_number, column)) = self.source.get_byte_line(diagnostic.span.start)
             && let Some(line_text) = self.source.get_line_text(line)
-            && line_text.len() > MAX_RENDERED_LINE_BYTES
+            && self.span_touches_long_line(diagnostic, line_number)
         {
             return self.render_long_line(diagnostic, line_text, line_number, column);
         }
@@ -60,6 +60,25 @@ impl<'a> DiagnosticRenderer<'a> {
             .write((self.path.as_str(), &self.source), &mut rendered)
             .expect("writing diagnostics to a Vec cannot fail");
         String::from_utf8(rendered).expect("diagnostics are UTF-8")
+    }
+
+    fn span_touches_long_line(&self, diagnostic: &Diagnostic, start_line: usize) -> bool {
+        let last_byte = diagnostic
+            .span
+            .end
+            .saturating_sub(1)
+            .max(diagnostic.span.start)
+            .min(self.source.text().len());
+        let end_line = self
+            .source
+            .get_byte_line(last_byte)
+            .map_or(start_line, |(_, line, _)| line);
+        (start_line..=end_line).any(|line| {
+            self.source
+                .line(line)
+                .and_then(|line| self.source.get_line_text(line))
+                .is_some_and(|text| text.len() > MAX_RENDERED_LINE_BYTES)
+        })
     }
 
     fn render_long_line(
@@ -170,5 +189,25 @@ mod tests {
             prefix.len() + digits.len()
         )));
         assert!(rendered.contains('…'));
+    }
+
+    #[test]
+    fn multiline_spans_ending_on_long_lines_are_bounded() {
+        let prefix = "fn main() -> void {\nvar x: int = (\ntrue";
+        let text = format!("{prefix}{});\n}}", " ".repeat(200_000));
+        let source = Source {
+            path: PathBuf::from("long.fern"),
+            text,
+        };
+        let start = source.text.rfind('(').unwrap();
+        let end = source.text.find(");").unwrap() + 1;
+        let rendered = Diagnostic::new(start..end, "type mismatch").render(&source);
+        assert!(
+            rendered.len() < 1_000,
+            "diagnostic was {} bytes",
+            rendered.len()
+        );
+        assert!(rendered.contains("long.fern:2:"));
+        assert!(rendered.contains(&format!("bytes {start}..{end}")));
     }
 }

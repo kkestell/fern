@@ -7,52 +7,10 @@ Entry {
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 40,
-                    ty: Int,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        0,
-                    ),
+            kind: Load(
+                LocalId(
+                    0,
                 ),
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 2,
-                    ty: Int,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U8,
-            kind: Copy(
-                Integer {
-                    value: 1,
-                    ty: U8,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U8,
-            kind: Copy(
-                Integer {
-                    value: 2,
-                    ty: U8,
-                },
             ),
         },
         Value {
@@ -62,22 +20,100 @@ Entry {
             ty: Int,
             kind: Binary {
                 operator: Add,
+                form: Infix,
                 left: Value(
                     ValueId(
-                        1,
+                        0,
                     ),
                 ),
-                right: Value(
-                    ValueId(
-                        2,
-                    ),
-                ),
+                right: Integer {
+                    value: 2,
+                    ty: Int,
+                },
             },
         },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
     ],
-    exit: Value(
-        ValueId(
-            5,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
         ),
-    ),
+        locals: [
+            Int,
+            U8,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 40,
+                            ty: Int,
+                        },
+                    },
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Integer {
+                            value: 1,
+                            ty: U8,
+                        },
+                    },
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Integer {
+                            value: 2,
+                            ty: U8,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                },
+            },
+        ],
+    },
 }

@@ -5,7 +5,7 @@ expression: project(&parse(source).unwrap())
 fn main name=3..7 span=0..108
   const exit_code name=26..35 annotation=None span=20..43
     integer 0x2A span=38..42
-  var copy name=48..52 annotation=Some(TypeAnnotation { name: "int", span: 54..57 }) span=44..70
+  var copy name=48..52 annotation=Some(TypeAnnotation { ty: Int, span: 54..57 }) span=44..70
     reference exit_code span=60..69
   exit span=71..83
     reference copy span=76..80

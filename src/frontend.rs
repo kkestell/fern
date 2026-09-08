@@ -1,10 +1,10 @@
-use crate::diagnostic::Diagnostic;
+use crate::{diagnostic::Diagnostic, types::Type};
 use la_arena::{Arena, Idx};
 use lasso::{Rodeo, Spur};
 use logos::Logos;
 use std::ops::Range;
 
-#[derive(Logos, Debug, PartialEq)]
+#[derive(Logos, Debug, Clone, Copy, PartialEq)]
 #[logos(skip r"[ \t\n\r\x0B\x0C]+")]
 enum Token {
     #[token("fn")]
@@ -17,12 +17,38 @@ enum Token {
     Var,
     #[token("exit")]
     Exit,
+    #[token("if")]
+    If,
+    #[token("else")]
+    Else,
+    #[token("for")]
+    For,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
     #[regex("[0-9][a-zA-Z0-9_]*")]
     Integer,
     #[token(":")]
     Colon,
     #[token("=")]
     Equals,
+    #[token("==")]
+    EqualsEquals,
+    #[token("!=")]
+    NotEquals,
+    #[token("<=")]
+    LessEqual,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token(">")]
+    Greater,
     #[token(";")]
     Semicolon,
     #[token(",")]
@@ -31,30 +57,62 @@ enum Token {
     Dot,
     #[token("+%")]
     WrappingPlus,
+    #[token("+%=")]
+    WrappingPlusEquals,
     #[token("-%")]
     WrappingMinus,
+    #[token("-%=")]
+    WrappingMinusEquals,
     #[token("*%")]
     WrappingStar,
+    #[token("*%=")]
+    WrappingStarEquals,
     #[token("<<")]
     ShiftLeft,
+    #[token("<<=")]
+    ShiftLeftEquals,
     #[token(">>")]
     ShiftRight,
+    #[token(">>=")]
+    ShiftRightEquals,
     #[token("+")]
     Plus,
+    #[token("+=")]
+    PlusEquals,
     #[token("-")]
     Minus,
+    #[token("-=")]
+    MinusEquals,
     #[token("*")]
     Star,
+    #[token("*=")]
+    StarEquals,
     #[token("/")]
     Slash,
+    #[token("/=")]
+    SlashEquals,
     #[token("%")]
     Percent,
+    #[token("%=")]
+    PercentEquals,
     #[token("&")]
     Ampersand,
+    #[token("&&")]
+    LogicalAnd,
+    #[token("&=")]
+    AmpersandEquals,
     #[token("^")]
     Caret,
+    #[token("^=")]
+    CaretEquals,
     #[token("|")]
     Pipe,
+    #[token("||")]
+    LogicalOr,
+    #[token("|=")]
+    PipeEquals,
+    #[token("!")]
+    Bang,
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Name,
     #[token("(")]
@@ -116,7 +174,6 @@ pub(crate) enum TopLevelItem {
 #[derive(Debug)]
 pub(crate) struct Statement {
     pub kind: StatementKind,
-    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
 }
 
@@ -134,17 +191,57 @@ pub(crate) enum StatementKind {
         name_span: Range<usize>,
         value: Idx<Expression>,
     },
+    CompoundAssignment {
+        name: Spur,
+        name_span: Range<usize>,
+        operator: BinaryOperator,
+        operator_span: Range<usize>,
+        value: Idx<Expression>,
+    },
     Block {
         body: Vec<Idx<Statement>>,
     },
     Exit {
         argument: Idx<Expression>,
     },
+    If {
+        condition: Idx<Expression>,
+        then_body: Vec<Idx<Statement>>,
+        else_branch: Option<Idx<Statement>>,
+    },
+    For {
+        label: Option<Label>,
+        header: ForHeader,
+        body: Vec<Idx<Statement>>,
+    },
+    Break {
+        label: Option<Label>,
+    },
+    Continue {
+        label: Option<Label>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct Label {
+    pub name: Spur,
+    pub name_span: Range<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ForHeader {
+    Infinite,
+    Condition(Idx<Expression>),
+    ThreeClause {
+        initializer: Idx<Statement>,
+        condition: Idx<Expression>,
+        post: Idx<Statement>,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct TypeAnnotation {
-    pub name: String,
+    pub ty: Type,
     pub span: Range<usize>,
 }
 
@@ -160,6 +257,29 @@ pub(crate) enum UnaryOperator {
     Negate,
     WrappingNegate,
     Complement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComparisonOperator {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogicalOperator {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InfixOperator {
+    Integer(BinaryOperator),
+    Comparison(ComparisonOperator),
+    Logical(LogicalOperator),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +322,7 @@ impl BinaryOperator {
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
+    Boolean(bool),
     Reference(Spur),
     Grouping {
         expression: Idx<Expression>,
@@ -216,6 +337,22 @@ pub(crate) enum ExpressionKind {
         operator_span: Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
+    },
+    Comparison {
+        operator: ComparisonOperator,
+        operator_span: Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
+    Logical {
+        operator: LogicalOperator,
+        operator_span: Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
+    LogicalNot {
+        operator_span: Range<usize>,
+        operand: Idx<Expression>,
     },
     Conversion {
         destination: TypeAnnotation,
@@ -236,16 +373,20 @@ pub(crate) struct Syntax {
 fn reserved(name: &str) -> bool {
     matches!(
         name,
-        "const" | "var" | "true" | "false" | "fn" | "void" | "exit" | "bool"
-    ) || integer_type(name)
-}
-
-const INTEGER_TYPE_NAMES: [&str; 10] = [
-    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint",
-];
-
-fn integer_type(name: &str) -> bool {
-    INTEGER_TYPE_NAMES.contains(&name)
+        "const"
+            | "var"
+            | "true"
+            | "false"
+            | "fn"
+            | "void"
+            | "exit"
+            | "bool"
+            | "if"
+            | "else"
+            | "for"
+            | "break"
+            | "continue"
+    ) || Type::named(name).is_some()
 }
 
 pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
@@ -267,13 +408,15 @@ pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
 
 pub(crate) const MAX_INTEGER_LITERAL_DIGITS: usize = 4_096;
 
-fn valid_integer(spelling: &str) -> Result<(), &'static str> {
+fn valid_integer(spelling: &str) -> Result<(), String> {
     let (_, digits, suffix) = integer_parts(spelling);
     if digits.is_empty() || !suffix.is_empty() {
-        return Err("malformed integer literal");
+        return Err("malformed integer literal".to_owned());
     }
     if digits.len() > MAX_INTEGER_LITERAL_DIGITS {
-        return Err("integer literal exceeds compiler limit of 4096 digits");
+        return Err(format!(
+            "integer literal exceeds compiler limit of {MAX_INTEGER_LITERAL_DIGITS} digits"
+        ));
     }
     Ok(())
 }
@@ -314,7 +457,7 @@ pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
 impl Parser<'_> {
     fn enter_nesting(&mut self) -> Result<(), Diagnostic> {
         if self.nesting == MAX_NESTING {
-            return Err(self.error("source nesting exceeds compiler limit of 128"));
+            return Err(self.nesting_error());
         }
         self.nesting += 1;
         Ok(())
@@ -347,8 +490,14 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn error(&self, message: &str) -> Diagnostic {
+    fn error(&self, message: impl Into<String>) -> Diagnostic {
         Diagnostic::new(self.span.clone(), message)
+    }
+
+    fn nesting_error(&self) -> Diagnostic {
+        self.error(format!(
+            "source nesting exceeds compiler limit of {MAX_NESTING}"
+        ))
     }
 
     fn expect(&mut self, token: Token, message: &str) -> Result<Range<usize>, Diagnostic> {
@@ -419,25 +568,21 @@ impl Parser<'_> {
 
     fn statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
         let start = self.span.start;
-        if self.current == Some(Token::LeftBrace) {
-            let (body, end) = self.body()?;
-            return Ok(self.syntax.statements.alloc(Statement {
-                kind: StatementKind::Block { body },
-                span: start..end,
-            }));
+        match self.current {
+            Some(Token::LeftBrace) => {
+                let (body, end) = self.body()?;
+                return Ok(self.syntax.statements.alloc(Statement {
+                    kind: StatementKind::Block { body },
+                    span: start..end,
+                }));
+            }
+            Some(Token::If) => return self.if_statement(),
+            Some(Token::For) => return self.for_statement(),
+            _ => {}
         }
         let kind = match self.current {
             Some(Token::Const) | Some(Token::Var) => self.binding()?,
-            Some(Token::Name) => {
-                let (name, name_span) = self.name("expected an assignment target")?;
-                self.expect(Token::Equals, "expected `=`")?;
-                let value = self.expression()?;
-                StatementKind::Assignment {
-                    name,
-                    name_span,
-                    value,
-                }
-            }
+            Some(Token::Name) => self.assignment()?,
             Some(Token::Exit) => {
                 self.advance()?;
                 self.expect(Token::LeftParen, "expected `(`")?;
@@ -454,13 +599,205 @@ impl Parser<'_> {
                 self.expect(Token::RightParen, "expected `)` after exit argument")?;
                 StatementKind::Exit { argument }
             }
-            _ => return Err(self.error("expected a declaration, assignment, block, or `exit`")),
+            Some(Token::Break) => {
+                self.advance()?;
+                StatementKind::Break {
+                    label: self.optional_label("expected a label after `:`")?,
+                }
+            }
+            Some(Token::Continue) => {
+                self.advance()?;
+                StatementKind::Continue {
+                    label: self.optional_label("expected a label after `:`")?,
+                }
+            }
+            _ => {
+                return Err(self.error(
+                    "expected a declaration, assignment, block, `if`, `for`, loop control, or `exit`",
+                ));
+            }
         };
         let end = self.expect(Token::Semicolon, "expected `;`")?.end;
         Ok(self.syntax.statements.alloc(Statement {
             kind,
             span: start..end,
         }))
+    }
+
+    fn assignment(&mut self) -> Result<StatementKind, Diagnostic> {
+        let (name, name_span) = self.name("expected an assignment target")?;
+        let (operator, operator_span) = self.assignment_operator()?;
+        let value = self.expression()?;
+        Ok(if let Some(operator) = operator {
+            StatementKind::CompoundAssignment {
+                name,
+                name_span,
+                operator,
+                operator_span,
+                value,
+            }
+        } else {
+            StatementKind::Assignment {
+                name,
+                name_span,
+                value,
+            }
+        })
+    }
+
+    fn assignment_operator(
+        &mut self,
+    ) -> Result<(Option<BinaryOperator>, Range<usize>), Diagnostic> {
+        let operator = match self.current {
+            Some(Token::Equals) => None,
+            Some(Token::PlusEquals) => Some(BinaryOperator::Add),
+            Some(Token::MinusEquals) => Some(BinaryOperator::Subtract),
+            Some(Token::StarEquals) => Some(BinaryOperator::Multiply),
+            Some(Token::SlashEquals) => Some(BinaryOperator::Divide),
+            Some(Token::PercentEquals) => Some(BinaryOperator::Remainder),
+            Some(Token::AmpersandEquals) => Some(BinaryOperator::And),
+            Some(Token::PipeEquals) => Some(BinaryOperator::Or),
+            Some(Token::CaretEquals) => Some(BinaryOperator::Xor),
+            Some(Token::ShiftLeftEquals) => Some(BinaryOperator::ShiftLeft),
+            Some(Token::ShiftRightEquals) => Some(BinaryOperator::ShiftRight),
+            Some(Token::WrappingPlusEquals) => Some(BinaryOperator::WrappingAdd),
+            Some(Token::WrappingMinusEquals) => Some(BinaryOperator::WrappingSubtract),
+            Some(Token::WrappingStarEquals) => Some(BinaryOperator::WrappingMultiply),
+            _ => return Err(self.error("expected `=`")),
+        };
+        let span = self.span.clone();
+        self.advance()?;
+        Ok((operator, span))
+    }
+
+    fn optional_label(&mut self, expected: &str) -> Result<Option<Label>, Diagnostic> {
+        if self.current != Some(Token::Colon) {
+            return Ok(None);
+        }
+        self.advance()?;
+        let (name, name_span) = self.name(expected)?;
+        Ok(Some(Label { name, name_span }))
+    }
+
+    fn if_statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
+        let start = self.expect(Token::If, "expected `if`")?.start;
+        let condition = self.expression()?;
+        let (then_body, mut end) = self.body()?;
+        let else_branch = if self.current == Some(Token::Else) {
+            self.advance()?;
+            let branch = if self.current == Some(Token::If) {
+                self.enter_nesting()?;
+                let branch = self.if_statement()?;
+                self.nesting -= 1;
+                branch
+            } else {
+                let block_start = self.span.start;
+                let (body, block_end) = self.body()?;
+                self.syntax.statements.alloc(Statement {
+                    kind: StatementKind::Block { body },
+                    span: block_start..block_end,
+                })
+            };
+            end = self.syntax.statements[branch].span.end;
+            Some(branch)
+        } else {
+            None
+        };
+        Ok(self.syntax.statements.alloc(Statement {
+            kind: StatementKind::If {
+                condition,
+                then_body,
+                else_branch,
+            },
+            span: start..end,
+        }))
+    }
+
+    fn for_statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
+        let start = self.expect(Token::For, "expected `for`")?.start;
+        let label = self.optional_label("expected a loop label after `:`")?;
+        let header = if self.current == Some(Token::LeftBrace) {
+            ForHeader::Infinite
+        } else if matches!(self.current, Some(Token::Const | Token::Var))
+            || self.starts_assignment()
+        {
+            let initializer_start = self.span.start;
+            let initializer_kind = if matches!(self.current, Some(Token::Const | Token::Var)) {
+                self.binding()?
+            } else {
+                self.assignment()?
+            };
+            if let StatementKind::CompoundAssignment { operator_span, .. } = &initializer_kind {
+                return Err(Diagnostic::new(
+                    operator_span.clone(),
+                    "for initializer does not permit compound assignment",
+                ));
+            }
+            let initializer_end = self
+                .expect(Token::Semicolon, "expected `;` after for initializer")?
+                .end;
+            let initializer = self.syntax.statements.alloc(Statement {
+                kind: initializer_kind,
+                span: initializer_start..initializer_end,
+            });
+            let condition = self.expression()?;
+            self.expect(Token::Semicolon, "expected `;` after for condition")?;
+            if !self.starts_assignment() {
+                return Err(self.error("expected an assignment after second `;`"));
+            }
+            let post_start = self.span.start;
+            let post_kind = self.assignment()?;
+            let post_end = match &post_kind {
+                StatementKind::Assignment { value, .. }
+                | StatementKind::CompoundAssignment { value, .. } => {
+                    self.syntax.expressions[*value].span.end
+                }
+                _ => unreachable!(),
+            };
+            let post = self.syntax.statements.alloc(Statement {
+                kind: post_kind,
+                span: post_start..post_end,
+            });
+            ForHeader::ThreeClause {
+                initializer,
+                condition,
+                post,
+            }
+        } else {
+            ForHeader::Condition(self.expression()?)
+        };
+        let (body, end) = self.body()?;
+        Ok(self.syntax.statements.alloc(Statement {
+            kind: StatementKind::For {
+                label,
+                header,
+                body,
+            },
+            span: start..end,
+        }))
+    }
+
+    fn starts_assignment(&self) -> bool {
+        if self.current != Some(Token::Name) || reserved(self.lexer.slice()) {
+            return false;
+        }
+        matches!(
+            self.lexer.clone().next(),
+            Some(Ok(Token::Equals
+                | Token::PlusEquals
+                | Token::MinusEquals
+                | Token::StarEquals
+                | Token::SlashEquals
+                | Token::PercentEquals
+                | Token::AmpersandEquals
+                | Token::PipeEquals
+                | Token::CaretEquals
+                | Token::ShiftLeftEquals
+                | Token::ShiftRightEquals
+                | Token::WrappingPlusEquals
+                | Token::WrappingMinusEquals
+                | Token::WrappingStarEquals))
+        )
     }
 
     fn binding(&mut self) -> Result<StatementKind, Diagnostic> {
@@ -473,7 +810,7 @@ impl Parser<'_> {
         })?;
         let annotation = if self.current == Some(Token::Colon) {
             self.advance()?;
-            Some(self.integer_annotation()?)
+            Some(self.type_annotation()?)
         } else {
             None
         };
@@ -488,12 +825,15 @@ impl Parser<'_> {
         })
     }
 
-    fn integer_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
-        if self.current != Some(Token::Name) || !integer_type(self.lexer.slice()) {
-            return Err(self.error("expected an integer type"));
-        }
+    fn type_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
+        let Some(ty) = (self.current == Some(Token::Name))
+            .then(|| Type::named(self.lexer.slice()))
+            .flatten()
+        else {
+            return Err(self.error("expected a type"));
+        };
         let annotation = TypeAnnotation {
-            name: self.lexer.slice().to_owned(),
+            ty,
             span: self.span.clone(),
         };
         self.advance()?;
@@ -520,45 +860,85 @@ impl Parser<'_> {
             if self.nesting + depth > MAX_NESTING {
                 return Err(Diagnostic::new(
                     operator_span,
-                    "source nesting exceeds compiler limit of 128",
+                    format!("source nesting exceeds compiler limit of {MAX_NESTING}"),
                 ));
             }
             let span =
                 self.syntax.expressions[left].span.start..self.syntax.expressions[right].span.end;
-            left = self.syntax.expressions.alloc(Expression {
-                kind: ExpressionKind::Binary {
+            let kind = match operator {
+                InfixOperator::Integer(operator) => ExpressionKind::Binary {
                     operator,
                     operator_span,
                     left,
                     right,
                 },
-                span,
-                depth,
-            });
+                InfixOperator::Comparison(operator) => ExpressionKind::Comparison {
+                    operator,
+                    operator_span,
+                    left,
+                    right,
+                },
+                InfixOperator::Logical(operator) => ExpressionKind::Logical {
+                    operator,
+                    operator_span,
+                    left,
+                    right,
+                },
+            };
+            left = self
+                .syntax
+                .expressions
+                .alloc(Expression { kind, span, depth });
         }
         Ok(left)
     }
 
-    fn binary_operator(&self) -> Option<(BinaryOperator, u8)> {
+    fn binary_operator(&self) -> Option<(InfixOperator, u8)> {
         Some(match self.current.as_ref()? {
-            Token::Star => (BinaryOperator::Multiply, 2),
-            Token::Slash => (BinaryOperator::Divide, 2),
-            Token::Percent => (BinaryOperator::Remainder, 2),
-            Token::WrappingStar => (BinaryOperator::WrappingMultiply, 2),
-            Token::ShiftLeft => (BinaryOperator::ShiftLeft, 2),
-            Token::ShiftRight => (BinaryOperator::ShiftRight, 2),
-            Token::Ampersand => (BinaryOperator::And, 2),
-            Token::Plus => (BinaryOperator::Add, 1),
-            Token::Minus => (BinaryOperator::Subtract, 1),
-            Token::WrappingPlus => (BinaryOperator::WrappingAdd, 1),
-            Token::WrappingMinus => (BinaryOperator::WrappingSubtract, 1),
-            Token::Caret => (BinaryOperator::Xor, 1),
-            Token::Pipe => (BinaryOperator::Or, 1),
+            Token::Star => (InfixOperator::Integer(BinaryOperator::Multiply), 5),
+            Token::Slash => (InfixOperator::Integer(BinaryOperator::Divide), 5),
+            Token::Percent => (InfixOperator::Integer(BinaryOperator::Remainder), 5),
+            Token::WrappingStar => (InfixOperator::Integer(BinaryOperator::WrappingMultiply), 5),
+            Token::ShiftLeft => (InfixOperator::Integer(BinaryOperator::ShiftLeft), 5),
+            Token::ShiftRight => (InfixOperator::Integer(BinaryOperator::ShiftRight), 5),
+            Token::Ampersand => (InfixOperator::Integer(BinaryOperator::And), 5),
+            Token::Plus => (InfixOperator::Integer(BinaryOperator::Add), 4),
+            Token::Minus => (InfixOperator::Integer(BinaryOperator::Subtract), 4),
+            Token::WrappingPlus => (InfixOperator::Integer(BinaryOperator::WrappingAdd), 4),
+            Token::WrappingMinus => (InfixOperator::Integer(BinaryOperator::WrappingSubtract), 4),
+            Token::Caret => (InfixOperator::Integer(BinaryOperator::Xor), 4),
+            Token::Pipe => (InfixOperator::Integer(BinaryOperator::Or), 4),
+            Token::EqualsEquals => (InfixOperator::Comparison(ComparisonOperator::Equal), 3),
+            Token::NotEquals => (InfixOperator::Comparison(ComparisonOperator::NotEqual), 3),
+            Token::Less => (InfixOperator::Comparison(ComparisonOperator::Less), 3),
+            Token::LessEqual => (InfixOperator::Comparison(ComparisonOperator::LessEqual), 3),
+            Token::Greater => (InfixOperator::Comparison(ComparisonOperator::Greater), 3),
+            Token::GreaterEqual => (
+                InfixOperator::Comparison(ComparisonOperator::GreaterEqual),
+                3,
+            ),
+            Token::LogicalAnd => (InfixOperator::Logical(LogicalOperator::And), 2),
+            Token::LogicalOr => (InfixOperator::Logical(LogicalOperator::Or), 1),
             _ => return None,
         })
     }
 
     fn unary_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
+        if self.current == Some(Token::Bang) {
+            self.enter_nesting()?;
+            let operator_span = self.span.clone();
+            self.advance()?;
+            let operand = self.unary_expression()?;
+            self.nesting -= 1;
+            return Ok(self.syntax.expressions.alloc(Expression {
+                span: operator_span.start..self.syntax.expressions[operand].span.end,
+                depth: self.syntax.expressions[operand].depth + 1,
+                kind: ExpressionKind::LogicalNot {
+                    operator_span,
+                    operand,
+                },
+            }));
+        }
         let operator = match self.current {
             Some(Token::Minus) => UnaryOperator::Negate,
             Some(Token::WrappingMinus) => UnaryOperator::WrappingNegate,
@@ -587,9 +967,11 @@ impl Parser<'_> {
             let spelling = self.lexer.slice().to_owned();
             self.advance()?;
             ExpressionKind::Integer(spelling)
-        } else if self.current == Some(Token::Name) && integer_type(self.lexer.slice()) {
+        } else if self.current == Some(Token::Name)
+            && Type::named(self.lexer.slice()).is_some_and(Type::is_integer)
+        {
             self.enter_nesting()?;
-            let destination = self.integer_annotation()?;
+            let destination = self.type_annotation()?;
             let truncating = if self.current == Some(Token::Dot) {
                 self.advance()?;
                 if self.current != Some(Token::Name) || self.lexer.slice() != "truncate" {
@@ -619,6 +1001,10 @@ impl Parser<'_> {
                 span: span.start..end,
                 depth: self.syntax.expressions[operand].depth + 1,
             }));
+        } else if matches!(self.current, Some(Token::True | Token::False)) {
+            let value = self.current == Some(Token::True);
+            self.advance()?;
+            ExpressionKind::Boolean(value)
         } else if self.current == Some(Token::LeftParen) {
             self.enter_nesting()?;
             self.advance()?;
@@ -708,6 +1094,22 @@ mod tests {
                     .unwrap();
                     *value
                 }
+                StatementKind::CompoundAssignment {
+                    name,
+                    name_span,
+                    operator,
+                    operator_span,
+                    value,
+                } => {
+                    write!(
+                        output,
+                        "{indent}compound assign {} {:?}= name={name_span:?} operator={operator_span:?}",
+                        syntax.names.resolve(name),
+                        operator
+                    )
+                    .unwrap();
+                    *value
+                }
                 StatementKind::Block { body } => {
                     writeln!(output, "{indent}block span={:?}", statement.span).unwrap();
                     project_body(syntax, body, depth + 1, output);
@@ -716,6 +1118,84 @@ mod tests {
                 StatementKind::Exit { argument } => {
                     write!(output, "{indent}exit").unwrap();
                     *argument
+                }
+                StatementKind::If {
+                    condition,
+                    then_body,
+                    else_branch,
+                } => {
+                    writeln!(output, "{indent}if span={:?}", statement.span).unwrap();
+                    project_expression(syntax, *condition, depth + 1, output);
+                    writeln!(output, "{indent}then").unwrap();
+                    project_body(syntax, then_body, depth + 1, output);
+                    if let Some(branch) = else_branch {
+                        writeln!(output, "{indent}else").unwrap();
+                        project_body(syntax, std::slice::from_ref(branch), depth + 1, output);
+                    }
+                    continue;
+                }
+                StatementKind::For {
+                    label,
+                    header,
+                    body,
+                } => {
+                    let label_name = label
+                        .as_ref()
+                        .map(|label| syntax.names.resolve(&label.name))
+                        .unwrap_or("-");
+                    writeln!(
+                        output,
+                        "{indent}for label={label_name} label_span={:?} span={:?}",
+                        label.as_ref().map(|label| &label.name_span),
+                        statement.span
+                    )
+                    .unwrap();
+                    match header {
+                        ForHeader::Infinite => writeln!(output, "{indent}  infinite").unwrap(),
+                        ForHeader::Condition(condition) => {
+                            writeln!(output, "{indent}  condition").unwrap();
+                            project_expression(syntax, *condition, depth + 2, output);
+                        }
+                        ForHeader::ThreeClause {
+                            initializer,
+                            condition,
+                            post,
+                        } => {
+                            writeln!(output, "{indent}  initializer").unwrap();
+                            project_body(
+                                syntax,
+                                std::slice::from_ref(initializer),
+                                depth + 2,
+                                output,
+                            );
+                            writeln!(output, "{indent}  condition").unwrap();
+                            project_expression(syntax, *condition, depth + 2, output);
+                            writeln!(output, "{indent}  post").unwrap();
+                            project_body(syntax, std::slice::from_ref(post), depth + 2, output);
+                        }
+                    }
+                    writeln!(output, "{indent}  body").unwrap();
+                    project_body(syntax, body, depth + 2, output);
+                    continue;
+                }
+                StatementKind::Break { label } | StatementKind::Continue { label } => {
+                    let keyword = if matches!(&statement.kind, StatementKind::Break { .. }) {
+                        "break"
+                    } else {
+                        "continue"
+                    };
+                    writeln!(
+                        output,
+                        "{indent}{keyword} label={} label_span={:?} span={:?}",
+                        label
+                            .as_ref()
+                            .map(|label| syntax.names.resolve(&label.name))
+                            .unwrap_or("-"),
+                        label.as_ref().map(|label| &label.name_span),
+                        statement.span
+                    )
+                    .unwrap();
+                    continue;
                 }
             };
             writeln!(output, " span={:?}", statement.span).unwrap();
@@ -734,6 +1214,9 @@ mod tests {
                 expression.span
             )
             .unwrap(),
+            ExpressionKind::Boolean(value) => {
+                writeln!(output, "{indent}boolean {value} span={:?}", expression.span).unwrap()
+            }
             ExpressionKind::Reference(name) => writeln!(
                 output,
                 "{indent}reference {} span={:?}",
@@ -773,6 +1256,48 @@ mod tests {
                 project_expression(syntax, *left, depth + 1, output);
                 project_expression(syntax, *right, depth + 1, output);
             }
+            ExpressionKind::Comparison {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}comparison {operator:?} operator={operator_span:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *left, depth + 1, output);
+                project_expression(syntax, *right, depth + 1, output);
+            }
+            ExpressionKind::Logical {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}logical {operator:?} operator={operator_span:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *left, depth + 1, output);
+                project_expression(syntax, *right, depth + 1, output);
+            }
+            ExpressionKind::LogicalNot {
+                operator_span,
+                operand,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}logical Not operator={operator_span:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
+            }
             ExpressionKind::Conversion {
                 destination,
                 truncating,
@@ -782,7 +1307,7 @@ mod tests {
                     output,
                     "{indent}{} conversion {} span={:?}",
                     if *truncating { "truncating" } else { "checked" },
-                    destination.name,
+                    destination.ty.name(),
                     expression.span
                 )
                 .unwrap();
@@ -826,7 +1351,7 @@ mod tests {
         for (source, message, span) in [
             ("var = 1;", "expected a binding name after `var`", 4..5),
             ("const value int = 1;", "expected `=`", 12..15),
-            ("var value: bool = 1;", "expected an integer type", 11..15),
+            ("var value: size = 1;", "expected a type", 11..15),
             ("const value = ;", "expected an expression", 14..15),
             ("var value = 1", "expected `;`", 13..13),
         ] {
@@ -845,7 +1370,7 @@ mod tests {
     #[test]
     fn integer_annotations_snapshot() {
         let mut source = String::from("/* 🌿 */ fn main() -> void {\n");
-        for name in INTEGER_TYPE_NAMES {
+        for name in Type::ALL_INTEGERS.map(Type::name) {
             source.push_str(&format!("var value: {name} = 0x2A;\n"));
             source.push_str(&format!("{{ const copy: /* type */ {name} = value; }}\n"));
         }
@@ -860,6 +1385,120 @@ mod tests {
     }
 
     #[test]
+    fn boolean_expressions_and_control_flow_snapshot() {
+        let source = "fn main() -> void { var ready: bool = true; const stopped = false; const result = 1 + 2 < 4 && !stopped || ready == false; if ready { exit(1); } else if stopped { exit(2); } else {} for { break; } for ready { continue; } for :rows var i: int = 0; i < 4; i += 1 { if i >= 2 { break :rows; } } for cursor = 0; cursor != 2; cursor = cursor + 1 { continue; } }";
+        insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn every_compound_assignment_operator_parses() {
+        let operators = [
+            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "+%=", "-%=", "*%=",
+        ];
+        let body = operators
+            .iter()
+            .map(|operator| format!("value {operator} 1;"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let syntax = parse(&format!("fn main() -> void {{ var value = 0; {body} }}")).unwrap();
+        assert_eq!(syntax.statements.len(), operators.len() + 1);
+        for &statement in &syntax.functions.iter().next().unwrap().1.body[1..] {
+            assert!(matches!(
+                syntax.statements[statement].kind,
+                StatementKind::CompoundAssignment { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn every_comparison_operator_parses() {
+        for operator in ["==", "!=", "<", "<=", ">", ">="] {
+            let source = format!("fn main() -> void {{ const result = left {operator} right; }}");
+            let syntax = parse(&source).unwrap();
+            let statement = syntax.functions.iter().next().unwrap().1.body[0];
+            let StatementKind::Binding { initializer, .. } = syntax.statements[statement].kind
+            else {
+                panic!("expected binding")
+            };
+            assert!(matches!(
+                syntax.expressions[initializer].kind,
+                ExpressionKind::Comparison { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_control_flow_reports_the_offending_token() {
+        for (marked, message) in [
+            ("if «{»}", "expected an expression"),
+            ("if true «;»", "expected `{`"),
+            ("if true {} else «exit»(0);", "expected `{`"),
+            ("for «;»", "expected an expression"),
+            (
+                "for var i = 0 «i» < 2; i = i + 1 {}",
+                "expected `;` after for initializer",
+            ),
+            ("for var i = 0; «;» i = i + 1 {}", "expected an expression"),
+            (
+                "for var i = 0; i < 2; «{»}",
+                "expected an assignment after second `;`",
+            ),
+            (
+                "for var i = 0; i < 2; «i» + 1 {}",
+                "expected an assignment after second `;`",
+            ),
+            ("for :«{»}", "expected a loop label after `:`"),
+            ("break :«;»", "expected a label after `:`"),
+            ("continue«}»", "expected `;`"),
+            (
+                "for i «+=» 1; true; i = i + 1 {}",
+                "for initializer does not permit compound assignment",
+            ),
+        ] {
+            let prefix = "fn main() -> void { ";
+            let start = marked.find('«').unwrap();
+            let end = marked.find('»').unwrap() - '«'.len_utf8();
+            let source = format!("{prefix}{}}}", marked.replace(['«', '»'], ""));
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, message, "{marked}");
+            assert_eq!(
+                error.span,
+                prefix.len() + start..prefix.len() + end,
+                "{marked}"
+            );
+        }
+    }
+
+    #[test]
+    fn boolean_and_control_flow_nesting_obeys_the_source_limit() {
+        let accepted_logical = format!(
+            "fn main() -> void {{ const value = {}true; }}",
+            "true && ".repeat(127)
+        );
+        parse(&accepted_logical).unwrap();
+        let rejected_logical = format!(
+            "fn main() -> void {{ const value = {}true; }}",
+            "true && ".repeat(128)
+        );
+        assert_eq!(
+            parse(&rejected_logical).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+
+        let chain = |count: usize| {
+            format!(
+                "fn main() -> void {{ {}if true {{}} }}",
+                "if true {} else ".repeat(count - 1)
+            )
+        };
+        parse(&chain(127)).unwrap();
+        assert_eq!(
+            parse(&chain(128)).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+    }
+
+    #[test]
     fn comments_may_touch_integer_operators() {
         let source = "fn main() -> void { const x = ^/*a*/1/*b*/+%/*c*/2<<// d\n3; }";
         let syntax = parse(source).unwrap();
@@ -871,7 +1510,6 @@ mod tests {
         for spelling in [
             "size",
             "uintptr",
-            "bool",
             "void",
             "f32",
             "i128",
@@ -888,7 +1526,7 @@ mod tests {
             let prefix = "/* 🌿 */ fn main() -> void { const x: ";
             let source = format!("{prefix}{spelling}");
             let error = parse(&source).unwrap_err();
-            assert_eq!(error.message, "expected an integer type", "{spelling}");
+            assert_eq!(error.message, "expected a type", "{spelling}");
             assert_eq!(error.span, prefix.len()..source.len(), "{spelling}");
         }
     }
@@ -949,7 +1587,7 @@ mod tests {
         else {
             panic!("expected truncating conversion")
         };
-        assert_eq!(destination.name, "u8");
+        assert_eq!(destination.ty, Type::U8);
         assert!(*truncating);
         let ExpressionKind::Conversion {
             destination,
@@ -959,7 +1597,7 @@ mod tests {
         else {
             panic!("expected checked conversion")
         };
-        assert_eq!(destination.name, "i16");
+        assert_eq!(destination.ty, Type::I16);
         assert!(!*truncating);
         let ExpressionKind::Conversion {
             destination,
@@ -969,7 +1607,7 @@ mod tests {
         else {
             panic!("expected nested checked conversion")
         };
-        assert_eq!(destination.name, "u64");
+        assert_eq!(destination.ty, Type::U64);
         assert!(!*truncating);
 
         for (body, message) in [
@@ -1090,12 +1728,24 @@ mod tests {
     fn reserved_names_agree_in_all_name_positions() {
         for name in [
             "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
-            "u16", "u32", "u64", "int", "uint", "bool",
+            "u16", "u32", "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
         ] {
             for (prefix, suffix) in [
                 ("fn ", "() -> void {}"),
                 ("fn main() -> void { var ", " = 0; }"),
                 ("fn main() -> void { const ", " = 0; }"),
+            ] {
+                let error = parse(&format!("{prefix}{name}{suffix}")).unwrap_err();
+                assert_eq!(error.span, prefix.len()..prefix.len() + name.len());
+                assert!(error.message.contains("reserved word"));
+            }
+        }
+
+        for name in [
+            "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32",
+            "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
+        ] {
+            for (prefix, suffix) in [
                 ("fn main() -> void { const x = ", "; }"),
                 ("fn main() -> void { exit(", "); }"),
             ] {

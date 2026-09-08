@@ -3,131 +3,22 @@ source: src/ir.rs
 expression: entry.entry()
 ---
 Entry {
-    values: [
-        Value {
-            span: None,
-            ty: I8,
-            kind: Copy(
-                Integer {
-                    value: 127,
-                    ty: I8,
+    values: [],
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
+        ),
+        locals: [],
+        blocks: [
+            Block {
+                instructions: [],
+                terminator: Exit {
+                    status: Integer {
+                        value: 0,
+                        ty: Int,
+                    },
                 },
-            ),
-        },
-        Value {
-            span: None,
-            ty: I16,
-            kind: Copy(
-                Integer {
-                    value: 32767,
-                    ty: I16,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: I32,
-            kind: Copy(
-                Integer {
-                    value: 2147483647,
-                    ty: I32,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: I64,
-            kind: Copy(
-                Integer {
-                    value: 9223372036854775807,
-                    ty: I64,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U8,
-            kind: Copy(
-                Integer {
-                    value: 255,
-                    ty: U8,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U16,
-            kind: Copy(
-                Integer {
-                    value: 65535,
-                    ty: U16,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U32,
-            kind: Copy(
-                Integer {
-                    value: 4294967295,
-                    ty: U32,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U64,
-            kind: Copy(
-                Integer {
-                    value: 18446744073709551615,
-                    ty: U64,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 2147483647,
-                    ty: Int,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Uint,
-            kind: Copy(
-                Integer {
-                    value: 4294967295,
-                    ty: Uint,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: U64,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        7,
-                    ),
-                ),
-            ),
-        },
-        Value {
-            span: None,
-            ty: U64,
-            kind: Copy(
-                Integer {
-                    value: 18446744073709551615,
-                    ty: U64,
-                },
-            ),
-        },
-    ],
-    exit: Integer {
-        value: 0,
-        ty: Int,
+            },
+        ],
     },
 }

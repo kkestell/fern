@@ -246,6 +246,119 @@ fn module_level_bindings_initialize_shadow_and_mutate() {
 }
 
 #[test]
+fn branches_and_loops_execute() {
+    for (source, expected) in [
+        (include_str!("../examples/branches_and_loops.fern"), 6),
+        (
+            "fn main() -> void {
+                var total = 0;
+                for {
+                    total = total + 1;
+                    if total == 2 { break; }
+                }
+                for total < 42 { total = total + 1; }
+                exit(total);
+            }",
+            42,
+        ),
+        (
+            "fn main() -> void {
+                var total = 24;
+                for var i = 0; i < 7; i += 1 {
+                    if i == 3 { continue; }
+                    total += i;
+                }
+                exit(total);
+            }",
+            42,
+        ),
+        (
+            "fn main() -> void {
+                var total = 39;
+                for :outer var row = 0; row < 3; row += 1 {
+                    for var column = 0; column < 3; column += 1 {
+                        if column == 1 { continue :outer; }
+                        total += 1;
+                    }
+                }
+                exit(total);
+            }",
+            42,
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn comparisons_and_logical_expressions_execute() {
+    let (_dir, input, output) = fixture(
+        "fn main() -> void {
+            var negative: i8 = -1;
+            var zero: i8 = 0;
+            var high: u64 = 18446744073709551615;
+            var low: u64 = 1;
+            var no = false;
+            if !(negative < zero) { exit(1); }
+            if negative <= zero && zero > negative && zero >= negative
+                && negative != zero && high > low && high >= low
+                && low < high && low <= high && no == false
+                && no < true && no <= false && true > no && true >= true
+                && no != true && true == true {
+                exit(42);
+            } else {
+                exit(2);
+            }
+        }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn comparisons_accept_short_circuiting_boolean_operands() {
+    let (_dir, input, output) = fixture(
+        "fn main() -> void {
+            var a = true;
+            var b = true;
+            var c = false;
+            var d = true;
+            var x = 1;
+            if a == (b && c) { exit(1); }
+            if (a && b) == (c && d) { exit(2); }
+            if (x == 1) == (b && c) { exit(3); }
+            var q = a == (b && c);
+            if q { exit(4); }
+            exit(42);
+        }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn logical_operators_skip_runtime_failures() {
+    let (_dir, input, output) = fixture(
+        "fn main() -> void {
+            var zero = 0;
+            var one = 1;
+            if zero != 0 && one / zero > 0 { exit(1); }
+            if one == 1 || one / zero > 0 {
+                exit(42);
+            }
+            exit(2);
+        }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
 fn grouped_contextual_integer_expressions_execute() {
     let (_dir, input, output) = fixture(
         "fn main() -> void { var count: uint = 1; const grouped: u8 = ((21)); const shifted: u64 = (10 + 11) << count; exit(int(grouped) + int(shifted / 42)); }",
@@ -323,6 +436,37 @@ fn runtime_integer_failures_include_the_operation_and_source_location() {
         assert!(stderr.contains(expected), "{stderr}");
         assert!(stderr.contains("operation.fern:4:"), "{stderr}");
         assert!(stderr.contains(expression), "{stderr}");
+    }
+}
+
+#[test]
+fn runtime_compound_assignment_failures_name_the_compound_operator() {
+    for (setup, assignment, expected) in [
+        (
+            "var value: u8 = 255; var other: u8 = 1;",
+            "value += other;",
+            "integer `+=` overflowed",
+        ),
+        (
+            "var value: u8 = 8; var other: u8 = 0;",
+            "value /= other;",
+            "integer `/=` has a zero divisor",
+        ),
+        (
+            "var value: u8 = 1; var other: int = -1;",
+            "value <<= other;",
+            "integer `<<=` shift count is negative",
+        ),
+    ] {
+        let source = format!("fn main() -> void {{ {setup} {assignment} }}");
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8(result.stderr).unwrap().contains(expected),
+            "{assignment}"
+        );
     }
 }
 

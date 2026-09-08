@@ -5,6 +5,7 @@ mod frontend;
 mod ir;
 mod semantic;
 mod source;
+mod types;
 
 use std::{fmt, fs, path::Path};
 

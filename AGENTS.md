@@ -33,6 +33,7 @@ missing. The architecture document is not required to begin planning.
 ## Codebase Map
 
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
+- `src/types.rs` — the Fern type enum and its spellings, shared by every phase.
 - `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
 - `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
 - `src/snapshots/` — checked-in frontend and IR snapshot fixtures.
@@ -86,9 +87,28 @@ This project is optimized for clarity, correctness, and ease of reasoning rather
 than execution speed. Treat simplicity as a maintained project invariant, not a
 cleanup activity.
 
+Keep one implementation path for each behavior. Do not add a fast path, legacy
+path, fallback path, or representation selector when the same pipeline can
+handle every case. Parallel lowering, checking, verification, or emission paths
+for the same language rule are a correctness bug unless their semantics or
+ownership genuinely differ. When they do differ, make the boundary explicit in
+the owning document.
+
+Treat duplicated logic as shared behavior waiting to drift. Extract a small
+helper or abstraction when it gives one home to a real rule, even when two
+callers are the only current users. Prefer an abstraction that names the shared
+contract over two locally simple copies. Do not use this as permission for
+speculative frameworks, extension points, or layers without a present caller.
+
 When removing a special case, enum variant, or separate code path, inspect the
 surrounding code for structure it made redundant. Collapse newly identical paths
 and use existing helpers in the same change.
+
+Before completing a milestone, search for mode flags, optional representations,
+path-selection predicates, duplicated phase logic, and stale suppressions added
+during its tasks. Test combinations of the milestone's features, not only each
+feature in isolation. Include cases where one new expression or statement is
+nested inside another.
 
 Describe Fern and roadmap work in terms of the intended end state. Do not record
 superseded syntax, migration steps, compatibility behavior, or design history.

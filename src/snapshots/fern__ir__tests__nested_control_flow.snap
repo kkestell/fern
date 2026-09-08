@@ -1,0 +1,632 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    2,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                91..92,
+            ),
+            ty: Bool,
+            kind: Comparison {
+                operator: Less,
+                left: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+                right: Integer {
+                    value: 3,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    3,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    4,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                142..143,
+            ),
+            ty: Bool,
+            kind: Comparison {
+                operator: Less,
+                left: Value(
+                    ValueId(
+                        4,
+                    ),
+                ),
+                right: Integer {
+                    value: 3,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    3,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    5,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                185..187,
+            ),
+            ty: Bool,
+            kind: Comparison {
+                operator: Equal,
+                left: Value(
+                    ValueId(
+                        7,
+                    ),
+                ),
+                right: Integer {
+                    value: 0,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    3,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    6,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                233..235,
+            ),
+            ty: Bool,
+            kind: Comparison {
+                operator: Equal,
+                left: Value(
+                    ValueId(
+                        11,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        10,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                246..248,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Add,
+                form: CompoundAssignment,
+                left: Value(
+                    ValueId(
+                        13,
+                    ),
+                ),
+                right: Integer {
+                    value: 1,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    3,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                149..151,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Add,
+                form: CompoundAssignment,
+                left: Value(
+                    ValueId(
+                        15,
+                    ),
+                ),
+                right: Integer {
+                    value: 1,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                98..100,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Add,
+                form: CompoundAssignment,
+                left: Value(
+                    ValueId(
+                        17,
+                    ),
+                ),
+                right: Integer {
+                    value: 1,
+                    ty: Int,
+                },
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Load(
+                LocalId(
+                    0,
+                ),
+            ),
+        },
+    ],
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
+        ),
+        locals: [
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+            Int,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                ],
+                terminator: Jump {
+                    target: BlockId(
+                        1,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            2,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                ],
+                terminator: Branch {
+                    condition: Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                    then_target: BlockId(
+                        2,
+                    ),
+                    else_target: BlockId(
+                        4,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            3,
+                        ),
+                        operand: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                ],
+                terminator: Jump {
+                    target: BlockId(
+                        5,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            17,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            18,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                18,
+                            ),
+                        ),
+                    },
+                ],
+                terminator: Jump {
+                    target: BlockId(
+                        1,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            19,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            19,
+                        ),
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            3,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            4,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                3,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            4,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            5,
+                        ),
+                    ),
+                ],
+                terminator: Branch {
+                    condition: Value(
+                        ValueId(
+                            5,
+                        ),
+                    ),
+                    then_target: BlockId(
+                        6,
+                    ),
+                    else_target: BlockId(
+                        8,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            6,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            5,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                6,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            7,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            8,
+                        ),
+                    ),
+                ],
+                terminator: Branch {
+                    condition: Value(
+                        ValueId(
+                            8,
+                        ),
+                    ),
+                    then_target: BlockId(
+                        9,
+                    ),
+                    else_target: BlockId(
+                        10,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            15,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            16,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            3,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                16,
+                            ),
+                        ),
+                    },
+                ],
+                terminator: Jump {
+                    target: BlockId(
+                        5,
+                    ),
+                },
+            },
+            Block {
+                instructions: [],
+                terminator: Jump {
+                    target: BlockId(
+                        3,
+                    ),
+                },
+            },
+            Block {
+                instructions: [],
+                terminator: Jump {
+                    target: BlockId(
+                        7,
+                    ),
+                },
+            },
+            Block {
+                instructions: [],
+                terminator: Jump {
+                    target: BlockId(
+                        11,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            9,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            6,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                9,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            10,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            11,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            12,
+                        ),
+                    ),
+                ],
+                terminator: Branch {
+                    condition: Value(
+                        ValueId(
+                            12,
+                        ),
+                    ),
+                    then_target: BlockId(
+                        12,
+                    ),
+                    else_target: BlockId(
+                        13,
+                    ),
+                },
+            },
+            Block {
+                instructions: [
+                    Value(
+                        ValueId(
+                            13,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            14,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                14,
+                            ),
+                        ),
+                    },
+                ],
+                terminator: Jump {
+                    target: BlockId(
+                        4,
+                    ),
+                },
+            },
+            Block {
+                instructions: [],
+                terminator: Jump {
+                    target: BlockId(
+                        14,
+                    ),
+                },
+            },
+            Block {
+                instructions: [],
+                terminator: Jump {
+                    target: BlockId(
+                        7,
+                    ),
+                },
+            },
+        ],
+    },
+}

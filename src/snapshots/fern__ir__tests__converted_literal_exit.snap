@@ -4,8 +4,21 @@ expression: entry.entry()
 ---
 Entry {
     values: [],
-    exit: Integer {
-        value: 42,
-        ty: Int,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
+        ),
+        locals: [],
+        blocks: [
+            Block {
+                instructions: [],
+                terminator: Exit {
+                    status: Integer {
+                        value: 42,
+                        ty: Int,
+                    },
+                },
+            },
+        ],
     },
 }

@@ -7,39 +7,71 @@ Entry {
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 42,
-                    ty: Int,
-                },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        0,
-                    ),
+            kind: Load(
+                LocalId(
+                    0,
                 ),
             ),
         },
         Value {
             span: None,
             ty: Int,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        1,
-                    ),
+            kind: Load(
+                LocalId(
+                    1,
                 ),
             ),
         },
     ],
-    exit: Value(
-        ValueId(
-            2,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
         ),
-    ),
+        locals: [
+            Int,
+            Int,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 42,
+                            ty: Int,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                },
+            },
+        ],
+    },
 }

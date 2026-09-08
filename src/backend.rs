@@ -1,10 +1,13 @@
 use crate::{
     CompileError,
     diagnostic::{Diagnostic, DiagnosticRenderer},
-    frontend::{BinaryOperator, UnaryOperator},
-    ir::{Operand, ValueId, ValueKind, VerifiedEntry},
-    semantic::Type,
+    frontend::{BinaryOperator, ComparisonOperator, UnaryOperator},
+    ir::{
+        BinaryForm, BlockId, ControlFlow, Instruction, LocalId, Operand, Terminator, ValueId,
+        ValueKind, VerifiedEntry,
+    },
     source::Source,
+    types::Type,
 };
 use std::{env, fmt::Write, fs, path::Path, process::Command};
 
@@ -35,58 +38,168 @@ pub(crate) fn emit(verified: &VerifiedEntry, source_file: Option<&Source>) -> St
     emitter
         .text
         .push_str("export function w $main() {\n@start\n");
-    for (id, value) in entry.values.iter().enumerate() {
-        match value.kind {
-            ValueKind::Copy(source) => {
-                writeln!(
-                    emitter.text,
-                    "    %v{id} ={} copy {}",
-                    qbe_type(value.ty),
-                    operand(source)
-                )
-                .unwrap();
-            }
-            ValueKind::Convert {
-                operand: source,
-                truncating,
-            } => {
-                let source_ty = operand_type(entry, source);
-                if truncating || conversion_fits(source_ty, value.ty) {
-                    emit_truncation(&mut emitter.text, id, source, source_ty, value.ty);
-                } else {
-                    let message = format!(
-                        "checked integer conversion failed: `{}` to `{}`",
-                        source_ty.name(),
-                        value.ty.name()
-                    );
-                    let message = operation_message(value, emitter.diagnostics.as_ref(), &message);
-                    emit_checked_conversion(
-                        &mut emitter.text,
-                        &mut emitter.data,
-                        id,
-                        source,
-                        source_ty,
-                        value.ty,
-                        message,
-                    );
+    emit_control_flow(&mut emitter, entry, &entry.flow);
+    emitter.text.push_str("}\n");
+    emitter.data + &emitter.text
+}
+
+fn emit_control_flow(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, flow: &ControlFlow) {
+    for (id, ty) in flow.locals.iter().enumerate() {
+        let (allocation, size) = if qbe_type(*ty) == 'l' {
+            ("alloc8", 8)
+        } else {
+            ("alloc4", 4)
+        };
+        writeln!(emitter.text, "    %local{id} =l {allocation} {size}").unwrap();
+    }
+    writeln!(emitter.text, "    jmp @block{}", flow.entry.0).unwrap();
+
+    for (block_id, block) in flow.blocks.iter().enumerate() {
+        writeln!(emitter.text, "@block{block_id}").unwrap();
+        for instruction in &block.instructions {
+            match *instruction {
+                Instruction::Value(ValueId(id)) => emit_value(emitter, entry, id),
+                Instruction::Store {
+                    local,
+                    operand: source,
+                } => {
+                    let width = qbe_type(flow.locals[local.0]);
+                    writeln!(
+                        emitter.text,
+                        "    store{width} {}, %local{}",
+                        operand(source),
+                        local.0
+                    )
+                    .unwrap();
                 }
             }
-            ValueKind::Unary { operator, operand } => {
-                emit_unary_operation(&mut emitter, id, value, operator, operand);
-            }
-            ValueKind::Binary {
-                operator,
-                left,
-                right,
-            } => {
-                emit_binary_operation(&mut emitter, id, value, operator, left, right, entry);
+        }
+        emit_terminator(emitter, BlockId(block_id), &block.terminator);
+    }
+}
+
+fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Terminator) {
+    match *terminator {
+        Terminator::Jump { target } => {
+            writeln!(emitter.text, "    jmp @block{}", target.0).unwrap();
+        }
+        Terminator::Branch {
+            condition,
+            then_target,
+            else_target,
+            ..
+        } => {
+            writeln!(
+                emitter.text,
+                "    jnz {}, @block{}, @block{}",
+                operand(condition),
+                then_target.0,
+                else_target.0
+            )
+            .unwrap();
+        }
+        Terminator::Exit { status, .. } => {
+            writeln!(
+                emitter.text,
+                "    %block{}_status =w and {}, 255",
+                block.0,
+                operand(status)
+            )
+            .unwrap();
+            writeln!(emitter.text, "    ret %block{}_status", block.0).unwrap();
+        }
+        Terminator::Unreachable => emitter.text.push_str("    hlt\n"),
+    }
+}
+
+fn emit_value(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, id: usize) {
+    let value = &entry.values[id];
+    match value.kind {
+        ValueKind::Load(LocalId(local)) => {
+            let width = qbe_type(value.ty);
+            writeln!(
+                emitter.text,
+                "    %v{id} ={width} load{width} %local{local}"
+            )
+            .unwrap();
+        }
+        ValueKind::Convert {
+            operand: source,
+            truncating,
+        } => {
+            let source_ty = operand_type(entry, source);
+            if truncating || source_ty.all_values_fit(value.ty) {
+                emit_truncation(&mut emitter.text, id, source, source_ty, value.ty);
+            } else {
+                let message = format!(
+                    "checked integer conversion failed: `{}` to `{}`",
+                    source_ty.name(),
+                    value.ty.name()
+                );
+                let message = operation_message(value, emitter.diagnostics.as_ref(), &message);
+                emit_checked_conversion(
+                    &mut emitter.text,
+                    &mut emitter.data,
+                    id,
+                    source,
+                    source_ty,
+                    value.ty,
+                    message,
+                );
             }
         }
+        ValueKind::Unary { operator, operand } => {
+            emit_unary_operation(emitter, id, value, operator, operand);
+        }
+        ValueKind::Binary {
+            operator,
+            form,
+            left,
+            right,
+        } => emit_binary_operation(emitter, id, value, operator, form, (left, right), entry),
+        ValueKind::Comparison {
+            operator,
+            left,
+            right,
+        } => emit_comparison(&mut emitter.text, id, operator, left, right, entry),
+        ValueKind::LogicalNot { operand: source } => {
+            writeln!(emitter.text, "    %v{id} =w ceqw {}, 0", operand(source)).unwrap();
+        }
     }
-    let exit = operand(entry.exit);
-    writeln!(emitter.text, "    %status =w and {exit}, 255").unwrap();
-    emitter.text.push_str("    ret %status\n}\n");
-    emitter.data + &emitter.text
+}
+
+fn emit_comparison(
+    text: &mut String,
+    id: usize,
+    operator: ComparisonOperator,
+    left: Operand,
+    right: Operand,
+    entry: &crate::ir::Entry,
+) {
+    let ty = operand_type(entry, left);
+    let comparison = match operator {
+        ComparisonOperator::Equal => format!("ceq{}", qbe_type(ty)),
+        ComparisonOperator::NotEqual => format!("cne{}", qbe_type(ty)),
+        ComparisonOperator::Less => comparison_operation("lt", ty.signed(), ty),
+        ComparisonOperator::LessEqual => comparison_operation("le", ty.signed(), ty),
+        ComparisonOperator::Greater => comparison_operation("gt", ty.signed(), ty),
+        ComparisonOperator::GreaterEqual => comparison_operation("ge", ty.signed(), ty),
+    };
+    writeln!(
+        text,
+        "    %v{id} =w {comparison} {}, {}",
+        operand(left),
+        operand(right)
+    )
+    .unwrap();
+}
+
+fn comparison_operation(relation: &str, signed: bool, ty: Type) -> String {
+    format!(
+        "c{}{relation}{}",
+        if signed { "s" } else { "u" },
+        qbe_type(ty)
+    )
 }
 
 fn emit_unary_operation(
@@ -140,16 +253,21 @@ fn emit_binary_operation(
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
-    left: Operand,
-    right: Operand,
+    form: BinaryForm,
+    operands: (Operand, Operand),
     entry: &crate::ir::Entry,
 ) {
+    let (left, right) = operands;
+    let spelling = match form {
+        BinaryForm::Infix => operator.spelling().to_owned(),
+        BinaryForm::CompoundAssignment => format!("{}=", operator.spelling()),
+    };
     match operator {
         BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply => {
-            emit_checked_arithmetic(emitter, id, value, operator, left, right);
+            emit_checked_arithmetic(emitter, id, value, operator, &spelling, left, right);
         }
         BinaryOperator::Divide | BinaryOperator::Remainder => {
-            emit_division(emitter, id, value, operator, left, right)
+            emit_division(emitter, id, value, operator, &spelling, left, right)
         }
         BinaryOperator::WrappingAdd
         | BinaryOperator::WrappingSubtract
@@ -168,9 +286,15 @@ fn emit_binary_operation(
                 value.ty,
             );
         }
-        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
-            emit_shift(emitter, id, value, operator, left, right, entry)
-        }
+        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => emit_shift(
+            emitter,
+            id,
+            value,
+            operator,
+            &spelling,
+            (left, right),
+            entry,
+        ),
         BinaryOperator::And | BinaryOperator::Xor | BinaryOperator::Or => {
             let instruction = match operator {
                 BinaryOperator::And => "and",
@@ -212,6 +336,7 @@ fn emit_checked_arithmetic(
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
+    spelling: &str,
     left: Operand,
     right: Operand,
 ) {
@@ -241,7 +366,7 @@ fn emit_checked_arithmetic(
         operation_message(
             value,
             emitter.diagnostics.as_ref(),
-            &format!("integer `{}` overflowed", operator.spelling()),
+            &format!("integer `{spelling}` overflowed"),
         ),
     );
     emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
@@ -471,6 +596,7 @@ fn emit_division(
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
+    spelling: &str,
     left: Operand,
     right: Operand,
 ) {
@@ -492,7 +618,7 @@ fn emit_division(
         operation_message(
             value,
             emitter.diagnostics.as_ref(),
-            &format!("integer `{}` has a zero divisor", operator.spelling()),
+            &format!("integer `{spelling}` has a zero divisor"),
         ),
     );
     if ty.signed() {
@@ -521,7 +647,7 @@ fn emit_division(
             operation_message(
                 value,
                 emitter.diagnostics.as_ref(),
-                &format!("integer `{}` overflowed", operator.spelling()),
+                &format!("integer `{spelling}` overflowed"),
             ),
         );
     }
@@ -541,10 +667,11 @@ fn emit_shift(
     id: usize,
     value: &crate::ir::Value,
     operator: BinaryOperator,
-    left: Operand,
-    right: Operand,
+    spelling: &str,
+    operands: (Operand, Operand),
     entry: &crate::ir::Entry,
 ) {
+    let (left, right) = operands;
     let ty = value.ty;
     let count_ty = operand_type(entry, right);
     let count_width = qbe_type(count_ty);
@@ -556,17 +683,18 @@ fn emit_shift(
             "    %operation{id}_negative =w cslt{count_width} {right}, 0"
         )
         .unwrap();
+        let message = if spelling.ends_with('=') {
+            format!("integer `{spelling}` shift count is negative")
+        } else {
+            "integer shift count is negative".to_owned()
+        };
         emit_conditional_trap(
             &mut emitter.text,
             &mut emitter.data,
             id,
             "negative",
             &format!("%operation{id}_negative"),
-            operation_message(
-                value,
-                emitter.diagnostics.as_ref(),
-                "integer shift count is negative",
-            ),
+            operation_message(value, emitter.diagnostics.as_ref(), &message),
         );
     }
     writeln!(
@@ -694,19 +822,11 @@ fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
     data.push_str("b 0 }\n");
 }
 
-fn conversion_fits(source: Type, destination: Type) -> bool {
-    source.min() >= destination.min() && source.max() <= destination.max()
-}
-
 fn operand_type(entry: &crate::ir::Entry, operand: Operand) -> Type {
     match operand {
         Operand::Integer { ty, .. } => ty,
         Operand::Value(ValueId(id)) => entry.values[id].ty,
     }
-}
-
-fn comparison_name(signed: bool, ty: Type) -> String {
-    format!("c{}lt{}", if signed { "s" } else { "u" }, qbe_type(ty))
 }
 
 fn emit_checked_conversion(
@@ -727,7 +847,7 @@ fn emit_checked_conversion(
         writeln!(
             text,
             "    %conversion{id}_too_large =w {} {}, {}",
-            comparison_name(source_ty.signed(), source_ty),
+            comparison_operation("lt", source_ty.signed(), source_ty),
             destination_maximum,
             source
         )
@@ -737,7 +857,7 @@ fn emit_checked_conversion(
         writeln!(
             text,
             "    %conversion{id}_too_small =w {} {}, {}",
-            comparison_name(true, source_ty),
+            comparison_operation("lt", true, source_ty),
             source,
             destination_minimum
         )
@@ -896,7 +1016,26 @@ mod tests {
         Value {
             span: None,
             ty: Type::Int,
-            kind: ValueKind::Copy(operand),
+            kind: ValueKind::Convert {
+                operand,
+                truncating: false,
+            },
+        }
+    }
+
+    fn entry(values: Vec<Value>, exit: Operand) -> Entry {
+        Entry {
+            flow: ControlFlow {
+                entry: BlockId(0),
+                locals: vec![],
+                blocks: vec![crate::ir::Block {
+                    instructions: (0..values.len())
+                        .map(|id| Instruction::Value(ValueId(id)))
+                        .collect(),
+                    terminator: Terminator::Exit { status: exit },
+                }],
+            },
+            values,
         }
     }
 
@@ -906,7 +1045,7 @@ mod tests {
     fn assert_native_values(verified: &VerifiedEntry, expected: &[i128]) {
         assert_eq!(verified.entry().values.len(), expected.len());
         let mut text = emit(verified, None);
-        text.truncate(text.find("    %status =").unwrap());
+        text.truncate(text.find("    %block0_status =").unwrap());
         text.push_str("    %ok0 =w copy 1\n");
         for (id, (value, expected)) in verified.entry().values.iter().zip(expected).enumerate() {
             let width = qbe_type(value.ty);
@@ -975,11 +1114,8 @@ mod tests {
 
     #[test]
     fn full_width_integer_copies_and_conversions_execute() {
-        let ranges = Type::ALL.map(|ty| (ty, ty.min(), i128::from(ty.max())));
-        let mut entry = Entry {
-            values: vec![],
-            exit: integer(0),
-        };
+        let ranges = Type::ALL_INTEGERS.map(|ty| (ty, ty.min(), i128::from(ty.max())));
+        let mut values = vec![];
         let mut expected = Vec::new();
         for (source, min, max) in ranges {
             for (destination, dest_min, dest_max) in ranges {
@@ -996,16 +1132,20 @@ mod tests {
                         value: number,
                         ty: source,
                     };
-                    let id = entry.values.len();
-                    entry.values.push(Value {
+                    let id = values.len();
+                    values.push(Value {
                         span: None,
                         ty: source,
-                        kind: ValueKind::Copy(literal),
+                        kind: ValueKind::Convert {
+                            operand: literal,
+                            truncating: false,
+                        },
                     });
                     expected.push(number);
                     for operand in [literal, Operand::Value(ValueId(id))] {
-                        entry.values.push(Value {
-                            span: None,
+                        // Conversions between types carry the span their range trap reports.
+                        values.push(Value {
+                            span: Some(0..1),
                             ty: destination,
                             kind: ValueKind::Convert {
                                 operand,
@@ -1013,18 +1153,21 @@ mod tests {
                             },
                         });
                         expected.push(number);
-                        let copied = Operand::Value(ValueId(entry.values.len() - 1));
-                        entry.values.push(Value {
-                            span: None,
+                        let copied = Operand::Value(ValueId(values.len() - 1));
+                        values.push(Value {
+                            span: Some(0..1),
                             ty: destination,
-                            kind: ValueKind::Copy(copied),
+                            kind: ValueKind::Convert {
+                                operand: copied,
+                                truncating: false,
+                            },
                         });
                         expected.push(number);
                     }
                 }
             }
         }
-        assert_native_values(&entry.verify().unwrap(), &expected);
+        assert_native_values(&entry(values, integer(0)).verify().unwrap(), &expected);
     }
 
     fn truncated(value: i128, destination: Type) -> i128 {
@@ -1039,25 +1182,25 @@ mod tests {
 
     #[test]
     fn truncating_conversions_preserve_each_destination_bit_pattern() {
-        let types = Type::ALL;
-        let mut entry = Entry {
-            values: vec![],
-            exit: integer(0),
-        };
+        let types = Type::ALL_INTEGERS;
+        let mut values = vec![];
         let mut expected = Vec::new();
         for source in types {
             let minimum = source.min();
             let maximum = i128::from(source.max());
             for value in [minimum, if source.signed() { -1 } else { 1 }, maximum] {
-                let source_id = entry.values.len();
-                entry.values.push(Value {
+                let source_id = values.len();
+                values.push(Value {
                     span: None,
                     ty: source,
-                    kind: ValueKind::Copy(Operand::Integer { value, ty: source }),
+                    kind: ValueKind::Convert {
+                        operand: Operand::Integer { value, ty: source },
+                        truncating: false,
+                    },
                 });
                 expected.push(value);
                 for destination in types {
-                    entry.values.push(Value {
+                    values.push(Value {
                         span: None,
                         ty: destination,
                         kind: ValueKind::Convert {
@@ -1069,12 +1212,12 @@ mod tests {
                 }
             }
         }
-        assert_native_values(&entry.verify().unwrap(), &expected);
+        assert_native_values(&entry(values, integer(0)).verify().unwrap(), &expected);
     }
 
     #[test]
     fn native_integer_operations_preserve_values_for_every_type() {
-        let types = Type::ALL;
+        let types = Type::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             let minimum = ty.min();
@@ -1109,25 +1252,45 @@ mod tests {
             let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
                 .verify()
                 .unwrap();
-            let mut expected = vec![20, 3, 23, 17, 60, 6, 2, 23, 17, 60];
+            let mut expected = vec![];
+            for result in [23, 17, 60, 6, 2, 23, 17, 60] {
+                expected.extend([20, 3, result]);
+            }
             if ty.signed() {
-                expected.extend([-20, -7, -2, -1]);
+                expected.extend([20, -20, -7, 3, -2, -7, 3, -1]);
             }
             expected.extend([
+                20,
                 truncated(-20, ty),
+                20,
                 truncated(!20, ty),
+                20,
+                3,
                 20 & 3,
+                20,
+                3,
                 truncated(!3, ty),
                 20 & !3,
+                20,
+                3,
                 20 ^ 3,
+                20,
+                3,
                 20 | 3,
+                20,
+                3,
                 truncated(20 << 3, ty),
+                20,
+                3,
                 20 >> 3,
                 maximum,
-                minimum,
                 1,
                 truncated(maximum + 1, ty),
+                minimum,
+                1,
                 truncated(minimum - 1, ty),
+                maximum,
+                3,
                 truncated(maximum * 3, ty),
             ]);
             assert_native_values(&entry, &expected);
@@ -1136,7 +1299,7 @@ mod tests {
 
     #[test]
     fn checked_arithmetic_traps_at_each_integer_width() {
-        let types = Type::ALL;
+        let types = Type::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             let minimum = ty.min();
@@ -1167,7 +1330,7 @@ mod tests {
 
     #[test]
     fn division_remainder_and_shift_failures_are_explicit() {
-        let types = Type::ALL;
+        let types = Type::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             for operator in ["/", "%"] {
@@ -1220,7 +1383,26 @@ mod tests {
             .unwrap();
         assert_native_values(
             &entry,
-            &[128, 1, 8, 18446744073709551615, 0, 0, 0, 0, -1, -1, 0, 128],
+            &[
+                128,
+                1,
+                0,
+                128,
+                8,
+                0,
+                128,
+                8,
+                0,
+                128,
+                18446744073709551615,
+                0,
+                -1,
+                8,
+                -1,
+                128,
+                0,
+                128,
+            ],
         );
     }
 
@@ -1243,7 +1425,7 @@ mod tests {
 
     #[test]
     fn checked_conversions_trap_outside_each_destination_range() {
-        let types = Type::ALL;
+        let types = Type::ALL_INTEGERS;
         for source in types {
             let minimum = source.min();
             let maximum = i128::from(source.max());
@@ -1330,13 +1512,14 @@ mod tests {
                 255,
                 4294967295,
                 4294967295,
-                0,
+                4294967295,
                 4294967295,
                 255,
                 255,
                 255,
-                1,
-                18446744073709551615,
+                255,
+                255,
+                255,
                 18446744073709551615,
                 255,
             ],
@@ -1346,15 +1529,18 @@ mod tests {
     #[test]
     fn negative_values_survive_chained_widening_and_exit() {
         for number in [-128, -1] {
-            let entry = Entry {
-                values: vec![
+            let entry = entry(
+                vec![
                     Value {
                         span: None,
                         ty: Type::I8,
-                        kind: ValueKind::Copy(Operand::Integer {
-                            value: number,
-                            ty: Type::I8,
-                        }),
+                        kind: ValueKind::Convert {
+                            operand: Operand::Integer {
+                                value: number,
+                                ty: Type::I8,
+                            },
+                            truncating: false,
+                        },
                     },
                     Value {
                         span: None,
@@ -1389,8 +1575,8 @@ mod tests {
                         },
                     },
                 ],
-                exit: Operand::Value(ValueId(4)),
-            };
+                Operand::Value(ValueId(4)),
+            );
             let dir = tempfile::tempdir().unwrap();
             let output = dir.path().join("program");
             let verified = entry.verify().unwrap();
@@ -1407,18 +1593,18 @@ mod tests {
     fn negative_exit_values_are_masked_before_returning() {
         for (value, expected) in [(-1, 255), (i32::MIN, 0)] {
             for through_copy in [false, true] {
-                let entry = Entry {
-                    values: if through_copy {
+                let entry = entry(
+                    if through_copy {
                         vec![copy(integer(value)), copy(Operand::Value(ValueId(0)))]
                     } else {
                         vec![]
                     },
-                    exit: if through_copy {
+                    if through_copy {
                         Operand::Value(ValueId(1))
                     } else {
                         integer(value)
                     },
-                }
+                )
                 .verify()
                 .unwrap();
                 let qbe = emit(&entry, None);
@@ -1427,8 +1613,9 @@ mod tests {
                 } else {
                     value.to_string()
                 };
-                let expected_mask =
-                    format!("%status =w and {expected_operand}, 255\n    ret %status");
+                let expected_mask = format!(
+                    "%block0_status =w and {expected_operand}, 255\n    ret %block0_status"
+                );
                 assert!(qbe.contains(&expected_mask));
                 if through_copy {
                     let ty = qbe_type(Type::Int);

@@ -1,0 +1,23 @@
+fn main() -> void {
+    var found = false;
+    var total = 0;
+
+    for :rows var r = 0; r < 4; r = r + 1 {
+        for var c = 0; c < 4; c = c + 1 {
+            if c == 0 || r == c {
+                continue;
+            }
+            if r * 4 + c == 11 {
+                found = true;
+                break :rows;
+            }
+            total = total + 1;
+        }
+    }
+
+    if found && total == 6 {
+        exit(total);
+    } else {
+        exit(255);
+    }
+}

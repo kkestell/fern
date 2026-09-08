@@ -1,9 +1,11 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::{
-        BinaryOperator, Expression, ExpressionKind, Function, Statement, StatementKind, Syntax,
-        TopLevelItem, UnaryOperator, integer_parts,
+        BinaryOperator, ComparisonOperator, Expression, ExpressionKind, ForHeader, Function,
+        LogicalOperator, Statement, StatementKind, Syntax, TopLevelItem, TypeAnnotation,
+        UnaryOperator, integer_parts,
     },
+    types::Type,
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
@@ -11,98 +13,8 @@ use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Type {
-    I8,
-    I16,
-    I32,
-    I64,
-    U8,
-    U16,
-    U32,
-    U64,
-    Int,
-    Uint,
-}
-
-impl Type {
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 10] = [
-        Self::I8,
-        Self::I16,
-        Self::I32,
-        Self::I64,
-        Self::U8,
-        Self::U16,
-        Self::U32,
-        Self::U64,
-        Self::Int,
-        Self::Uint,
-    ];
-
-    fn named(name: &str) -> Option<Self> {
-        Some(match name {
-            "i8" => Self::I8,
-            "i16" => Self::I16,
-            "i32" => Self::I32,
-            "i64" => Self::I64,
-            "u8" => Self::U8,
-            "u16" => Self::U16,
-            "u32" => Self::U32,
-            "u64" => Self::U64,
-            "int" => Self::Int,
-            "uint" => Self::Uint,
-            _ => return None,
-        })
-    }
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::I8 => "i8",
-            Self::I16 => "i16",
-            Self::I32 => "i32",
-            Self::I64 => "i64",
-            Self::U8 => "u8",
-            Self::U16 => "u16",
-            Self::U32 => "u32",
-            Self::U64 => "u64",
-            Self::Int => "int",
-            Self::Uint => "uint",
-        }
-    }
-
-    pub(crate) fn width(self) -> u32 {
-        self.width_on(usize::BITS)
-    }
-
-    pub(crate) fn width_on(self, pointer_width: u32) -> u32 {
-        match self {
-            Self::I8 | Self::U8 => 8,
-            Self::I16 | Self::U16 => 16,
-            Self::I32 | Self::U32 => 32,
-            Self::I64 | Self::U64 => 64,
-            Self::Int | Self::Uint => pointer_width,
-        }
-    }
-
-    pub(crate) fn signed(self) -> bool {
-        matches!(
-            self,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Int
-        )
-    }
-
-    pub(crate) fn max(self) -> u64 {
-        u64::MAX >> (64 - self.width() + u32::from(self.signed()))
-    }
-
-    pub(crate) fn min(self) -> i128 {
-        if self.signed() {
-            -(1i128 << (self.width() - 1))
-        } else {
-            0
-        }
-    }
+fn annotation_type(annotation: Option<&TypeAnnotation>) -> Option<Type> {
+    annotation.map(|annotation| annotation.ty)
 }
 
 #[derive(Debug)]
@@ -115,6 +27,7 @@ pub(crate) struct Binding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
     Integer,
+    Boolean,
     Reference(Idx<Binding>),
     Grouping {
         expression: Idx<Expression>,
@@ -134,6 +47,22 @@ pub(crate) enum ExpressionValue {
         left: Idx<Expression>,
         right: Idx<Expression>,
     },
+    Comparison {
+        operator: ComparisonOperator,
+        operator_span: std::ops::Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
+    Logical {
+        operator: LogicalOperator,
+        operator_span: std::ops::Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
+    LogicalNot {
+        operator_span: std::ops::Range<usize>,
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug)]
@@ -142,6 +71,11 @@ pub(crate) struct CheckedExpression {
     pub untyped: bool,
     pub value: ExpressionValue,
     pub constant: Option<BigInt>,
+}
+
+struct CheckedBinaryOperand {
+    id: Option<Idx<Expression>>,
+    expression: CheckedExpression,
 }
 
 #[derive(Debug)]
@@ -215,12 +149,17 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
 
     let mut module_scope = HashMap::new();
     for &statement in &module_statements {
-        let StatementKind::Binding { name, mutable, .. } = &syntax.statements[statement].kind
+        let StatementKind::Binding {
+            name,
+            mutable,
+            annotation,
+            ..
+        } = &syntax.statements[statement].kind
         else {
             unreachable!("frontend only permits bindings at module level")
         };
         let binding = checked.bindings.alloc(Binding {
-            ty: Type::Int,
+            ty: annotation_type(annotation.as_ref()).unwrap_or(Type::Int),
             mutable: *mutable,
             constant: None,
         });
@@ -264,9 +203,7 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
         else {
             unreachable!("frontend only permits bindings at module level")
         };
-        let destination = annotation
-            .as_ref()
-            .map(|annotation| Type::named(&annotation.name).expect("frontend validates types"));
+        let destination = annotation_type(annotation.as_ref());
         let expression = checked.check_expression(
             *initializer,
             std::slice::from_ref(&module_scope),
@@ -292,7 +229,11 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
     let mut scopes = vec![module_scope];
     for item in &syntax.items {
         if let TopLevelItem::Function(function) = *item {
-            checked.check_body(&syntax.functions[function].body, &mut scopes)?;
+            checked.check_body(
+                &syntax.functions[function].body,
+                &mut scopes,
+                &mut Vec::new(),
+            )?;
         }
     }
     Ok(checked)
@@ -364,7 +305,7 @@ fn collect_references(
 ) {
     let expression = &syntax.expressions[expression];
     match &expression.kind {
-        ExpressionKind::Integer(_) => {}
+        ExpressionKind::Integer(_) | ExpressionKind::Boolean(_) => {}
         ExpressionKind::Reference(name) => references.push((*name, expression.span.clone())),
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
@@ -374,8 +315,14 @@ fn collect_references(
         | ExpressionKind::Conversion {
             operand: expression,
             ..
+        }
+        | ExpressionKind::LogicalNot {
+            operand: expression,
+            ..
         } => collect_references(syntax, *expression, references),
-        ExpressionKind::Binary { left, right, .. } => {
+        ExpressionKind::Binary { left, right, .. }
+        | ExpressionKind::Comparison { left, right, .. }
+        | ExpressionKind::Logical { left, right, .. } => {
             collect_references(syntax, *left, references);
             collect_references(syntax, *right, references);
         }
@@ -387,64 +334,208 @@ impl CheckedEntry<'_> {
         &mut self,
         body: &[Idx<Statement>],
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
         scopes.push(HashMap::new());
         for &statement in body {
-            match &self.syntax.statements[statement].kind {
-                StatementKind::Binding {
-                    name,
-                    mutable,
-                    annotation,
-                    initializer,
-                    ..
-                } => {
-                    let destination = annotation
-                        .as_ref()
-                        .map(|a| Type::named(&a.name).expect("frontend validates integer types"));
-                    let expression = self.check_expression(*initializer, scopes, destination)?;
-                    let ty = expression.ty;
-                    let constant = if *mutable {
-                        None
-                    } else {
-                        expression.constant.clone()
-                    };
-                    self.expressions.insert(*initializer, expression);
-                    let binding = self.bindings.alloc(Binding {
-                        ty,
-                        mutable: *mutable,
-                        constant,
-                    });
-                    self.declarations.insert(statement, binding);
-                    scopes.last_mut().unwrap().insert(*name, binding);
+            self.check_statement(statement, scopes, loops)?;
+        }
+        scopes.pop();
+        Ok(())
+    }
+
+    fn check_statement(
+        &mut self,
+        statement: Idx<Statement>,
+        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        loops: &mut Vec<Option<Spur>>,
+    ) -> Result<(), Diagnostic> {
+        match &self.syntax.statements[statement].kind {
+            StatementKind::Binding {
+                name,
+                mutable,
+                annotation,
+                initializer,
+                ..
+            } => {
+                let destination = annotation_type(annotation.as_ref());
+                let expression = self.check_expression(*initializer, scopes, destination)?;
+                let ty = expression.ty;
+                let constant = if *mutable {
+                    None
+                } else {
+                    expression.constant.clone()
+                };
+                self.expressions.insert(*initializer, expression);
+                let binding = self.bindings.alloc(Binding {
+                    ty,
+                    mutable: *mutable,
+                    constant,
+                });
+                self.declarations.insert(statement, binding);
+                scopes.last_mut().unwrap().insert(*name, binding);
+            }
+            StatementKind::Assignment {
+                name,
+                name_span,
+                value,
+            } => {
+                let binding = self.assignment_target(*name, name_span, scopes)?;
+                let expression =
+                    self.check_expression(*value, scopes, Some(self.bindings[binding].ty))?;
+                self.expressions.insert(*value, expression);
+                self.assignments.insert(statement, binding);
+            }
+            StatementKind::CompoundAssignment {
+                name,
+                name_span,
+                operator,
+                operator_span,
+                value,
+            } => {
+                let binding = self.assignment_target(*name, name_span, scopes)?;
+                let ty = self.bindings[binding].ty;
+                let compound_operator = format!("{}=", operator.spelling());
+                let left = CheckedExpression {
+                    ty,
+                    untyped: false,
+                    value: ExpressionValue::Reference(binding),
+                    constant: None,
+                };
+                let right = self.infer_expression(*value, scopes)?;
+                let (_, right, _, _, _) = self.check_integer_binary(
+                    *operator,
+                    operator_span,
+                    &compound_operator,
+                    CheckedBinaryOperand {
+                        id: None,
+                        expression: left,
+                    },
+                    CheckedBinaryOperand {
+                        id: Some(*value),
+                        expression: right,
+                    },
+                )?;
+                self.expressions.insert(*value, right.expression);
+                self.assignments.insert(statement, binding);
+            }
+            StatementKind::Block { body } => self.check_body(body, scopes, loops)?,
+            StatementKind::Exit { argument } => {
+                let expression = self.check_expression(*argument, scopes, Some(Type::Int))?;
+                self.expressions.insert(*argument, expression);
+            }
+            StatementKind::If {
+                condition,
+                then_body,
+                else_branch,
+            } => {
+                self.check_condition(*condition, scopes)?;
+                self.check_body(then_body, scopes, loops)?;
+                if let Some(else_branch) = else_branch {
+                    self.check_statement(*else_branch, scopes, loops)?;
                 }
-                StatementKind::Assignment {
-                    name,
-                    name_span,
-                    value,
-                } => {
-                    let binding = self.resolve(*name, name_span.clone(), scopes)?;
-                    if !self.bindings[binding].mutable {
-                        return Err(Diagnostic::new(
-                            name_span.clone(),
-                            format!(
-                                "cannot assign to immutable binding `{}`",
-                                self.syntax.names.resolve(name)
-                            ),
-                        ));
+            }
+            StatementKind::For {
+                label,
+                header,
+                body,
+            } => {
+                if let Some(label) = label
+                    && loops.iter().flatten().any(|name| *name == label.name)
+                {
+                    return Err(Diagnostic::new(
+                        label.name_span.clone(),
+                        format!(
+                            "duplicate enclosing loop label `{}`",
+                            self.syntax.names.resolve(&label.name)
+                        ),
+                    ));
+                }
+                let label_name = label.as_ref().map(|label| label.name);
+                let has_header_scope = match header {
+                    ForHeader::Infinite => false,
+                    ForHeader::Condition(condition) => {
+                        self.check_condition(*condition, scopes)?;
+                        false
                     }
-                    let expression =
-                        self.check_expression(*value, scopes, Some(self.bindings[binding].ty))?;
-                    self.expressions.insert(*value, expression);
-                    self.assignments.insert(statement, binding);
+                    ForHeader::ThreeClause {
+                        initializer,
+                        condition,
+                        post,
+                    } => {
+                        scopes.push(HashMap::new());
+                        self.check_statement(*initializer, scopes, loops)?;
+                        self.check_condition(*condition, scopes)?;
+                        self.check_statement(*post, scopes, loops)?;
+                        true
+                    }
+                };
+                loops.push(label_name);
+                self.check_body(body, scopes, loops)?;
+                loops.pop();
+                if has_header_scope {
+                    scopes.pop();
                 }
-                StatementKind::Block { body } => self.check_body(body, scopes)?,
-                StatementKind::Exit { argument } => {
-                    let expression = self.check_expression(*argument, scopes, Some(Type::Int))?;
-                    self.expressions.insert(*argument, expression);
+            }
+            StatementKind::Break { label } | StatementKind::Continue { label } => {
+                let keyword = if matches!(
+                    &self.syntax.statements[statement].kind,
+                    StatementKind::Break { .. }
+                ) {
+                    "break"
+                } else {
+                    "continue"
+                };
+                if loops.is_empty() {
+                    let start = self.syntax.statements[statement].span.start;
+                    return Err(Diagnostic::new(
+                        start..start + keyword.len(),
+                        format!("`{keyword}` is not inside a loop"),
+                    ));
+                }
+                if let Some(label) = label
+                    && !loops.iter().flatten().any(|name| *name == label.name)
+                {
+                    return Err(Diagnostic::new(
+                        label.name_span.clone(),
+                        format!(
+                            "unknown enclosing loop label `{}`",
+                            self.syntax.names.resolve(&label.name)
+                        ),
+                    ));
                 }
             }
         }
-        scopes.pop();
+        Ok(())
+    }
+
+    fn assignment_target(
+        &self,
+        name: Spur,
+        name_span: &std::ops::Range<usize>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<Idx<Binding>, Diagnostic> {
+        let binding = self.resolve(name, name_span.clone(), scopes)?;
+        if self.bindings[binding].mutable {
+            Ok(binding)
+        } else {
+            Err(Diagnostic::new(
+                name_span.clone(),
+                format!(
+                    "cannot assign to immutable binding `{}`",
+                    self.syntax.names.resolve(&name)
+                ),
+            ))
+        }
+    }
+
+    fn check_condition(
+        &mut self,
+        condition: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<(), Diagnostic> {
+        let expression = self.check_expression(condition, scopes, Some(Type::Bool))?;
+        self.expressions.insert(condition, expression);
         Ok(())
     }
 
@@ -474,7 +565,8 @@ impl CheckedEntry<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked = self.infer_expression(id, scopes)?;
         if checked.untyped {
-            self.concretize(id, &mut checked, destination.unwrap_or(Type::Int))?;
+            let destination = destination.unwrap_or(checked.ty);
+            self.concretize(id, &mut checked, destination)?;
         } else if let Some(destination) = destination
             && checked.ty != destination
         {
@@ -511,6 +603,12 @@ impl CheckedEntry<'_> {
                     constant: Some(value),
                 }
             }
+            ExpressionKind::Boolean(value) => CheckedExpression {
+                ty: Type::Bool,
+                untyped: true,
+                value: ExpressionValue::Boolean,
+                constant: Some(BigInt::from(*value)),
+            },
             ExpressionKind::Reference(name) => {
                 let binding = self.resolve(*name, expression.span.clone(), scopes)?;
                 CheckedExpression {
@@ -541,6 +639,12 @@ impl CheckedEntry<'_> {
             } => {
                 let operand_id = *operand;
                 let mut checked_operand = self.infer_expression(operand_id, scopes)?;
+                if !checked_operand.ty.is_integer() {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        "integer unary operator requires an integer operand",
+                    ));
+                }
                 if *operator == UnaryOperator::Negate
                     && !checked_operand.untyped
                     && !checked_operand.ty.signed()
@@ -585,68 +689,99 @@ impl CheckedEntry<'_> {
             } => {
                 let left_id = *left;
                 let right_id = *right;
-                let mut checked_left = self.infer_expression(left_id, scopes)?;
-                let mut checked_right = self.infer_expression(right_id, scopes)?;
-                let shift = matches!(
-                    operator,
-                    BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
-                );
-                let wrapping = matches!(
-                    operator,
-                    BinaryOperator::WrappingAdd
-                        | BinaryOperator::WrappingSubtract
-                        | BinaryOperator::WrappingMultiply
-                );
-                if wrapping && checked_left.untyped && checked_right.untyped {
-                    return Err(Diagnostic::new(
-                        operator_span.clone(),
-                        "wrapping arithmetic requires a typed operand",
-                    ));
-                }
-                if !shift {
-                    match (checked_left.untyped, checked_right.untyped) {
-                        (false, false) if checked_left.ty != checked_right.ty => {
-                            return Err(Diagnostic::new(
-                                operator_span.clone(),
-                                format!(
-                                    "binary operands have different types `{}` and `{}`",
-                                    checked_left.ty.name(),
-                                    checked_right.ty.name()
-                                ),
-                            ));
-                        }
-                        (false, true) => {
-                            self.concretize(right_id, &mut checked_right, checked_left.ty)?;
-                        }
-                        (true, false) => {
-                            self.concretize(left_id, &mut checked_left, checked_right.ty)?;
-                        }
-                        _ => {}
-                    }
-                } else if (checked_left.constant.is_none() || checked_right.constant.is_none())
-                    && checked_right.untyped
-                {
-                    self.concretize(right_id, &mut checked_right, Type::Int)?;
-                }
-                let (ty, untyped) = if shift {
-                    (checked_left.ty, checked_left.untyped)
-                } else if checked_left.untyped {
-                    (checked_right.ty, checked_right.untyped)
-                } else {
-                    (checked_left.ty, false)
-                };
-                let constant = self.evaluate_binary(
-                    *operator,
-                    operator_span.clone(),
-                    ty,
-                    untyped,
-                    &checked_left,
-                    &checked_right,
-                )?;
+                let checked_left = self.infer_expression(left_id, scopes)?;
+                let checked_right = self.infer_expression(right_id, scopes)?;
+                let (mut checked_left, mut checked_right, ty, untyped, constant) = self
+                    .check_integer_binary(
+                        *operator,
+                        operator_span,
+                        operator.spelling(),
+                        CheckedBinaryOperand {
+                            id: Some(left_id),
+                            expression: checked_left,
+                        },
+                        CheckedBinaryOperand {
+                            id: Some(right_id),
+                            expression: checked_right,
+                        },
+                    )?;
                 let result = CheckedExpression {
                     ty,
                     untyped,
                     value: ExpressionValue::Binary {
+                        operator: *operator,
+                        operator_span: operator_span.clone(),
+                        left: left_id,
+                        right: right_id,
+                    },
+                    constant,
+                };
+                if result.constant.is_some() {
+                    checked_left.expression.constant = None;
+                    checked_right.expression.constant = None;
+                }
+                self.expressions.insert(left_id, checked_left.expression);
+                self.expressions.insert(right_id, checked_right.expression);
+                result
+            }
+            ExpressionKind::Comparison {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                let left_id = *left;
+                let right_id = *right;
+                let mut checked_left = self.infer_expression(left_id, scopes)?;
+                let mut checked_right = self.infer_expression(right_id, scopes)?;
+                match (checked_left.untyped, checked_right.untyped) {
+                    (false, false) if checked_left.ty != checked_right.ty => {
+                        return Err(Diagnostic::new(
+                            operator_span.clone(),
+                            format!(
+                                "comparison operands have different types `{}` and `{}`",
+                                checked_left.ty.name(),
+                                checked_right.ty.name()
+                            ),
+                        ));
+                    }
+                    (false, true) => {
+                        self.concretize(right_id, &mut checked_right, checked_left.ty)?;
+                    }
+                    (true, false) => {
+                        self.concretize(left_id, &mut checked_left, checked_right.ty)?;
+                    }
+                    (true, true) if checked_left.ty != checked_right.ty => {
+                        return Err(Diagnostic::new(
+                            operator_span.clone(),
+                            format!(
+                                "comparison operands have different types `{}` and `{}`",
+                                checked_left.ty.name(),
+                                checked_right.ty.name()
+                            ),
+                        ));
+                    }
+                    _ => {}
+                }
+                let constant = match (
+                    checked_left.constant.as_ref(),
+                    checked_right.constant.as_ref(),
+                ) {
+                    (Some(left), Some(right)) => Some(BigInt::from(match operator {
+                        ComparisonOperator::Equal => left == right,
+                        ComparisonOperator::NotEqual => left != right,
+                        ComparisonOperator::Less => left < right,
+                        ComparisonOperator::LessEqual => left <= right,
+                        ComparisonOperator::Greater => left > right,
+                        ComparisonOperator::GreaterEqual => left >= right,
+                    })),
+                    _ => None,
+                };
+                let untyped = constant.is_some();
+                let result = CheckedExpression {
+                    ty: Type::Bool,
+                    untyped,
+                    value: ExpressionValue::Comparison {
                         operator: *operator,
                         operator_span: operator_span.clone(),
                         left: left_id,
@@ -662,15 +797,94 @@ impl CheckedEntry<'_> {
                 self.expressions.insert(right_id, checked_right);
                 result
             }
+            ExpressionKind::Logical {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                let left_id = *left;
+                let right_id = *right;
+                let mut checked_left = self.infer_expression(left_id, scopes)?;
+                let mut checked_right = self.infer_expression(right_id, scopes)?;
+                require_boolean(self.syntax, left_id, &checked_left)?;
+                require_boolean(self.syntax, right_id, &checked_right)?;
+                if checked_left.untyped && !checked_right.untyped {
+                    self.concretize(left_id, &mut checked_left, Type::Bool)?;
+                } else if !checked_left.untyped && checked_right.untyped {
+                    self.concretize(right_id, &mut checked_right, Type::Bool)?;
+                }
+                let constant = match (
+                    checked_left.constant.as_ref(),
+                    checked_right.constant.as_ref(),
+                ) {
+                    (Some(left), Some(right)) => Some(BigInt::from(match operator {
+                        LogicalOperator::And => constant_boolean(left) && constant_boolean(right),
+                        LogicalOperator::Or => constant_boolean(left) || constant_boolean(right),
+                    })),
+                    _ => None,
+                };
+                let untyped = checked_left.untyped && checked_right.untyped;
+                let result = CheckedExpression {
+                    ty: Type::Bool,
+                    untyped,
+                    value: ExpressionValue::Logical {
+                        operator: *operator,
+                        operator_span: operator_span.clone(),
+                        left: left_id,
+                        right: right_id,
+                    },
+                    constant,
+                };
+                if result.constant.is_some() {
+                    checked_left.constant = None;
+                    checked_right.constant = None;
+                }
+                self.expressions.insert(left_id, checked_left);
+                self.expressions.insert(right_id, checked_right);
+                result
+            }
+            ExpressionKind::LogicalNot {
+                operator_span,
+                operand,
+            } => {
+                let operand_id = *operand;
+                let mut checked_operand = self.infer_expression(operand_id, scopes)?;
+                require_boolean(self.syntax, operand_id, &checked_operand)?;
+                let constant = checked_operand
+                    .constant
+                    .as_ref()
+                    .map(|value| BigInt::from(!constant_boolean(value)));
+                let result = CheckedExpression {
+                    ty: Type::Bool,
+                    untyped: checked_operand.untyped,
+                    value: ExpressionValue::LogicalNot {
+                        operator_span: operator_span.clone(),
+                        operand: operand_id,
+                    },
+                    constant,
+                };
+                if result.constant.is_some() {
+                    checked_operand.constant = None;
+                }
+                self.expressions.insert(operand_id, checked_operand);
+                result
+            }
             ExpressionKind::Conversion {
                 destination: annotation,
                 truncating,
                 operand,
             } => {
-                let destination =
-                    Type::named(&annotation.name).expect("frontend validates integer types");
+                let destination = annotation.ty;
                 let operand_id = *operand;
                 let mut checked_operand = self.infer_expression(operand_id, scopes)?;
+                if !checked_operand.ty.is_integer() {
+                    return Err(error(format!(
+                        "cannot convert `{}` to `{}`",
+                        checked_operand.ty.name(),
+                        destination.name()
+                    )));
+                }
                 if checked_operand.untyped && (!*truncating || checked_operand.constant.is_none()) {
                     let operand_type = if *truncating { Type::Int } else { destination };
                     self.concretize(operand_id, &mut checked_operand, operand_type)?;
@@ -712,6 +926,100 @@ impl CheckedEntry<'_> {
         Ok(checked)
     }
 
+    fn check_integer_binary(
+        &mut self,
+        operator: BinaryOperator,
+        operator_span: &std::ops::Range<usize>,
+        spelling: &str,
+        mut left: CheckedBinaryOperand,
+        mut right: CheckedBinaryOperand,
+    ) -> Result<
+        (
+            CheckedBinaryOperand,
+            CheckedBinaryOperand,
+            Type,
+            bool,
+            Option<BigInt>,
+        ),
+        Diagnostic,
+    > {
+        if !left.expression.ty.is_integer() || !right.expression.ty.is_integer() {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                format!("integer `{spelling}` requires integer operands"),
+            ));
+        }
+        let shift = matches!(
+            operator,
+            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+        );
+        let wrapping = matches!(
+            operator,
+            BinaryOperator::WrappingAdd
+                | BinaryOperator::WrappingSubtract
+                | BinaryOperator::WrappingMultiply
+        );
+        if wrapping && left.expression.untyped && right.expression.untyped {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                "wrapping arithmetic requires a typed operand",
+            ));
+        }
+        if !shift {
+            match (left.expression.untyped, right.expression.untyped) {
+                (false, false) if left.expression.ty != right.expression.ty => {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        format!(
+                            "binary operands have different types `{}` and `{}`",
+                            left.expression.ty.name(),
+                            right.expression.ty.name()
+                        ),
+                    ));
+                }
+                (false, true) => self.concretize(
+                    right
+                        .id
+                        .expect("an untyped right operand has an expression"),
+                    &mut right.expression,
+                    left.expression.ty,
+                )?,
+                (true, false) => self.concretize(
+                    left.id.expect("an untyped left operand has an expression"),
+                    &mut left.expression,
+                    right.expression.ty,
+                )?,
+                _ => {}
+            }
+        } else if (left.expression.constant.is_none() || right.expression.constant.is_none())
+            && right.expression.untyped
+        {
+            self.concretize(
+                right
+                    .id
+                    .expect("an untyped right operand has an expression"),
+                &mut right.expression,
+                Type::Int,
+            )?;
+        }
+        let (ty, untyped) = if shift {
+            (left.expression.ty, left.expression.untyped)
+        } else if left.expression.untyped {
+            (right.expression.ty, right.expression.untyped)
+        } else {
+            (left.expression.ty, false)
+        };
+        let constant = self.evaluate_binary(
+            operator,
+            operator_span.clone(),
+            spelling,
+            ty,
+            untyped,
+            (&left.expression, &right.expression),
+        )?;
+        Ok((left, right, ty, untyped, constant))
+    }
+
     fn concretize(
         &mut self,
         id: Idx<Expression>,
@@ -719,6 +1027,16 @@ impl CheckedEntry<'_> {
         destination: Type,
     ) -> Result<(), Diagnostic> {
         debug_assert!(checked.untyped);
+        if checked.ty.is_integer() != destination.is_integer() {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[id].span.clone(),
+                format!(
+                    "cannot implicitly convert `{}` to `{}`",
+                    checked.ty.name(),
+                    destination.name()
+                ),
+            ));
+        }
         let constant = concretize_value(self.syntax, id, checked, destination)?
             .expect("caller provides an untyped expression");
         self.concretize_children(id, destination, constant)?;
@@ -811,18 +1129,19 @@ impl CheckedEntry<'_> {
         &self,
         operator: BinaryOperator,
         operator_span: std::ops::Range<usize>,
+        spelling: &str,
         ty: Type,
         untyped: bool,
-        left: &CheckedExpression,
-        right: &CheckedExpression,
+        operands: (&CheckedExpression, &CheckedExpression),
     ) -> Result<Option<BigInt>, Diagnostic> {
+        let (left, right) = operands;
         let right_constant = right.constant.as_ref();
         if matches!(operator, BinaryOperator::Divide | BinaryOperator::Remainder)
             && right_constant == Some(&BigInt::from(0u8))
         {
             return Err(Diagnostic::new(
                 operator_span,
-                format!("constant `{}` divisor is zero", operator.spelling()),
+                format!("constant `{spelling}` divisor is zero"),
             ));
         }
         if matches!(
@@ -830,10 +1149,12 @@ impl CheckedEntry<'_> {
             BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
         ) && right_constant.is_some_and(|count| count < &BigInt::from(0u8))
         {
-            return Err(Diagnostic::new(
-                operator_span,
-                "constant shift count is negative",
-            ));
+            let message = if spelling.ends_with('=') {
+                format!("constant `{spelling}` shift count is negative")
+            } else {
+                "constant shift count is negative".to_owned()
+            };
+            return Err(Diagnostic::new(operator_span, message));
         }
 
         let (Some(left), Some(right)) = (left.constant.as_ref(), right_constant) else {
@@ -983,10 +1304,11 @@ fn concretize_value(
     if !checked.untyped {
         return Ok(None);
     }
-    if checked
-        .constant
-        .as_ref()
-        .is_some_and(|value| !integer_fits(value, destination))
+    if checked.ty.is_integer()
+        && checked
+            .constant
+            .as_ref()
+            .is_some_and(|value| !integer_fits(value, destination))
     {
         return Err(out_of_range(syntax, id, destination));
     }
@@ -994,6 +1316,29 @@ fn concretize_value(
     checked.ty = destination;
     checked.untyped = false;
     Ok(Some(constant))
+}
+
+fn require_boolean(
+    syntax: &Syntax,
+    id: Idx<Expression>,
+    checked: &CheckedExpression,
+) -> Result<(), Diagnostic> {
+    if checked.ty == Type::Bool {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            syntax.expressions[id].span.clone(),
+            format!(
+                "logical operand has type `{}`, expected `bool`",
+                checked.ty.name()
+            ),
+        ))
+    }
+}
+
+fn constant_boolean(value: &BigInt) -> bool {
+    debug_assert!(value == &BigInt::from(0u8) || value == &BigInt::from(1u8));
+    value == &BigInt::from(1u8)
 }
 
 fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Type) -> Diagnostic {
@@ -1097,10 +1442,14 @@ mod tests {
             .filter_map(|(_, expression)| match &expression.value {
                 ExpressionValue::Reference(id) => Some(*id),
                 ExpressionValue::Integer
+                | ExpressionValue::Boolean
                 | ExpressionValue::Conversion { .. }
                 | ExpressionValue::Grouping { .. }
                 | ExpressionValue::Unary { .. }
-                | ExpressionValue::Binary { .. } => None,
+                | ExpressionValue::Binary { .. }
+                | ExpressionValue::Comparison { .. }
+                | ExpressionValue::Logical { .. }
+                | ExpressionValue::LogicalNot { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -1177,6 +1526,312 @@ mod tests {
     }
 
     #[test]
+    fn boolean_bindings_assignments_and_constants_are_typed() {
+        let syntax = parse(
+            "const module_copy = module_ready;
+             const module_ready: bool = true;
+             fn main() -> void {
+                 var ready: bool = false;
+                 const copied = module_copy;
+                 const negated = !copied;
+                 ready = negated;
+             }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        assert!(
+            checked
+                .bindings
+                .iter()
+                .all(|(_, binding)| binding.ty == Type::Bool)
+        );
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.clone())
+                .collect::<Vec<_>>(),
+            [Some(big(1)), Some(big(1)), None, Some(big(1)), Some(big(0))]
+        );
+        assert!(
+            checked
+                .expressions
+                .iter()
+                .all(|(_, expression)| expression.ty == Type::Bool && !expression.untyped)
+        );
+    }
+
+    #[test]
+    fn comparisons_follow_operand_types_and_fold_constants() {
+        let syntax = parse(
+            "fn main() -> void {
+                const less = 1 < 2;
+                const equal = true == false;
+                const ordered = false < true;
+                const chained = (1 < 2) == true;
+                var value: u8 = 1;
+                const runtime = value >= 0;
+            }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| (binding.ty, binding.constant.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (Type::Bool, Some(big(1))),
+                (Type::Bool, Some(big(0))),
+                (Type::Bool, Some(big(1))),
+                (Type::Bool, Some(big(1))),
+                (Type::U8, None),
+                (Type::Bool, None),
+            ]
+        );
+
+        for (operator, expected) in [
+            ("==", false),
+            ("!=", true),
+            ("<", true),
+            ("<=", true),
+            (">", false),
+            (">=", false),
+        ] {
+            let syntax = parse(&format!(
+                "fn main() -> void {{ const result = 1 {operator} 2; }}"
+            ))
+            .unwrap();
+            let checked = check(&syntax).unwrap();
+            assert_eq!(
+                checked.bindings.iter().next().unwrap().1.constant,
+                Some(BigInt::from(expected))
+            );
+        }
+
+        accepts("var value: u8 = 1; const result = value < 255;");
+        rejects(
+            "var value: u8 = 1; const result = value < 256;",
+            "256",
+            "integer literal out of range for `u8`",
+        );
+        rejects(
+            "var left: u8 = 1; var right: u16 = 1; const result = left == right;",
+            "==",
+            "comparison operands have different types `u8` and `u16`",
+        );
+        rejects(
+            "const result = 1 == true;",
+            "==",
+            "comparison operands have different types `int` and `bool`",
+        );
+    }
+
+    #[test]
+    fn logical_expressions_fold_constants_and_keep_runtime_short_circuiting() {
+        let syntax = parse(
+            "fn main() -> void {
+                const conjunction = true && false;
+                const disjunction = false || true;
+                const negated = !false;
+                var runtime = true;
+                const guarded = false && runtime;
+            }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.clone())
+                .collect::<Vec<_>>(),
+            [Some(big(0)), Some(big(1)), Some(big(1)), None, None]
+        );
+        let guarded = match syntax.statements[syntax.functions[checked.main].body[4]].kind {
+            StatementKind::Binding { initializer, .. } => initializer,
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            checked.expressions[guarded].value,
+            ExpressionValue::Logical {
+                operator: LogicalOperator::And,
+                ..
+            }
+        ));
+        assert_eq!(checked.expressions[guarded].constant, None);
+
+        rejects(
+            "const invalid = false && 1 / 0 == 0;",
+            "/",
+            "constant `/` divisor is zero",
+        );
+        rejects(
+            "const invalid = true || u8(255) + 1 == 0;",
+            "+",
+            "constant `+` on `u8` would overflow",
+        );
+    }
+
+    #[test]
+    fn boolean_operators_and_contexts_reject_integer_mixing() {
+        for (body, offending, message) in [
+            (
+                "const value: bool = 1;",
+                "1",
+                "cannot implicitly convert `int` to `bool`",
+            ),
+            (
+                "const value: int = true;",
+                "true",
+                "cannot implicitly convert `bool` to `int`",
+            ),
+            (
+                "const value = true + false;",
+                "+",
+                "integer `+` requires integer operands",
+            ),
+            (
+                "const value = !1;",
+                "1",
+                "logical operand has type `int`, expected `bool`",
+            ),
+            (
+                "const value = true && 1;",
+                "1",
+                "logical operand has type `int`, expected `bool`",
+            ),
+            (
+                "const value = u8(true);",
+                "u8(true)",
+                "cannot convert `bool` to `u8`",
+            ),
+            (
+                "exit(true);",
+                "true",
+                "cannot implicitly convert `bool` to `int`",
+            ),
+        ] {
+            rejects(body, offending, message);
+        }
+    }
+
+    #[test]
+    fn structured_control_flow_checks_conditions_and_nested_scopes() {
+        for body in ["if 1 {}", "for 1 {}"] {
+            rejects(body, "1", "cannot implicitly convert `int` to `bool`");
+        }
+
+        accepts(
+            "var outer = 0;
+             if true { var branch = outer; }
+             else if false { var branch = outer; }
+             else { var branch = outer; }
+             for {}
+             for false {}
+             for var i = outer; i < 3; i += 1 {
+                 var i = i;
+                 if i == 2 { continue; }
+             }
+             for outer = 0; outer < 1; outer = outer + 1 {}
+             exit(outer);",
+        );
+
+        for body in [
+            "if true { var hidden = 1; } exit(hidden);",
+            "if true {} else { var hidden = 1; } exit(hidden);",
+            "for { var hidden = 1; break; } exit(hidden);",
+            "for var hidden = 0; hidden < 1; hidden += 1 {} exit(hidden);",
+        ] {
+            rejects(body, "hidden", "unknown binding `hidden`");
+        }
+
+        rejects(
+            "for const iterator = 0; iterator < 1; iterator = 1 {}",
+            "iterator",
+            "cannot assign to immutable binding `iterator`",
+        );
+    }
+
+    #[test]
+    fn loop_control_resolves_enclosing_labels() {
+        accepts(
+            "var outer = 0;
+             for :outer {
+                 for :inner {
+                     continue;
+                     continue :outer;
+                     break :inner;
+                 }
+             }
+             for :same { break; }
+             for :same { break :same; }",
+        );
+
+        for (body, offending, message) in [
+            ("break;", "break", "`break` is not inside a loop"),
+            (
+                "continue :missing;",
+                "continue",
+                "`continue` is not inside a loop",
+            ),
+            (
+                "for :outer { break :missing; }",
+                "missing",
+                "unknown enclosing loop label `missing`",
+            ),
+            (
+                "for :same { for :same {} }",
+                "same",
+                "duplicate enclosing loop label `same`",
+            ),
+        ] {
+            rejects(body, offending, message);
+        }
+    }
+
+    #[test]
+    fn compound_assignments_follow_binary_and_assignment_rules() {
+        accepts(
+            "var value: u8 = 1;
+             value += 1;
+             value +%= 255;
+             value <<= u16(2);
+             for var i: u8 = 0; i < 2; i += 1 {}",
+        );
+        for (body, offending, message) in [
+            (
+                "const value = 1; value += 1;",
+                "value",
+                "cannot assign to immutable binding `value`",
+            ),
+            (
+                "var value = true; value += true;",
+                "+=",
+                "integer `+=` requires integer operands",
+            ),
+            (
+                "var value: u8 = 1; value += u16(1);",
+                "+=",
+                "binary operands have different types `u8` and `u16`",
+            ),
+            (
+                "var value = 1; value /= 0;",
+                "/=",
+                "constant `/=` divisor is zero",
+            ),
+            (
+                "var value = 1; value <<= -1;",
+                "<<=",
+                "constant `<<=` shift count is negative",
+            ),
+        ] {
+            rejects(body, offending, message);
+        }
+    }
+
+    #[test]
     fn integer_expression_types_follow_operand_rules() {
         let body = "var a: u8 = 1;
              var b: u8 = 2;
@@ -1215,9 +1870,9 @@ mod tests {
             ]
         );
 
-        for left in Type::ALL {
+        for left in Type::ALL_INTEGERS {
             let left_name = left.name();
-            for right in Type::ALL {
+            for right in Type::ALL_INTEGERS {
                 let right_name = right.name();
                 let body = format!(
                     "var left: {left_name} = 1; var right: {right_name} = 1; const result = left + right;"
@@ -1663,7 +2318,7 @@ mod tests {
 
     #[test]
     fn integer_contract_uses_contextual_literals_and_exact_references() {
-        for ty in Type::ALL {
+        for ty in Type::ALL_INTEGERS {
             let name = ty.name();
             let max = u128::from(ty.max());
             for base in [2, 8, 10, 16] {
@@ -1690,9 +2345,9 @@ mod tests {
             }
         }
 
-        for source in Type::ALL {
+        for source in Type::ALL_INTEGERS {
             let source_name = source.name();
-            for destination in Type::ALL {
+            for destination in Type::ALL_INTEGERS {
                 let destination_name = destination.name();
                 for target in [
                     format!("const target: {destination_name} = source;"),

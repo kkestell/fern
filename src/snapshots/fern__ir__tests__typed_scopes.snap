@@ -7,21 +7,18 @@ Entry {
         Value {
             span: None,
             ty: I8,
-            kind: Copy(
-                Integer {
-                    value: 42,
-                    ty: I8,
-                },
+            kind: Load(
+                LocalId(
+                    0,
+                ),
             ),
         },
         Value {
             span: None,
             ty: I8,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        0,
-                    ),
+            kind: Load(
+                LocalId(
+                    0,
                 ),
             ),
         },
@@ -33,11 +30,20 @@ Entry {
             kind: Convert {
                 operand: Value(
                     ValueId(
-                        0,
+                        1,
                     ),
                 ),
                 truncating: false,
             },
+        },
+        Value {
+            span: None,
+            ty: I8,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
         },
         Value {
             span: Some(
@@ -47,7 +53,7 @@ Entry {
             kind: Convert {
                 operand: Value(
                     ValueId(
-                        1,
+                        3,
                     ),
                 ),
                 truncating: false,
@@ -56,22 +62,19 @@ Entry {
         Value {
             span: None,
             ty: I64,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        3,
-                    ),
+            kind: Load(
+                LocalId(
+                    2,
                 ),
             ),
         },
         Value {
             span: None,
             ty: I8,
-            kind: Copy(
-                Integer {
-                    value: 7,
-                    ty: I8,
-                },
+            kind: Load(
+                LocalId(
+                    0,
+                ),
             ),
         },
         Value {
@@ -82,21 +85,7 @@ Entry {
             kind: Convert {
                 operand: Value(
                     ValueId(
-                        5,
-                    ),
-                ),
-                truncating: false,
-            },
-        },
-        Value {
-            span: Some(
-                191..201,
-            ),
-            ty: Int,
-            kind: Convert {
-                operand: Value(
-                    ValueId(
-                        1,
+                        6,
                     ),
                 ),
                 truncating: false,
@@ -105,17 +94,15 @@ Entry {
         Value {
             span: None,
             ty: I8,
-            kind: Copy(
-                Value(
-                    ValueId(
-                        1,
-                    ),
+            kind: Load(
+                LocalId(
+                    1,
                 ),
             ),
         },
         Value {
             span: Some(
-                248..259,
+                191..201,
             ),
             ty: Int,
             kind: Convert {
@@ -127,10 +114,216 @@ Entry {
                 truncating: false,
             },
         },
+        Value {
+            span: None,
+            ty: I8,
+            kind: Load(
+                LocalId(
+                    1,
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: I8,
+            kind: Load(
+                LocalId(
+                    5,
+                ),
+            ),
+        },
+        Value {
+            span: Some(
+                248..259,
+            ),
+            ty: Int,
+            kind: Convert {
+                operand: Value(
+                    ValueId(
+                        11,
+                    ),
+                ),
+                truncating: false,
+            },
+        },
     ],
-    exit: Value(
-        ValueId(
-            9,
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
         ),
-    ),
+        locals: [
+            I8,
+            I8,
+            I64,
+            I64,
+            Int,
+            I8,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 42,
+                            ty: I8,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            0,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            1,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            1,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            2,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            2,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            3,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            4,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            2,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                4,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            5,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            3,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                5,
+                            ),
+                        ),
+                    },
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 7,
+                            ty: I8,
+                        },
+                    },
+                    Value(
+                        ValueId(
+                            6,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            7,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            4,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                7,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            8,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            9,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            4,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                9,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            10,
+                        ),
+                    ),
+                    Store {
+                        local: LocalId(
+                            5,
+                        ),
+                        operand: Value(
+                            ValueId(
+                                10,
+                            ),
+                        ),
+                    },
+                    Value(
+                        ValueId(
+                            11,
+                        ),
+                    ),
+                    Value(
+                        ValueId(
+                            12,
+                        ),
+                    ),
+                ],
+                terminator: Exit {
+                    status: Value(
+                        ValueId(
+                            12,
+                        ),
+                    ),
+                },
+            },
+        ],
+    },
 }

@@ -3,30 +3,34 @@ source: src/ir.rs
 expression: entry.entry()
 ---
 Entry {
-    values: [
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 42,
-                    ty: Int,
+    values: [],
+    flow: ControlFlow {
+        entry: BlockId(
+            0,
+        ),
+        locals: [
+            Int,
+        ],
+        blocks: [
+            Block {
+                instructions: [
+                    Store {
+                        local: LocalId(
+                            0,
+                        ),
+                        operand: Integer {
+                            value: 7,
+                            ty: Int,
+                        },
+                    },
+                ],
+                terminator: Exit {
+                    status: Integer {
+                        value: 0,
+                        ty: Int,
+                    },
                 },
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Copy(
-                Integer {
-                    value: 7,
-                    ty: Int,
-                },
-            ),
-        },
-    ],
-    exit: Integer {
-        value: 0,
-        ty: Int,
+            },
+        ],
     },
 }

@@ -15,6 +15,7 @@ described as "behavior" or a "specification."
 | `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
 | `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
 | `eng/roadmap.md`      | Milestones, their tasks, scope, order, and completion gates. Reference behavior contracts rather than defining them here.                                                              |
+| `eng/plans/`          | Implementation plans for individual roadmap tasks: concrete file changes, focused tests, and decisions the owning documents leave open.                                                |
 | `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
 
 Use `kspec` when creating or modifying `docs/spec.md`. Use `kroadmap` to
@@ -23,9 +24,11 @@ tasks in `eng/roadmap.md`. Reading either document does not require its skill.
 Generic skill wording about "product behavior" does not expand the language
 specification's scope.
 
-The specification and roadmap are created when the project needs them. `kwork`
+Plans in `eng/plans/` are produced by `kplan` and executed by `kwork`.
+
+The specification and roadmap are created when the project needs them. `kplan`
 requires both and will direct the user to the appropriate skill when either is
-missing. The architecture document is not required to begin work.
+missing. The architecture document is not required to begin planning.
 
 ## Codebase Map
 
@@ -112,9 +115,9 @@ feature is complete only when its affected phases and tests agree.
 Do not reserve names, add extension points, or build infrastructure for
 hypothetical future features.
 
-Use `kwork` to plan briefly in context, implement, and validate one roadmap task
-in the same session. Do not write an implementation plan file. Both
-`docs/spec.md` and `eng/roadmap.md` must exist before work begins.
+Use `kplan` to write an implementation plan for one roadmap task, then `kwork`
+to execute that plan and validate it. Both `docs/spec.md` and `eng/roadmap.md`
+must exist before planning begins.
 
 The roadmap is a list of named milestones in implementation order, with task
 checkboxes recording progress. Preserve completed tasks and milestone details.

@@ -53,16 +53,15 @@ requires neither skill.
      the snippet with a link to that file and retain its expected result.
 8. A milestone is an integrated outcome made up of bounded implementation tasks.
    Define the selected milestone's tasks here, with scope clear enough for
-   `kwork` to plan briefly and implement one task at a time. A milestone must
-   have its tasks defined before implementation begins. Collect completion
-   gates at the milestone boundary against `docs/spec.md`. Tasks may be
-   intermediate implementation steps; they do not each need a standalone
-   deliverable.
+   `kplan` to plan one task at a time. A milestone must have its tasks defined
+   before handing off to `kplan`. Collect completion gates at the milestone
+   boundary against `docs/spec.md`. Tasks may be intermediate implementation
+   steps; they do not each need a standalone deliverable.
 9. Order milestones and tasks by position in the file. Write each task as a
    Markdown checkbox: `- [ ]` for pending work and `- [x]` for completed work.
 10. Record scope and gates, not implementation design, standard repository
-    commands, or duplicated specification rules. `kwork` works out implementation
-    steps in context.
+    commands, or duplicated specification rules. Plans own the implementation of
+    bounded slices.
 11. Preserve existing task completion states and unrelated roadmap content.
     Never leave template prompts in the written file, and do not turn a possible
     future feature into a commitment.

@@ -1,9 +1,12 @@
 use crate::{
     CompileError,
-    frontend::{Expression, Statement, StatementKind},
+    frontend::{
+        BinaryOperator, Expression, ExpressionKind, Statement, StatementKind, UnaryOperator,
+    },
     semantic::{Binding, CheckedEntry, ExpressionValue, Type},
 };
 use la_arena::Idx;
+use num_traits::ToPrimitive;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +22,19 @@ pub(crate) enum Operand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Copy(Operand),
-    Convert { operand: Operand, truncating: bool },
+    Convert {
+        operand: Operand,
+        truncating: bool,
+    },
+    Unary {
+        operator: UnaryOperator,
+        operand: Operand,
+    },
+    Binary {
+        operator: BinaryOperator,
+        left: Operand,
+        right: Operand,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,18 +88,39 @@ impl Operand {
 impl Entry {
     pub(crate) fn verify(self) -> Result<VerifiedEntry, CompileError> {
         for (index, value) in self.values.iter().enumerate() {
-            let (source, valid) = match value.kind {
+            let valid = match value.kind {
                 ValueKind::Copy(operand) => {
                     let source = operand.verify(&self.values[..index])?;
-                    (source, source == value.ty)
+                    source == value.ty
                 }
                 ValueKind::Convert { operand, .. } => {
-                    (operand.verify(&self.values[..index])?, true)
+                    operand.verify(&self.values[..index])?;
+                    true
+                }
+                ValueKind::Unary { operator, operand } => {
+                    let source = operand.verify(&self.values[..index])?;
+                    value.span.is_some()
+                        && source == value.ty
+                        && (operator != UnaryOperator::Negate || source.signed())
+                }
+                ValueKind::Binary {
+                    operator,
+                    left,
+                    right,
+                } => {
+                    let left = left.verify(&self.values[..index])?;
+                    let right = right.verify(&self.values[..index])?;
+                    value.span.is_some()
+                        && left == value.ty
+                        && (matches!(
+                            operator,
+                            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+                        ) || right == left)
                 }
             };
             if !valid {
                 return Err(CompileError::new(format!(
-                    "internal compiler error: invalid IR value {index}: {:?} from {source:?} to {:?}",
+                    "internal compiler error: invalid IR value {index}: {:?} with result {:?}",
                     value.kind, value.ty
                 )));
             }
@@ -129,32 +165,116 @@ fn lower_expression(
     entry: &mut Entry,
 ) -> Value {
     let expression = &checked.expressions[id];
-    let operand = match expression.value {
-        ExpressionValue::Integer(value) => Operand::Integer {
-            value,
+    match &expression.value {
+        ExpressionValue::Integer(value) => constant_value(value, expression.ty),
+        ExpressionValue::Reference(binding) => Value {
+            span: None,
             ty: expression.ty,
+            kind: ValueKind::Copy(Operand::Value(bindings[binding])),
         },
-        ExpressionValue::Reference(binding) => Operand::Value(bindings[&binding]),
+        ExpressionValue::Grouping { expression } => {
+            lower_expression(checked, *expression, bindings, entry)
+        }
         ExpressionValue::Conversion { operand, .. } => {
-            let value = lower_expression(checked, operand, bindings, entry);
-            match value.kind {
-                ValueKind::Copy(operand) => operand,
-                ValueKind::Convert { .. } => Operand::Value(entry.push(value)),
+            let operand = lower_operand(checked, *operand, bindings, entry);
+            let ExpressionValue::Conversion { truncating, .. } = &expression.value else {
+                unreachable!()
+            };
+            Value {
+                span: Some(checked.syntax.expressions[id].span.clone()),
+                ty: expression.ty,
+                kind: ValueKind::Convert {
+                    operand,
+                    truncating: *truncating,
+                },
             }
         }
-    };
-    Value {
-        span: matches!(expression.value, ExpressionValue::Conversion { .. })
-            .then(|| checked.syntax.expressions[id].span.clone()),
-        ty: expression.ty,
-        kind: if let ExpressionValue::Conversion { truncating, .. } = expression.value {
-            ValueKind::Convert {
-                operand,
-                truncating,
+        ExpressionValue::Unary { operator, operand } => {
+            if let Some(constant) = expression.constant.as_ref() {
+                return constant_value(constant, expression.ty);
             }
-        } else {
-            ValueKind::Copy(operand)
-        },
+            let operand = lower_operand(checked, *operand, bindings, entry);
+            let ExpressionKind::Unary { operator_span, .. } = &checked.syntax.expressions[id].kind
+            else {
+                unreachable!()
+            };
+            Value {
+                span: Some(operator_span.clone()),
+                ty: expression.ty,
+                kind: ValueKind::Unary {
+                    operator: *operator,
+                    operand,
+                },
+            }
+        }
+        ExpressionValue::Binary {
+            operator,
+            left,
+            right,
+        } => {
+            if let Some(constant) = expression.constant.as_ref() {
+                return constant_value(constant, expression.ty);
+            }
+            let left = lower_operand(checked, *left, bindings, entry);
+            let checked_right = &checked.expressions[*right];
+            let right = if matches!(
+                operator,
+                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+            ) && checked_right.untyped
+                && checked_right
+                    .constant
+                    .as_ref()
+                    .is_some_and(|count| count >= &num_bigint::BigInt::from(expression.ty.width()))
+            {
+                // Runtime overshifts depend only on the count reaching the value width.
+                // Keep exact untyped counts out of the fixed-width IR representation.
+                Operand::Integer {
+                    value: i128::from(expression.ty.width()),
+                    ty: Type::Int,
+                }
+            } else {
+                lower_operand(checked, *right, bindings, entry)
+            };
+            let ExpressionKind::Binary { operator_span, .. } = &checked.syntax.expressions[id].kind
+            else {
+                unreachable!()
+            };
+            Value {
+                span: Some(operator_span.clone()),
+                ty: expression.ty,
+                kind: ValueKind::Binary {
+                    operator: *operator,
+                    left,
+                    right,
+                },
+            }
+        }
+    }
+}
+
+fn constant_value(value: &num_bigint::BigInt, ty: Type) -> Value {
+    Value {
+        span: None,
+        ty,
+        kind: ValueKind::Copy(Operand::Integer {
+            value: value
+                .to_i128()
+                .expect("concrete Fern integer fits in the IR representation"),
+            ty,
+        }),
+    }
+}
+
+fn lower_operand(
+    checked: &CheckedEntry<'_>,
+    id: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, ValueId>,
+    entry: &mut Entry,
+) -> Operand {
+    let value = lower_expression(checked, id, bindings, entry);
+    match value.kind {
+        ValueKind::Copy(operand) => operand,
+        _ => Operand::Value(entry.push(value)),
     }
 }
 
@@ -185,7 +305,7 @@ fn lower_body(
                 let value = lower_expression(checked, *argument, bindings, entry);
                 entry.exit = match value.kind {
                     ValueKind::Copy(operand) => operand,
-                    ValueKind::Convert { .. } => Operand::Value(entry.push(value)),
+                    _ => Operand::Value(entry.push(value)),
                 };
                 return true;
             }
@@ -265,6 +385,22 @@ mod tests {
                 x = 7; var status = int(x); status = int(saved);
                 { const status = saved; exit(int(status)); const ignored: u64 = 1; }
                 exit(0);
+            ",
+            ),
+            (
+                "integer_expressions",
+                "
+                var x: int = 40; var y: int = 2;
+                const add = x + y; const subtract = x - y;
+                const multiply = x * y; const divide = x / y; const remainder = x % y;
+                const wrapping_add = x &+ y; const wrapping_subtract = x &- y;
+                const wrapping_multiply = x &* y;
+                const negate = -x; const wrapping_negate = &-x; const complement = ^x;
+                const and = x & y; const and_not = x &^ y;
+                const xor = x ^ y; const or = x | y;
+                const shift_left = x << y; const shift_right = x >> y;
+                const folded: int = (250 + 10) / 2;
+                exit(add);
             ",
             ),
             ("converted_literal_exit", "exit(42);"),
@@ -503,5 +639,193 @@ mod tests {
         }
         .verify()
         .unwrap();
+    }
+
+    #[test]
+    fn lowering_preserves_nested_operand_order_types_and_operator_spans() {
+        let text = "fn main() -> void { var left: int = 8; var right: int = 2; var count: uint = 1; const result = (left + right) * (right - int(count)); exit(result); }";
+        let syntax = frontend::parse(text).unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        let values = &entry.entry().values;
+        assert_eq!(values.len(), 7);
+        assert_eq!(
+            values[3].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::Add,
+                left: Operand::Value(ValueId(0)),
+                right: Operand::Value(ValueId(1)),
+            }
+        );
+        assert_eq!(
+            values[4].kind,
+            ValueKind::Convert {
+                operand: Operand::Value(ValueId(2)),
+                truncating: false,
+            }
+        );
+        assert_eq!(
+            values[5].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::Subtract,
+                left: Operand::Value(ValueId(1)),
+                right: Operand::Value(ValueId(4)),
+            }
+        );
+        assert_eq!(
+            values[6].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::Multiply,
+                left: Operand::Value(ValueId(3)),
+                right: Operand::Value(ValueId(5)),
+            }
+        );
+        for (id, spelling) in [(3, "+"), (5, "-"), (6, "*")] {
+            let start = text.find(&format!(" {spelling} ")).unwrap() + 1;
+            assert_eq!(values[id].span, Some(start..start + spelling.len()));
+            assert_eq!(values[id].ty, Type::Int);
+        }
+        assert_eq!(entry.entry().exit, Operand::Value(ValueId(6)));
+    }
+
+    #[test]
+    fn lowering_contextualizes_an_untyped_runtime_shift_operand() {
+        let syntax = frontend::parse(
+            "fn main() -> void { var count: uint = 3; const shifted: u64 = (1 << count) << count; }",
+        )
+        .unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        assert_eq!(entry.entry().values.len(), 3);
+        assert_eq!(
+            entry.entry().values[1].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::ShiftLeft,
+                left: integer(1, Type::U64),
+                right: Operand::Value(ValueId(0)),
+            }
+        );
+        assert_eq!(entry.entry().values[1].ty, Type::U64);
+        assert_eq!(
+            entry.entry().values[2].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::ShiftLeft,
+                left: Operand::Value(ValueId(1)),
+                right: Operand::Value(ValueId(0)),
+            }
+        );
+        assert_eq!(entry.entry().values[2].ty, Type::U64);
+    }
+
+    #[test]
+    fn lowering_canonicalizes_exact_runtime_overshift_counts() {
+        let syntax = frontend::parse(
+            "fn main() -> void {
+                var value: u8 = 1;
+                const shifted = value << 99999999999999999999999999999999999999999999999999;
+            }",
+        )
+        .unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        assert_eq!(
+            entry.entry().values[1].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::ShiftLeft,
+                left: Operand::Value(ValueId(0)),
+                right: integer(8, Type::Int),
+            }
+        );
+    }
+
+    #[test]
+    fn lowering_preserves_contextual_types_through_grouping() {
+        let syntax = frontend::parse(
+            "fn main() -> void { const grouped: u8 = ((42)); var count: uint = 1; const shifted: u64 = (1 + 2) << count; }",
+        )
+        .unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        assert_eq!(entry.entry().values.len(), 3);
+        assert_eq!(
+            entry.entry().values[0],
+            copy(integer(42, Type::U8), Type::U8)
+        );
+        assert_eq!(
+            entry.entry().values[2].kind,
+            ValueKind::Binary {
+                operator: BinaryOperator::ShiftLeft,
+                left: integer(3, Type::U64),
+                right: Operand::Value(ValueId(1)),
+            }
+        );
+        assert_eq!(entry.entry().values[2].ty, Type::U64);
+    }
+
+    #[test]
+    fn verification_checks_operation_shapes_and_accepts_independent_shift_counts() {
+        let operation = |ty, kind| Value {
+            span: Some(0..1),
+            ty,
+            kind,
+        };
+        Entry {
+            values: vec![
+                copy(integer(1, Type::U8), Type::U8),
+                copy(integer(1, Type::U16), Type::U16),
+                operation(
+                    Type::U8,
+                    ValueKind::Binary {
+                        operator: BinaryOperator::ShiftLeft,
+                        left: Operand::Value(ValueId(0)),
+                        right: Operand::Value(ValueId(1)),
+                    },
+                ),
+            ],
+            exit: integer(0, Type::Int),
+        }
+        .verify()
+        .unwrap();
+
+        for value in [
+            operation(
+                Type::U8,
+                ValueKind::Unary {
+                    operator: UnaryOperator::Negate,
+                    operand: integer(1, Type::U8),
+                },
+            ),
+            operation(
+                Type::U16,
+                ValueKind::Unary {
+                    operator: UnaryOperator::Complement,
+                    operand: integer(1, Type::U8),
+                },
+            ),
+            operation(
+                Type::U8,
+                ValueKind::Binary {
+                    operator: BinaryOperator::Add,
+                    left: integer(1, Type::U8),
+                    right: integer(1, Type::U16),
+                },
+            ),
+            Value {
+                span: None,
+                ty: Type::U8,
+                kind: ValueKind::Binary {
+                    operator: BinaryOperator::Add,
+                    left: integer(1, Type::U8),
+                    right: integer(1, Type::U8),
+                },
+            },
+        ] {
+            assert!(
+                Entry {
+                    values: vec![value],
+                    exit: integer(0, Type::Int),
+                }
+                .verify()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid IR value")
+            );
+        }
     }
 }

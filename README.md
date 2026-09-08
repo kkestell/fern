@@ -14,7 +14,9 @@ visibility. See [assignment and scopes](examples/assignment_and_scopes.fern) for
 reassignment, saved copies, and nested shadowing, and
 [integer types](examples/integer_types.fern) for typed literals and explicit
 conversions. See [integer conversions](examples/integer_conversions.fern) for
-checked and truncating forms. The nonempty examples exit with status 42.
+checked and truncating forms, and
+[integer expressions](examples/integer_expressions.fern) for arithmetic,
+bitwise, and shift operators. The nonempty examples exit with status 42.
 
 ## Build and run
 
@@ -44,9 +46,11 @@ intermediates beside the requested output and publishes the executable only
 after QBE and the C toolchain succeed. A failed compilation preserves an
 existing output, and an output aliasing the input is rejected.
 
-The compiler accepts up to 128 enclosing blocks and conversion expressions
-combined, counting the function body. Deeper nesting produces a source
-diagnostic before recursive compiler phases can exhaust the stack.
+The compiler accepts recursive source nesting up to 128 levels, counting the
+function body, blocks, conversions, parenthesized groups, unary operators, and
+binary expression-tree depth. Deeper nesting produces a source diagnostic
+before recursive compiler phases can exhaust the stack. Untyped constant
+left-shift counts above 1,000,000 produce a compiler resource-limit diagnostic.
 
 ## Development
 

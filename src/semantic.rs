@@ -1,12 +1,13 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::{
-        Expression, ExpressionKind, Function, Statement, StatementKind, Syntax, integer_parts,
+        BinaryOperator, Expression, ExpressionKind, Function, Statement, StatementKind, Syntax,
+        UnaryOperator, integer_parts,
     },
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use std::collections::HashMap;
 
@@ -86,24 +87,37 @@ impl Type {
 pub(crate) struct Binding {
     pub ty: Type,
     pub mutable: bool,
-    pub constant: Option<i128>,
+    pub constant: Option<BigInt>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
-    Integer(i128),
+    Integer(BigInt),
     Reference(Idx<Binding>),
+    Grouping {
+        expression: Idx<Expression>,
+    },
     Conversion {
         operand: Idx<Expression>,
         truncating: bool,
+    },
+    Unary {
+        operator: UnaryOperator,
+        operand: Idx<Expression>,
+    },
+    Binary {
+        operator: BinaryOperator,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
     },
 }
 
 #[derive(Debug)]
 pub(crate) struct CheckedExpression {
     pub ty: Type,
+    pub untyped: bool,
     pub value: ExpressionValue,
-    pub constant: Option<i128>,
+    pub constant: Option<BigInt>,
 }
 
 #[derive(Debug)]
@@ -166,7 +180,11 @@ impl CheckedEntry<'_> {
                         .map(|a| Type::named(&a.name).expect("frontend validates integer types"));
                     let expression = self.check_expression(*initializer, scopes, destination)?;
                     let ty = expression.ty;
-                    let constant = if *mutable { None } else { expression.constant };
+                    let constant = if *mutable {
+                        None
+                    } else {
+                        expression.constant.clone()
+                    };
                     self.expressions.insert(*initializer, expression);
                     let binding = self.bindings.alloc(Binding {
                         ty,
@@ -231,33 +249,178 @@ impl CheckedEntry<'_> {
         scopes: &[HashMap<Spur, Idx<Binding>>],
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
+        let mut checked = self.infer_expression(id, scopes)?;
+        if checked.untyped {
+            self.concretize(id, &mut checked, destination.unwrap_or(Type::Int))?;
+        } else if let Some(destination) = destination
+            && checked.ty != destination
+        {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[id].span.clone(),
+                format!(
+                    "cannot implicitly convert `{}` to `{}`",
+                    checked.ty.name(),
+                    destination.name()
+                ),
+            ));
+        }
+        Ok(checked)
+    }
+
+    fn infer_expression(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<CheckedExpression, Diagnostic> {
         let expression = &self.syntax.expressions[id];
         let error = |message| Diagnostic::new(expression.span.clone(), message);
-        let (source_ty, value, constant) = match &expression.kind {
+        let checked = match &expression.kind {
             ExpressionKind::Integer(spelling) => {
                 let (base, digits, suffix) = integer_parts(spelling);
                 debug_assert!(suffix.is_empty(), "frontend rejects literal suffixes");
-                let ty = destination.unwrap_or(Type::Int);
                 let value = BigUint::parse_bytes(digits.as_bytes(), base)
                     .expect("frontend validated integer digits");
-                if value > BigUint::from(ty.max()) {
-                    return Err(error(format!(
-                        "integer literal out of range for `{}`",
-                        ty.name()
-                    )));
+                let value = BigInt::from(value);
+                CheckedExpression {
+                    ty: Type::Int,
+                    untyped: true,
+                    value: ExpressionValue::Integer(value.clone()),
+                    constant: Some(value.clone()),
                 }
-                let value = value
-                    .to_i128()
-                    .expect("integer value representable by every Fern type");
-                (ty, ExpressionValue::Integer(value), Some(value))
             }
             ExpressionKind::Reference(name) => {
                 let binding = self.resolve(*name, expression.span.clone(), scopes)?;
-                (
-                    self.bindings[binding].ty,
-                    ExpressionValue::Reference(binding),
-                    self.bindings[binding].constant,
-                )
+                CheckedExpression {
+                    ty: self.bindings[binding].ty,
+                    untyped: false,
+                    value: ExpressionValue::Reference(binding),
+                    constant: self.bindings[binding].constant.clone(),
+                }
+            }
+            ExpressionKind::Grouping { expression: inner } => {
+                let checked = self.infer_expression(*inner, scopes)?;
+                let result = CheckedExpression {
+                    ty: checked.ty,
+                    untyped: checked.untyped,
+                    value: ExpressionValue::Grouping { expression: *inner },
+                    constant: checked.constant.clone(),
+                };
+                self.expressions.insert(*inner, checked);
+                result
+            }
+            ExpressionKind::Unary {
+                operator,
+                operator_span,
+                operand,
+            } => {
+                let operand_id = *operand;
+                let checked_operand = self.infer_expression(operand_id, scopes)?;
+                if *operator == UnaryOperator::Negate
+                    && !checked_operand.untyped
+                    && !checked_operand.ty.signed()
+                {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        format!(
+                            "unary `-` is not permitted on `{}`",
+                            checked_operand.ty.name()
+                        ),
+                    ));
+                }
+                if *operator == UnaryOperator::WrappingNegate && checked_operand.untyped {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        "wrapping negation requires a typed operand",
+                    ));
+                }
+                let constant =
+                    self.evaluate_unary(*operator, operator_span.clone(), &checked_operand)?;
+                let result = CheckedExpression {
+                    ty: checked_operand.ty,
+                    untyped: checked_operand.untyped,
+                    value: ExpressionValue::Unary {
+                        operator: *operator,
+                        operand: operand_id,
+                    },
+                    constant,
+                };
+                self.expressions.insert(operand_id, checked_operand);
+                result
+            }
+            ExpressionKind::Binary {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                let left_id = *left;
+                let right_id = *right;
+                let mut checked_left = self.infer_expression(left_id, scopes)?;
+                let mut checked_right = self.infer_expression(right_id, scopes)?;
+                let shift = matches!(
+                    operator,
+                    BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+                );
+                let wrapping = matches!(
+                    operator,
+                    BinaryOperator::WrappingAdd
+                        | BinaryOperator::WrappingSubtract
+                        | BinaryOperator::WrappingMultiply
+                );
+                if wrapping && checked_left.untyped && checked_right.untyped {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        "wrapping arithmetic requires a typed operand",
+                    ));
+                }
+                if !shift {
+                    match (checked_left.untyped, checked_right.untyped) {
+                        (false, false) if checked_left.ty != checked_right.ty => {
+                            return Err(Diagnostic::new(
+                                operator_span.clone(),
+                                format!(
+                                    "binary operands have different types `{}` and `{}`",
+                                    checked_left.ty.name(),
+                                    checked_right.ty.name()
+                                ),
+                            ));
+                        }
+                        (false, true) => {
+                            self.concretize(right_id, &mut checked_right, checked_left.ty)?;
+                        }
+                        (true, false) => {
+                            self.concretize(left_id, &mut checked_left, checked_right.ty)?;
+                        }
+                        _ => {}
+                    }
+                }
+                let (ty, untyped) = if shift {
+                    (checked_left.ty, checked_left.untyped)
+                } else if checked_left.untyped {
+                    (checked_right.ty, checked_right.untyped)
+                } else {
+                    (checked_left.ty, false)
+                };
+                let constant = self.evaluate_binary(
+                    *operator,
+                    operator_span.clone(),
+                    ty,
+                    untyped,
+                    &checked_left,
+                    &checked_right,
+                )?;
+                self.expressions.insert(left_id, checked_left);
+                self.expressions.insert(right_id, checked_right);
+                CheckedExpression {
+                    ty,
+                    untyped,
+                    value: ExpressionValue::Binary {
+                        operator: *operator,
+                        left: left_id,
+                        right: right_id,
+                    },
+                    constant,
+                }
             }
             ExpressionKind::Conversion {
                 destination: annotation,
@@ -266,102 +429,350 @@ impl CheckedEntry<'_> {
             } => {
                 let destination =
                     Type::named(&annotation.name).expect("frontend validates integer types");
-                if *truncating
-                    && matches!(
-                        self.syntax.expressions[*operand].kind,
-                        ExpressionKind::Integer(_)
-                    )
-                {
-                    let ExpressionKind::Integer(spelling) = &self.syntax.expressions[*operand].kind
-                    else {
-                        unreachable!()
-                    };
-                    let (base, digits, _) = integer_parts(spelling);
-                    let value = BigUint::parse_bytes(digits.as_bytes(), base)
-                        .expect("frontend validated integer digits");
-                    let modulus = BigUint::from(1u8) << destination.width();
-                    let bits = (value % modulus)
-                        .to_u64()
-                        .expect("truncated Fern integer fits in u64");
-                    let value = integer_from_bits(bits, destination);
-                    (destination, ExpressionValue::Integer(value), Some(value))
+                let operand_id = *operand;
+                let mut checked_operand = self.infer_expression(operand_id, scopes)?;
+                if checked_operand.untyped && (!*truncating || checked_operand.constant.is_none()) {
+                    let operand_type = if *truncating { Type::Int } else { destination };
+                    self.concretize(operand_id, &mut checked_operand, operand_type)?;
+                }
+                let constant = if let Some(value) = checked_operand.constant.as_ref() {
+                    Some(if *truncating {
+                        truncate_integer(value, destination)
+                    } else if integer_fits(value, destination) {
+                        value.clone()
+                    } else {
+                        return Err(error(format!(
+                            "constant conversion to `{}` would trap",
+                            destination.name()
+                        )));
+                    })
                 } else {
-                    let operand_destination = if !*truncating
-                        && matches!(
-                            self.syntax.expressions[*operand].kind,
-                            ExpressionKind::Integer(_)
-                        ) {
-                        Some(destination)
-                    } else {
-                        None
-                    };
-                    let operand_id = *operand;
-                    let checked_operand =
-                        self.check_expression(operand_id, scopes, operand_destination)?;
-                    let constant = checked_operand.constant;
-                    self.expressions.insert(operand_id, checked_operand);
-                    if let Some(value) = constant {
-                        let value = if *truncating {
-                            truncate_integer(value, destination)
-                        } else if integer_fits(value, destination) {
-                            value
-                        } else {
-                            return Err(error(format!(
-                                "constant conversion to `{}` would trap",
-                                destination.name()
-                            )));
-                        };
-                        (destination, ExpressionValue::Integer(value), Some(value))
-                    } else {
-                        (
-                            destination,
-                            ExpressionValue::Conversion {
-                                operand: operand_id,
-                                truncating: *truncating,
-                            },
-                            None,
-                        )
+                    None
+                };
+                let value = if let Some(value) = constant.as_ref() {
+                    ExpressionValue::Integer(value.clone())
+                } else {
+                    ExpressionValue::Conversion {
+                        operand: operand_id,
+                        truncating: *truncating,
                     }
+                };
+                self.expressions.insert(operand_id, checked_operand);
+                CheckedExpression {
+                    ty: destination,
+                    untyped: false,
+                    value,
+                    constant,
                 }
             }
         };
-        let ty = destination.unwrap_or(source_ty);
-        if source_ty != ty {
-            return Err(error(format!(
-                "cannot implicitly convert `{}` to `{}`",
-                source_ty.name(),
-                ty.name()
-            )));
+        Ok(checked)
+    }
+
+    fn concretize(
+        &mut self,
+        id: Idx<Expression>,
+        checked: &mut CheckedExpression,
+        destination: Type,
+    ) -> Result<(), Diagnostic> {
+        debug_assert!(checked.untyped);
+        if let Some(value) = checked.constant.as_ref()
+            && !integer_fits(value, destination)
+        {
+            return Err(out_of_range(self.syntax, id, destination));
         }
-        Ok(CheckedExpression {
-            ty,
-            value,
-            constant,
-        })
+        checked.ty = destination;
+        checked.untyped = false;
+        self.concretize_children(id, destination, checked.constant.is_some())?;
+        Ok(())
+    }
+
+    fn concretize_stored(
+        &mut self,
+        id: Idx<Expression>,
+        destination: Type,
+    ) -> Result<(), Diagnostic> {
+        let checked = &self.expressions[id];
+        if !checked.untyped {
+            return Ok(());
+        }
+        if checked
+            .constant
+            .as_ref()
+            .is_some_and(|value| !integer_fits(value, destination))
+        {
+            return Err(out_of_range(self.syntax, id, destination));
+        }
+        let constant = checked.constant.is_some();
+        let checked = &mut self.expressions[id];
+        checked.ty = destination;
+        checked.untyped = false;
+        self.concretize_children(id, destination, constant)?;
+        Ok(())
+    }
+
+    fn concretize_children(
+        &mut self,
+        id: Idx<Expression>,
+        destination: Type,
+        constant: bool,
+    ) -> Result<(), Diagnostic> {
+        let (first, second) = match &self.syntax.expressions[id].kind {
+            ExpressionKind::Grouping { expression } => (Some(*expression), None),
+            ExpressionKind::Unary {
+                operator,
+                operator_span,
+                operand,
+            } if !constant => {
+                if *operator == UnaryOperator::Negate && !destination.signed() {
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        format!("unary `-` is not permitted on `{}`", destination.name()),
+                    ));
+                }
+                (Some(*operand), None)
+            }
+            ExpressionKind::Binary {
+                operator: BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight,
+                left,
+                ..
+            } if !constant => (Some(*left), None),
+            ExpressionKind::Binary { left, right, .. } if !constant => (Some(*left), Some(*right)),
+            _ => (None, None),
+        };
+        for child in first.into_iter().chain(second) {
+            self.concretize_stored(child, destination)?;
+        }
+        Ok(())
+    }
+
+    fn evaluate_unary(
+        &self,
+        operator: UnaryOperator,
+        operator_span: std::ops::Range<usize>,
+        operand: &CheckedExpression,
+    ) -> Result<Option<BigInt>, Diagnostic> {
+        let Some(value) = operand.constant.as_ref() else {
+            return Ok(None);
+        };
+        let result = match operator {
+            UnaryOperator::Negate => -value,
+            UnaryOperator::WrappingNegate => truncate_integer(&-value, operand.ty),
+            UnaryOperator::Complement if operand.untyped => !value,
+            UnaryOperator::Complement => truncate_integer(&!value, operand.ty),
+        };
+        if operator == UnaryOperator::Negate
+            && !operand.untyped
+            && !integer_fits(&result, operand.ty)
+        {
+            return Err(Diagnostic::new(
+                operator_span,
+                format!("constant unary `-` on `{}` would trap", operand.ty.name()),
+            ));
+        }
+        Ok(Some(result))
+    }
+
+    fn evaluate_binary(
+        &self,
+        operator: BinaryOperator,
+        operator_span: std::ops::Range<usize>,
+        ty: Type,
+        untyped: bool,
+        left: &CheckedExpression,
+        right: &CheckedExpression,
+    ) -> Result<Option<BigInt>, Diagnostic> {
+        let right_constant = right.constant.as_ref();
+        if matches!(operator, BinaryOperator::Divide | BinaryOperator::Remainder)
+            && right_constant == Some(&BigInt::from(0u8))
+        {
+            return Err(Diagnostic::new(
+                operator_span,
+                format!("constant `{}` divisor is zero", binary_spelling(operator)),
+            ));
+        }
+        if matches!(
+            operator,
+            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+        ) && right_constant.is_some_and(|count| count < &BigInt::from(0u8))
+        {
+            return Err(Diagnostic::new(
+                operator_span,
+                "constant shift count is negative",
+            ));
+        }
+
+        let (Some(left), Some(right)) = (left.constant.as_ref(), right_constant) else {
+            return Ok(None);
+        };
+        let result = match operator {
+            BinaryOperator::Multiply => left * right,
+            BinaryOperator::Divide => {
+                if !untyped && is_minimum(left, ty) && right == &BigInt::from(-1) {
+                    return Err(Diagnostic::new(
+                        operator_span,
+                        format!("constant `/` on `{}` would trap", ty.name()),
+                    ));
+                }
+                left / right
+            }
+            BinaryOperator::Remainder => {
+                if !untyped && is_minimum(left, ty) && right == &BigInt::from(-1) {
+                    return Err(Diagnostic::new(
+                        operator_span,
+                        format!("constant `%` on `{}` would trap", ty.name()),
+                    ));
+                }
+                left % right
+            }
+            BinaryOperator::WrappingMultiply => truncate_integer(&(left * right), ty),
+            BinaryOperator::Add => left + right,
+            BinaryOperator::Subtract => left - right,
+            BinaryOperator::WrappingAdd => truncate_integer(&(left + right), ty),
+            BinaryOperator::WrappingSubtract => truncate_integer(&(left - right), ty),
+            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+                return self.evaluate_shift(operator, operator_span, ty, untyped, left, right);
+            }
+            BinaryOperator::And => left & right,
+            BinaryOperator::AndNot => left & !right,
+            BinaryOperator::Xor => left ^ right,
+            BinaryOperator::Or => left | right,
+        };
+        let checked_arithmetic = matches!(
+            operator,
+            BinaryOperator::Multiply | BinaryOperator::Add | BinaryOperator::Subtract
+        );
+        if checked_arithmetic && !untyped && !integer_fits(&result, ty) {
+            return Err(Diagnostic::new(
+                operator_span,
+                format!(
+                    "constant `{}` on `{}` would overflow",
+                    binary_spelling(operator),
+                    ty.name()
+                ),
+            ));
+        }
+        Ok(Some(result))
+    }
+
+    fn evaluate_shift(
+        &self,
+        operator: BinaryOperator,
+        operator_span: std::ops::Range<usize>,
+        ty: Type,
+        untyped: bool,
+        left: &BigInt,
+        right: &BigInt,
+    ) -> Result<Option<BigInt>, Diagnostic> {
+        debug_assert!(right >= &BigInt::from(0u8));
+        if untyped {
+            const MAX_CONSTANT_SHIFT: usize = 1_000_000;
+            let count = right.to_usize();
+            if operator == BinaryOperator::ShiftRight && count.is_none() {
+                return Ok(Some(if left < &BigInt::from(0u8) {
+                    BigInt::from(-1)
+                } else {
+                    BigInt::from(0u8)
+                }));
+            }
+            let Some(count) = count else {
+                return Err(Diagnostic::new(
+                    operator_span,
+                    "constant shift exceeds compiler resource limit",
+                ));
+            };
+            if operator == BinaryOperator::ShiftLeft && count > MAX_CONSTANT_SHIFT {
+                return Err(Diagnostic::new(
+                    operator_span,
+                    "constant shift exceeds compiler resource limit",
+                ));
+            }
+            return Ok(Some(if operator == BinaryOperator::ShiftLeft {
+                left << count
+            } else {
+                left >> count
+            }));
+        }
+
+        if right >= &BigInt::from(ty.width()) {
+            return Ok(Some(
+                if operator == BinaryOperator::ShiftRight
+                    && ty.signed()
+                    && left < &BigInt::from(0u8)
+                {
+                    BigInt::from(-1)
+                } else {
+                    BigInt::from(0u8)
+                },
+            ));
+        }
+        let count = right
+            .to_usize()
+            .expect("count below every Fern integer width fits usize");
+        Ok(Some(if operator == BinaryOperator::ShiftLeft {
+            truncate_integer(&(left << count), ty)
+        } else {
+            left >> count
+        }))
     }
 }
 
-fn integer_fits(value: i128, ty: Type) -> bool {
+fn binary_spelling(operator: BinaryOperator) -> &'static str {
+    match operator {
+        BinaryOperator::Multiply => "*",
+        BinaryOperator::Divide => "/",
+        BinaryOperator::Remainder => "%",
+        BinaryOperator::WrappingMultiply => "&*",
+        BinaryOperator::Add => "+",
+        BinaryOperator::Subtract => "-",
+        BinaryOperator::WrappingAdd => "&+",
+        BinaryOperator::WrappingSubtract => "&-",
+        BinaryOperator::ShiftLeft => "<<",
+        BinaryOperator::ShiftRight => ">>",
+        BinaryOperator::And => "&",
+        BinaryOperator::AndNot => "&^",
+        BinaryOperator::Xor => "^",
+        BinaryOperator::Or => "|",
+    }
+}
+
+fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Type) -> Diagnostic {
+    let literal = matches!(syntax.expressions[id].kind, ExpressionKind::Integer(_));
+    Diagnostic::new(
+        syntax.expressions[id].span.clone(),
+        format!(
+            "integer {} out of range for `{}`",
+            if literal { "literal" } else { "value" },
+            destination.name()
+        ),
+    )
+}
+
+fn is_minimum(value: &BigInt, ty: Type) -> bool {
+    ty.signed() && value == &-(BigInt::from(1u8) << (ty.width() - 1))
+}
+
+fn integer_fits(value: &BigInt, ty: Type) -> bool {
     let minimum = if ty.signed() {
-        -(1i128 << (ty.width() - 1))
+        -(BigInt::from(1u8) << (ty.width() - 1))
     } else {
-        0
+        BigInt::from(0u8)
     };
-    value >= minimum && value <= i128::from(ty.max())
+    value >= &minimum && value <= &BigInt::from(ty.max())
 }
 
-fn integer_from_bits(bits: u64, ty: Type) -> i128 {
-    let value = i128::from(bits);
-    if ty.signed() && value >= (1i128 << (ty.width() - 1)) {
-        value - (1i128 << ty.width())
+fn integer_from_bits(bits: BigInt, ty: Type) -> BigInt {
+    if ty.signed() && bits >= (BigInt::from(1u8) << (ty.width() - 1)) {
+        bits - (BigInt::from(1u8) << ty.width())
     } else {
-        value
+        bits
     }
 }
 
-fn truncate_integer(value: i128, ty: Type) -> i128 {
-    let modulus = 1i128 << ty.width();
-    integer_from_bits(value.rem_euclid(modulus) as u64, ty)
+fn truncate_integer(value: &BigInt, ty: Type) -> BigInt {
+    let modulus = BigInt::from(1u8) << ty.width();
+    let bits = ((value % &modulus) + &modulus) % &modulus;
+    integer_from_bits(bits, ty)
 }
 
 #[cfg(test)]
@@ -392,6 +803,10 @@ mod tests {
         }
     }
 
+    fn big(value: i128) -> BigInt {
+        BigInt::from(value)
+    }
+
     #[test]
     fn bindings_have_concrete_types_and_distinct_identities() {
         let text =
@@ -417,11 +832,11 @@ mod tests {
             .collect();
         assert_eq!(facts.len(), 5);
         assert!(facts.iter().all(|fact| fact.ty == Type::Int));
-        assert_eq!(facts[0].value, ExpressionValue::Integer(1));
+        assert_eq!(facts[0].value, ExpressionValue::Integer(big(1)));
         assert_eq!(facts[1].value, ExpressionValue::Reference(ids[0]));
         assert_eq!(facts[2].value, ExpressionValue::Reference(ids[1]));
         assert_eq!(facts[3].value, ExpressionValue::Reference(ids[2]));
-        assert_eq!(facts[4].value, ExpressionValue::Integer(0));
+        assert_eq!(facts[4].value, ExpressionValue::Integer(big(0)));
     }
 
     #[test]
@@ -437,9 +852,13 @@ mod tests {
         let references: Vec<_> = checked
             .expressions
             .iter()
-            .filter_map(|(_, expression)| match expression.value {
-                ExpressionValue::Reference(id) => Some(id),
-                ExpressionValue::Integer(_) | ExpressionValue::Conversion { .. } => None,
+            .filter_map(|(_, expression)| match &expression.value {
+                ExpressionValue::Reference(id) => Some(*id),
+                ExpressionValue::Integer(_)
+                | ExpressionValue::Conversion { .. }
+                | ExpressionValue::Grouping { .. }
+                | ExpressionValue::Unary { .. }
+                | ExpressionValue::Binary { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -507,6 +926,427 @@ mod tests {
         let start = text.rfind(offending).unwrap();
         assert_eq!(error.span, start..start + offending.len(), "{body}");
         assert_eq!(error.message, message, "{body}");
+    }
+
+    fn accepts(body: &str) {
+        let text = format!("fn main() -> void {{ {body} }}");
+        let syntax = parse(&text).unwrap();
+        check(&syntax).unwrap();
+    }
+
+    #[test]
+    fn integer_expression_types_follow_operand_rules() {
+        let body = "var a: u8 = 1;
+             var b: u8 = 2;
+             const add = a + 2;
+             const reverse = 2 + a;
+             const shift = a << u64(3);
+             const exact: u16 = 1 + 2;
+             const negative: i8 = -128;
+             const complemented = ^a;
+             const wrapped = a &+ 1;
+             const wrapped_negative = &-a;
+             exit(0);
+             const after = a &^ b;";
+        let text = format!("fn main() -> void {{ {body} }}");
+        let syntax = parse(&text).unwrap();
+        let checked = check(&syntax).unwrap();
+        let types: Vec<_> = checked
+            .bindings
+            .iter()
+            .map(|(_, binding)| binding.ty)
+            .collect();
+        assert_eq!(
+            types,
+            [
+                Type::U8,
+                Type::U8,
+                Type::U8,
+                Type::U8,
+                Type::U8,
+                Type::U16,
+                Type::I8,
+                Type::U8,
+                Type::U8,
+                Type::U8,
+                Type::U8,
+            ]
+        );
+
+        for (left_name, left) in SPEC_INTEGER_TYPES {
+            for (right_name, right) in SPEC_INTEGER_TYPES {
+                let body = format!(
+                    "var left: {left_name} = 1; var right: {right_name} = 1; const result = left + right;"
+                );
+                if left == right {
+                    accepts(&body);
+                } else {
+                    rejects(
+                        &body,
+                        "+",
+                        &format!(
+                            "binary operands have different types `{left_name}` and `{right_name}`"
+                        ),
+                    );
+                }
+
+                accepts(&format!(
+                    "var left: {left_name} = 1; var count: {right_name} = 1; const result = left << count;"
+                ));
+            }
+        }
+
+        for body in [
+            "var x: u8 = 1; const y = x + 256;",
+            "var x: u8 = 1; const y = 256 + x;",
+        ] {
+            rejects(body, "256", "integer literal out of range for `u8`");
+        }
+        for (body, offending, message) in [
+            (
+                "const x = 1 &+ 2;",
+                "&+",
+                "wrapping arithmetic requires a typed operand",
+            ),
+            (
+                "const x = &-1;",
+                "&-",
+                "wrapping negation requires a typed operand",
+            ),
+            (
+                "const x = -u8(1);",
+                "-",
+                "unary `-` is not permitted on `u8`",
+            ),
+        ] {
+            rejects(body, offending, message);
+        }
+        accepts("var x: u8 = 1; { var x: u16 = 2; const inner = x + 1; } x = x + 1; exit(0);");
+        rejects(
+            "exit(0); const after = 1 + missing;",
+            "missing",
+            "unknown binding `missing`",
+        );
+    }
+
+    #[test]
+    fn signed_minima_and_expression_constants_keep_their_contracts() {
+        for (name, minimum) in [
+            ("i8", 1u128 << 7),
+            ("i16", 1u128 << 15),
+            ("i32", 1u128 << 31),
+            ("i64", 1u128 << 63),
+            ("int", 1u128 << (usize::BITS - 1)),
+        ] {
+            accepts(&format!(
+                "const direct: {name} = -{minimum}; const converted = {name}(-{minimum});"
+            ));
+            let invalid = minimum + 1;
+            rejects(
+                &format!("const value: {name} = -{invalid};"),
+                &format!("-{invalid}"),
+                &format!("integer value out of range for `{name}`"),
+            );
+        }
+
+        let body = "const exact = 1 + 2;
+             const copy = exact;
+             var runtime = 1;
+             const mixed = runtime + 2;
+             { const exact = runtime; const shadowed = exact + 1; }
+             exit(0);
+             const after = copy ^ 1;";
+        let text = format!("fn main() -> void {{ {body} }}");
+        let syntax = parse(&text).unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.is_some())
+                .collect::<Vec<_>>(),
+            [true, true, false, false, false, false, true]
+        );
+    }
+
+    #[test]
+    fn constant_evaluation_preserves_exact_and_typed_operations() {
+        let text = "fn main() -> void {
+            const exact: u8 = (250 + 10) / 2;
+            const ordinary = 9 * 5 - 3;
+            const quotient = -7 / 3;
+            const remainder = -7 % 3;
+            const complement = ^0;
+            const cleared = 15 &^ 3;
+            const bits = (12 & 10) ^ 3 | 16;
+            const large: i64 = 1 << 40;
+            const signed_shift = -8 >> 2;
+            const wrapped_add = u8(250) &+ 10;
+            const wrapped_subtract = u8(1) &- 2;
+            const wrapped_multiply = u8(200) &* 2;
+            const wrapped_negate = &-u8(1);
+            const high: u8 = 128;
+            const discarded = high << 1;
+            const negative: i8 = -1;
+            const sign_fill = negative >> 8;
+            const huge = u8.truncate((1 << 255) + 42);
+            const distant_bit = u8.truncate(((1 << 1000000) * 2) >> 1000001);
+            const copy = exact;
+            const combined = copy + u8(1);
+            var runtime = 2;
+            const saved = runtime;
+            const not_constant = saved + 1;
+        }";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.clone())
+                .collect::<Vec<_>>(),
+            [
+                Some(big(130)),
+                Some(big(42)),
+                Some(big(-2)),
+                Some(big(-1)),
+                Some(big(-1)),
+                Some(big(12)),
+                Some(big(27)),
+                Some(BigInt::from(1u8) << 40),
+                Some(big(-2)),
+                Some(big(4)),
+                Some(big(255)),
+                Some(big(144)),
+                Some(big(255)),
+                Some(big(128)),
+                Some(big(0)),
+                Some(big(-1)),
+                Some(big(-1)),
+                Some(big(42)),
+                Some(big(1)),
+                Some(big(130)),
+                Some(big(131)),
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn constant_failures_are_diagnosed_before_runtime_lowering() {
+        for (body, offending, message) in [
+            (
+                "const x = u8(255) + 1;",
+                "+",
+                "constant `+` on `u8` would overflow",
+            ),
+            (
+                "const x = u8(0) - 1;",
+                "-",
+                "constant `-` on `u8` would overflow",
+            ),
+            (
+                "const x = u8(128) * 2;",
+                "*",
+                "constant `*` on `u8` would overflow",
+            ),
+            (
+                "const minimum: i8 = -128; const x = -minimum;",
+                "-",
+                "constant unary `-` on `i8` would trap",
+            ),
+            (
+                "const x = i8(-128) / -1;",
+                "/",
+                "constant `/` on `i8` would trap",
+            ),
+            (
+                "const x = i8(-128) % -1;",
+                "%",
+                "constant `%` on `i8` would trap",
+            ),
+            (
+                "var x: u8 = 1; const y = x / 0;",
+                "/",
+                "constant `/` divisor is zero",
+            ),
+            (
+                "var x: u8 = 1; const y = x % 0;",
+                "%",
+                "constant `%` divisor is zero",
+            ),
+            (
+                "var x: u8 = 1; const y = x << -1;",
+                "<<",
+                "constant shift count is negative",
+            ),
+            (
+                "const x: u8 = 250 + 10;",
+                "250 + 10",
+                "integer value out of range for `u8`",
+            ),
+            (
+                "const x = u8(250 + 10);",
+                "250 + 10",
+                "integer value out of range for `u8`",
+            ),
+        ] {
+            rejects(body, offending, message);
+            rejects(&format!("exit(0); {body}"), offending, message);
+        }
+        rejects(
+            "var runtime: u8 = 1; const outer = runtime + (u8(255) + 1);",
+            "+",
+            "constant `+` on `u8` would overflow",
+        );
+    }
+
+    #[test]
+    fn constant_classification_does_not_depend_on_binding_mutability() {
+        let text = "fn main() -> void {
+            const immutable = 1 + 2;
+            var mutable = 1 + 2;
+            const immutable_copy = immutable;
+            const mutable_copy = mutable;
+        }";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+        let expression_constants: Vec<_> = syntax.functions[checked.main]
+            .body
+            .iter()
+            .map(|statement| match syntax.statements[*statement].kind {
+                StatementKind::Binding { initializer, .. } => {
+                    checked.expressions[initializer].constant.clone()
+                }
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            expression_constants,
+            [Some(big(3)), Some(big(3)), Some(big(3)), None]
+        );
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.clone())
+                .collect::<Vec<_>>(),
+            [Some(big(3)), None, Some(big(3)), None]
+        );
+    }
+
+    #[test]
+    fn revised_precedence_wrapping_and_shift_boundaries_are_preserved() {
+        let text = "fn main() -> void {
+            const precedence_left = 1 + 2 << 1;
+            const precedence_right = 1 << 2 + 1;
+            const same_level = 15 &^ 3 & 6;
+            const bit_levels = 1 | 2 ^ 3 & 4;
+            const wrapped_left = u8(250) &+ 10;
+            const wrapped_right = 250 &+ u8(10);
+            const high: u8 = 128;
+            const discarded = high << 1;
+            var runtime_high: u8 = 128;
+            const runtime_discarded = runtime_high << 1;
+            const overshift = u8(1) << 999999999999999999999999999999999999;
+            const negative: i8 = -1;
+            const sign_fill = negative >> 8;
+            const exact: u16 = 1 << 8;
+            const reduced: u8 = 256 >> u8(8);
+        }";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.constant.clone())
+                .collect::<Vec<_>>(),
+            [
+                Some(big(6)),
+                Some(big(8)),
+                Some(big(4)),
+                Some(big(3)),
+                Some(big(4)),
+                Some(big(4)),
+                Some(big(128)),
+                Some(big(0)),
+                None,
+                None,
+                Some(big(0)),
+                Some(big(-1)),
+                Some(big(-1)),
+                Some(big(256)),
+                Some(big(1)),
+            ]
+        );
+
+        for (body, offending, message) in [
+            (
+                "const invalid: u8 = 250 &+ 10;",
+                "&+",
+                "wrapping arithmetic requires a typed operand",
+            ),
+            (
+                "const invalid = &-1;",
+                "&-",
+                "wrapping negation requires a typed operand",
+            ),
+            (
+                "const typed = u8(1) &+ 256;",
+                "256",
+                "integer literal out of range for `u8`",
+            ),
+            (
+                "const invalid: u8 = 1 << 8;",
+                "1 << 8",
+                "integer value out of range for `u8`",
+            ),
+        ] {
+            rejects(body, offending, message);
+            rejects(&format!("exit(0); {body}"), offending, message);
+        }
+    }
+
+    #[test]
+    fn contextual_types_reach_nested_runtime_integer_expressions() {
+        let text = "fn main() -> void {
+            var count: uint = 1;
+            const arithmetic: u64 = (1 << count) + 1;
+            const negated: i64 = -(1 << count);
+            const complemented: u16 = ^(1 << count);
+        }";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| binding.ty)
+                .collect::<Vec<_>>(),
+            [Type::Uint, Type::U64, Type::I64, Type::U16]
+        );
+        assert!(
+            checked
+                .expressions
+                .iter()
+                .all(|(_, expression)| !expression.untyped)
+        );
+
+        rejects(
+            "var count: uint = 1; const invalid: u8 = -(1 << count);",
+            "-",
+            "unary `-` is not permitted on `u8`",
+        );
+
+        let too_large = BigInt::from(Type::Int.max()) + 1u8;
+        rejects(
+            &format!("var count: uint = 1; const invalid = u8.truncate({too_large} << count);"),
+            &too_large.to_string(),
+            "integer literal out of range for `int`",
+        );
     }
 
     #[test]
@@ -617,15 +1457,15 @@ mod tests {
         let constants: Vec<_> = checked
             .bindings
             .iter()
-            .map(|(_, binding)| binding.constant)
+            .map(|(_, binding)| binding.constant.clone())
             .collect();
         assert_eq!(
             constants,
             [
-                Some(42),
-                Some(42),
-                Some(-1),
-                Some(42),
+                Some(big(42)),
+                Some(big(42)),
+                Some(big(-1)),
+                Some(big(42)),
                 None,
                 None,
                 None,
@@ -674,7 +1514,7 @@ mod tests {
             let checked = check(&syntax).unwrap();
             assert_eq!(
                 checked.bindings.iter().next().unwrap().1.constant,
-                Some(255)
+                Some(big(255))
             );
             rejects(
                 &format!("exit(0); const result = u8.truncate(u64({literal}));"),
@@ -704,17 +1544,17 @@ mod tests {
             checked
                 .bindings
                 .iter()
-                .map(|(_, binding)| binding.constant)
+                .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
             [
-                Some(255),
-                Some(255),
+                Some(big(255)),
+                Some(big(255)),
                 None,
                 None,
                 None,
-                Some(-1),
-                Some(-1),
-                Some(i128::from(u64::MAX))
+                Some(big(-1)),
+                Some(big(-1)),
+                Some(BigInt::from(u64::MAX))
             ],
         );
         for body in [

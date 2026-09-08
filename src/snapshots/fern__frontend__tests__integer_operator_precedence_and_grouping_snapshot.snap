@@ -1,0 +1,49 @@
+---
+source: src/frontend.rs
+expression: project(&parse(source).unwrap())
+---
+fn main name=3..7 span=0..139
+  const x name=26..27 annotation=None span=20..108
+    binary Or operator=40..41 span=30..107
+      unary Negate operator=30..31 span=30..39
+        unary Complement operator=31..32 span=31..39
+          unary WrappingNegate operator=32..34 span=32..39
+            checked conversion u8 span=34..39
+              integer 1 span=37..38
+      binary Xor operator=44..45 span=42..107
+        integer 2 span=42..43
+        binary AndNot operator=52..54 span=46..107
+          binary And operator=48..49 span=46..51
+            integer 3 span=46..47
+            integer 4 span=50..51
+          binary ShiftRight operator=62..64 span=55..107
+            binary ShiftLeft operator=57..59 span=55..61
+              integer 5 span=55..56
+              integer 6 span=60..61
+            binary WrappingSubtract operator=81..83 span=65..107
+              binary Subtract operator=76..77 span=65..80
+                binary WrappingAdd operator=71..73 span=65..75
+                  binary Add operator=67..68 span=65..70
+                    integer 7 span=65..66
+                    integer 8 span=69..70
+                  integer 9 span=74..75
+                integer 10 span=78..80
+              binary Remainder operator=103..104 span=84..107
+                binary Divide operator=98..99 span=84..102
+                  binary WrappingMultiply operator=92..94 span=84..97
+                    binary Multiply operator=87..88 span=84..91
+                      integer 11 span=84..86
+                      integer 12 span=89..91
+                    integer 13 span=95..97
+                  integer 14 span=100..102
+                integer 15 span=105..107
+  const y name=115..116 annotation=None span=109..137
+    binary Multiply operator=127..128 span=119..136
+      group span=119..126
+        binary Add operator=122..123 span=120..125
+          integer 1 span=120..121
+          integer 2 span=124..125
+      group span=129..136
+        binary Subtract operator=132..133 span=130..135
+          integer 3 span=130..131
+          integer 4 span=134..135

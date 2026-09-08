@@ -265,60 +265,15 @@ literal and conversion behavior. Comparisons and compound assignments remain
 outside this milestone, as do branches, loops, modules, and collection or
 pointer operations.
 
-Before implementation begins, use kspec to settle operator precedence,
-associativity, operand evaluation order, and wrapping expressions with only
-untyped operands. Refresh this milestone's tasks and example with kroadmap if
-those decisions change its scope. The example below uses explicit grouping and
-typed wrapping operands so it does not depend on those open decisions.
-
 ### Example
 
-Create `examples/integer_expressions.fern` when this milestone is implemented.
-
-```fern
-fn main() -> void {
-    const exact: u8 = (250 + 10) / 2;
-    var y: u8 = 10;
-    const wrapped: u8 = (250 &+ y) / 2;
-    const widened: u16 = u16(y) + 1000;
-
-    const bits = (((^u8(0)) ^ 0x0F) & 0xF0) | 0x02;
-    const shifted = bits >> 4;
-    var high: u8 = 128;
-    const discarded = high << 1;
-    var one: u8 = 1;
-    const large_shift = one << 8;
-    var negative: i8 = -7;
-    const sign_fill = negative >> 8;
-    const quotient = negative / 3;
-    const remainder = negative % 3;
-    const negated = -negative;
-    const minimum: i8 = -128;
-    const large: i64 = 1 << 40;
-
-    var status: int = 40;
-    {
-        const saved = status;
-        status = saved + int(wrapped);
-        y = y &* 30;
-    }
-
-    // Uncomment individually to try compile-time diagnostics.
-    // const out_of_range: u8 = 250 + 10;
-    // const typed_overflow = u8(250) + 10;
-    // const constant_shift = u8(128) << 1;
-    // const zero_divisor = status / 0;
-    // const negative_shift = status << -1;
-
-    exit(status);
-}
-```
+See [the example](../examples/integer_expressions.fern).
 
 Expected exit status: 42.
 
 ### Tasks
 
-- [ ] **Parse integer operators and grouping**
+- [x] **Parse integer operators and grouping**
 
   - Accept the specified unary and binary operators and parentheses wherever
     the existing integer expressions are accepted.
@@ -327,7 +282,7 @@ Expected exit status: 42.
     comments adjacent to operators, and malformed expressions in parser tests
     and snapshots.
 
-- [ ] **Check integer expression types**
+- [x] **Check integer expression types**
 
   - Check untyped and concrete operand combinations, unary operations, shift
     operands, result types, and destination conversions against the linked
@@ -339,7 +294,7 @@ Expected exit status: 42.
   - Extend constant-expression classification from literals, conversions, and
     binding references to the new operators; evaluation follows in the next task.
 
-- [ ] **Evaluate integer constant expressions**
+- [x] **Evaluate integer constant expressions**
 
   - Evaluate the required constant expressions and subexpressions, preserving
     untyped values until their specified conversion boundary.
@@ -351,7 +306,16 @@ Expected exit status: 42.
   - Distinguish constant shifts from runtime shifts, and ordinary arithmetic
     from explicitly wrapping operations during constant evaluation. Runtime lowering remains unfinished at this boundary.
 
-- [ ] **Lower checked integer operations**
+- [x] **Correct revised integer expression boundaries**
+
+  - Apply the revised precedence and typed wrapping-operand contracts across
+    parsing and checking, with focused regression coverage.
+  - Make typed constant shifts agree with runtime shifts while retaining exact
+    untyped constant shifts and their final range checks.
+  - Preserve constant-expression classification, source diagnostics, and
+    unreachable-source checking across the corrected boundaries.
+
+- [x] **Lower checked integer operations**
 
   - Carry checked operations, conversions, and constant results through Fern IR
     while preserving operand evaluation order and required runtime failures.
@@ -361,7 +325,7 @@ Expected exit status: 42.
   - Preserve existing executable behavior while native support is incomplete;
     reject unsupported emission without replacing an existing output file.
 
-- [ ] **Execute integer expressions and failures**
+- [x] **Execute integer expressions and failures**
 
   - Emit the integer operations and runtime diagnostics for all types in scope,
     preserving Fern's results independently of host instruction behavior.

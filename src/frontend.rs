@@ -29,6 +29,34 @@ enum Token {
     Comma,
     #[token(".")]
     Dot,
+    #[token("&+")]
+    WrappingPlus,
+    #[token("&-")]
+    WrappingMinus,
+    #[token("&*")]
+    WrappingStar,
+    #[token("&^")]
+    AndNot,
+    #[token("<<")]
+    ShiftLeft,
+    #[token(">>")]
+    ShiftRight,
+    #[token("+")]
+    Plus,
+    #[token("-")]
+    Minus,
+    #[token("*")]
+    Star,
+    #[token("/")]
+    Slash,
+    #[token("%")]
+    Percent,
+    #[token("&")]
+    Ampersand,
+    #[token("^")]
+    Caret,
+    #[token("|")]
+    Pipe,
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Name,
     #[token("(")]
@@ -120,12 +148,52 @@ pub(crate) struct TypeAnnotation {
 pub(crate) struct Expression {
     pub kind: ExpressionKind,
     pub span: Range<usize>,
+    depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnaryOperator {
+    Negate,
+    WrappingNegate,
+    Complement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BinaryOperator {
+    Multiply,
+    Divide,
+    Remainder,
+    WrappingMultiply,
+    Add,
+    Subtract,
+    WrappingAdd,
+    WrappingSubtract,
+    ShiftLeft,
+    ShiftRight,
+    And,
+    AndNot,
+    Xor,
+    Or,
 }
 
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
     Reference(Spur),
+    Grouping {
+        expression: Idx<Expression>,
+    },
+    Unary {
+        operator: UnaryOperator,
+        operator_span: Range<usize>,
+        operand: Idx<Expression>,
+    },
+    Binary {
+        operator: BinaryOperator,
+        operator_span: Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
     Conversion {
         destination: TypeAnnotation,
         truncating: bool,
@@ -396,6 +464,88 @@ impl Parser<'_> {
     }
 
     fn expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
+        self.binary_expression(1)
+    }
+
+    fn binary_expression(&mut self, minimum_precedence: u8) -> Result<Idx<Expression>, Diagnostic> {
+        let mut left = self.unary_expression()?;
+        while let Some((operator, precedence)) = self.binary_operator() {
+            if precedence < minimum_precedence {
+                break;
+            }
+            let operator_span = self.span.clone();
+            self.advance()?;
+            let right = self.binary_expression(precedence + 1)?;
+            let depth = self.syntax.expressions[left]
+                .depth
+                .max(self.syntax.expressions[right].depth)
+                + 1;
+            if self.nesting + depth > MAX_NESTING {
+                return Err(Diagnostic::new(
+                    operator_span,
+                    "source nesting exceeds compiler limit of 128",
+                ));
+            }
+            let span =
+                self.syntax.expressions[left].span.start..self.syntax.expressions[right].span.end;
+            left = self.syntax.expressions.alloc(Expression {
+                kind: ExpressionKind::Binary {
+                    operator,
+                    operator_span,
+                    left,
+                    right,
+                },
+                span,
+                depth,
+            });
+        }
+        Ok(left)
+    }
+
+    fn binary_operator(&self) -> Option<(BinaryOperator, u8)> {
+        Some(match self.current.as_ref()? {
+            Token::Star => (BinaryOperator::Multiply, 6),
+            Token::Slash => (BinaryOperator::Divide, 6),
+            Token::Percent => (BinaryOperator::Remainder, 6),
+            Token::WrappingStar => (BinaryOperator::WrappingMultiply, 6),
+            Token::Plus => (BinaryOperator::Add, 5),
+            Token::Minus => (BinaryOperator::Subtract, 5),
+            Token::WrappingPlus => (BinaryOperator::WrappingAdd, 5),
+            Token::WrappingMinus => (BinaryOperator::WrappingSubtract, 5),
+            Token::ShiftLeft => (BinaryOperator::ShiftLeft, 4),
+            Token::ShiftRight => (BinaryOperator::ShiftRight, 4),
+            Token::Ampersand => (BinaryOperator::And, 3),
+            Token::AndNot => (BinaryOperator::AndNot, 3),
+            Token::Caret => (BinaryOperator::Xor, 2),
+            Token::Pipe => (BinaryOperator::Or, 1),
+            _ => return None,
+        })
+    }
+
+    fn unary_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
+        let operator = match self.current {
+            Some(Token::Minus) => UnaryOperator::Negate,
+            Some(Token::WrappingMinus) => UnaryOperator::WrappingNegate,
+            Some(Token::Caret) => UnaryOperator::Complement,
+            _ => return self.primary_expression(),
+        };
+        self.enter_nesting()?;
+        let operator_span = self.span.clone();
+        self.advance()?;
+        let operand = self.unary_expression()?;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            span: operator_span.start..self.syntax.expressions[operand].span.end,
+            depth: self.syntax.expressions[operand].depth + 1,
+            kind: ExpressionKind::Unary {
+                operator,
+                operator_span,
+                operand,
+            },
+        }))
+    }
+
+    fn primary_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
         let span = self.span.clone();
         let kind = if self.current == Some(Token::Integer) {
             let spelling = self.lexer.slice().to_owned();
@@ -431,12 +581,30 @@ impl Parser<'_> {
                     operand,
                 },
                 span: span.start..end,
+                depth: self.syntax.expressions[operand].depth + 1,
+            }));
+        } else if self.current == Some(Token::LeftParen) {
+            self.enter_nesting()?;
+            self.advance()?;
+            let expression = self.expression()?;
+            let end = self
+                .expect(Token::RightParen, "expected `)` after grouped expression")?
+                .end;
+            self.nesting -= 1;
+            return Ok(self.syntax.expressions.alloc(Expression {
+                kind: ExpressionKind::Grouping { expression },
+                span: span.start..end,
+                depth: self.syntax.expressions[expression].depth + 1,
             }));
         } else {
             let (name, _) = self.name("expected an expression")?;
             ExpressionKind::Reference(name)
         };
-        Ok(self.syntax.expressions.alloc(Expression { kind, span }))
+        Ok(self.syntax.expressions.alloc(Expression {
+            kind,
+            span,
+            depth: 0,
+        }))
     }
 }
 
@@ -507,27 +675,75 @@ mod tests {
                 }
             };
             writeln!(output, " span={:?}", statement.span).unwrap();
-            let expression = &syntax.expressions[expression];
-            match &expression.kind {
-                ExpressionKind::Integer(spelling) => {
-                    write!(output, "{indent}  integer {spelling}").unwrap()
-                }
-                ExpressionKind::Reference(name) => {
-                    write!(output, "{indent}  reference {}", syntax.names.resolve(name)).unwrap()
-                }
-                ExpressionKind::Conversion {
-                    destination,
-                    truncating,
-                    ..
-                } => write!(
-                    output,
-                    "{indent}  {} conversion {}",
-                    if *truncating { "truncating" } else { "checked" },
-                    destination.name
-                )
-                .unwrap(),
+            project_expression(syntax, expression, depth + 1, output);
+        }
+    }
+
+    fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output: &mut String) {
+        use std::fmt::Write;
+        let indent = "  ".repeat(depth);
+        let expression = &syntax.expressions[id];
+        match &expression.kind {
+            ExpressionKind::Integer(spelling) => writeln!(
+                output,
+                "{indent}integer {spelling} span={:?}",
+                expression.span
+            )
+            .unwrap(),
+            ExpressionKind::Reference(name) => writeln!(
+                output,
+                "{indent}reference {} span={:?}",
+                syntax.names.resolve(name),
+                expression.span
+            )
+            .unwrap(),
+            ExpressionKind::Grouping { expression: inner } => {
+                writeln!(output, "{indent}group span={:?}", expression.span).unwrap();
+                project_expression(syntax, *inner, depth + 1, output);
             }
-            writeln!(output, " span={:?}", expression.span).unwrap();
+            ExpressionKind::Unary {
+                operator,
+                operator_span,
+                operand,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}unary {operator:?} operator={operator_span:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
+            }
+            ExpressionKind::Binary {
+                operator,
+                operator_span,
+                left,
+                right,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}binary {operator:?} operator={operator_span:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *left, depth + 1, output);
+                project_expression(syntax, *right, depth + 1, output);
+            }
+            ExpressionKind::Conversion {
+                destination,
+                truncating,
+                operand,
+            } => {
+                writeln!(
+                    output,
+                    "{indent}{} conversion {} span={:?}",
+                    if *truncating { "truncating" } else { "checked" },
+                    destination.name,
+                    expression.span
+                )
+                .unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
+            }
         }
     }
 
@@ -554,6 +770,19 @@ mod tests {
         }
         source.push('}');
         insta::assert_snapshot!(project(&parse(&source).unwrap()));
+    }
+
+    #[test]
+    fn integer_operator_precedence_and_grouping_snapshot() {
+        let source = "fn main() -> void { const x = -^&-u8(1) | 2 ^ 3 & 4 &^ 5 << 6 >> 7 + 8 &+ 9 - 10 &- 11 * 12 &* 13 / 14 % 15; const y = (1 + 2) * (3 - 4); }";
+        insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn comments_may_touch_integer_operators() {
+        let source = "fn main() -> void { const x = ^/*a*/1/*b*/&+/*c*/2<<// d\n3; }";
+        let syntax = parse(source).unwrap();
+        assert_eq!(syntax.expressions.len(), 6);
     }
 
     #[test]
@@ -739,9 +968,9 @@ mod tests {
             "«)»",
             "x «.»field = 1;",
             "x «[»0] = 1;",
-            "const x = 1 «+» 2;",
-            "exit(«-»1);",
-            "var x = «(»1);",
+            "const x = 1 + «;»",
+            "exit(-«)»);",
+            "var x = (1 + 2«;»",
             "var x = 1«»",
             "exit(0,«»",
             "var x:«»",
@@ -829,6 +1058,10 @@ mod tests {
             ("exit(1.5);", "expected `)` after exit argument"),
             ("exit(1, 2);", "exit takes one argument"),
             ("var x = int();", "expected an expression"),
+            ("var x = 1 + ;", "expected an expression"),
+            ("var x = 1 + * 2;", "expected an expression"),
+            ("var x = ();", "expected an expression"),
+            ("var x = (1 + 2;", "expected `)` after grouped expression"),
         ] {
             let error = parse(&format!("fn main() -> void {{ {body} }}")).unwrap_err();
             assert_eq!(error.message, message, "{body}");
@@ -863,6 +1096,35 @@ mod tests {
                 "source nesting exceeds compiler limit of 128"
             );
             assert!(["{", "int"].contains(&&text[error.span]));
+        }
+
+        let grouped = format!(
+            "fn main() -> void {{ exit({}42{}); }}",
+            "(".repeat(127),
+            ")".repeat(127),
+        );
+        let syntax = parse(&grouped).unwrap();
+        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+            .verify()
+            .unwrap();
+        let binary = format!("fn main() -> void {{ exit({}1); }}", "1 + ".repeat(127));
+        let syntax = parse(&binary).unwrap();
+        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+            .verify()
+            .unwrap();
+        for source in [
+            format!(
+                "fn main() -> void {{ exit({}42{}); }}",
+                "(".repeat(128),
+                ")".repeat(128),
+            ),
+            format!("fn main() -> void {{ exit({}42); }}", "-".repeat(128)),
+            format!("fn main() -> void {{ exit({}1); }}", "1 + ".repeat(128)),
+        ] {
+            assert_eq!(
+                parse(&source).unwrap_err().message,
+                "source nesting exceeds compiler limit of 128"
+            );
         }
     }
 

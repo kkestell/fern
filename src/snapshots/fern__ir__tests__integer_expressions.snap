@@ -1,0 +1,351 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 40,
+                    ty: Int,
+                },
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 2,
+                    ty: Int,
+                },
+            ),
+        },
+        Value {
+            span: Some(
+                100..101,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Add,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                124..125,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Subtract,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                164..165,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Multiply,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                186..187,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Divide,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                211..212,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Remainder,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                255..257,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: WrappingAdd,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                289..291,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: WrappingSubtract,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                339..341,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: WrappingMultiply,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                376..377,
+            ),
+            ty: Int,
+            kind: Unary {
+                operator: Negate,
+                operand: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                404..406,
+            ),
+            ty: Int,
+            kind: Unary {
+                operator: WrappingNegate,
+                operand: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                428..429,
+            ),
+            ty: Int,
+            kind: Unary {
+                operator: Complement,
+                operand: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                462..463,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: And,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                485..487,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: AndNot,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                521..522,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Xor,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                539..540,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Or,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                581..583,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: ShiftLeft,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                609..611,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: ShiftRight,
+                left: Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 130,
+                    ty: Int,
+                },
+            ),
+        },
+    ],
+    exit: Value(
+        ValueId(
+            2,
+        ),
+    ),
+}

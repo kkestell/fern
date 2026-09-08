@@ -180,6 +180,94 @@ fn source_failures_preserve_output() {
 }
 
 #[test]
+fn runtime_integer_expressions_execute_and_replace_output() {
+    let (_dir, input, output) = fixture(include_str!("../examples/integer_expressions.fern"));
+    fs::write(&output, "keep me").unwrap();
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn grouped_contextual_integer_expressions_execute() {
+    let (_dir, input, output) = fixture(
+        "fn main() -> void { var count: uint = 1; const grouped: u8 = ((21)); const shifted: u64 = (10 + 11) << count; exit(int(grouped) + int(shifted / 42)); }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(22));
+}
+
+#[test]
+fn nested_contextual_expressions_and_exact_overshifts_execute() {
+    let (_dir, input, output) = fixture(
+        "fn main() -> void {
+            var count: uint = 1;
+            const nested: i64 = -(1 << count);
+            var unsigned: u8 = 1;
+            var signed: i8 = -1;
+            const left = unsigned << 99999999999999999999999999999999999999999999999999;
+            const right = signed >> 99999999999999999999999999999999999999999999999999;
+            exit(int(nested) + int(left) + int(right) + 45);
+        }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn integer_expressions_preserve_assignments_copies_scopes_and_nested_exits() {
+    for body in [
+        "var value = 20; const saved = value; value = saved + 22; exit(value);",
+        "var value = 40; { var value = value + 1; value = value + 1; } exit(value + 2);",
+        "var value = 40; { value = value + 2; { exit(value); value = value + 1; } value = 0; } exit(0);",
+        "var value: u8 = 250; const saved = value; value = value &+ 48; exit(int(value));",
+    ] {
+        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(42),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn runtime_integer_failures_include_the_operation_and_source_location() {
+    for (operator, expected) in [
+        ("+", "integer `+` overflowed"),
+        ("/", "integer `/` has a zero divisor"),
+        ("<<", "integer shift count is negative"),
+    ] {
+        let expression = match operator {
+            "+" => "value + other",
+            "/" => "value / other",
+            "<<" => "value << other",
+            _ => unreachable!(),
+        };
+        let (left, right) = match operator {
+            "+" => ("32767", "1"),
+            "/" => ("1", "0"),
+            "<<" => ("1", "-1"),
+            _ => unreachable!(),
+        };
+        let source = format!(
+            "fn main() -> void {{\n    var value: i16 = {left};\n    var other: i16 = {right};\n    const failed = {expression};\n}}"
+        );
+        let (dir, _, output) = fixture(&source);
+        let input = dir.path().join("operation.fern");
+        fs::write(&input, source).unwrap();
+        fern::compile(&input, &output).unwrap();
+        fs::remove_file(&input).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(stderr.contains("operation.fern:4:"), "{stderr}");
+        assert!(stderr.contains(expression), "{stderr}");
+    }
+}
+
+#[test]
 fn file_errors_identify_input() {
     let (_dir, input, output) = fixture(b"// \xff");
     let error = fern::compile(&input, &output).unwrap_err().to_string();

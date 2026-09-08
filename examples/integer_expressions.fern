@@ -1,0 +1,35 @@
+fn main() -> void {
+    const exact: u8 = (250 + 10) / 2;
+    var y: u8 = 10;
+    const wrapped: u8 = (250 &+ y) / 2;
+    const widened: u16 = u16(y) + 1000;
+
+    const bits = (((^u8(0)) ^ 0x0F) & 0xF0) | 0x02;
+    const shifted = bits >> 4;
+    const high: u8 = 128;
+    const discarded = high << 1;
+    const one: u8 = 1;
+    const large_shift = one << 8;
+    var negative: i8 = -7;
+    const sign_fill = negative >> 8;
+    const quotient = negative / 3;
+    const remainder = negative % 3;
+    const negated = -negative;
+    const minimum: i8 = -128;
+    const large: i64 = 1 << 40;
+
+    var status: int = 40;
+    {
+        const saved = status;
+        status = saved + int(wrapped);
+        y = y &* 30;
+    }
+
+    // Uncomment individually to try compile-time diagnostics.
+    // const out_of_range: u8 = 250 + 10;
+    // const typed_overflow = u8(250) + 10;
+    // const zero_divisor = status / 0;
+    // const negative_shift = status << -1;
+
+    exit(status);
+}

@@ -243,10 +243,9 @@ expressions.
 Constant expressions and constant subexpressions are checked during compilation,
 including in unreachable statements. Typed operations obey their type's range
 and operation rules; exact intermediate arithmetic applies to untyped
-expressions, with the additional rule for typed constant shifts below. Constant
-evaluation must reject an operation that would trap, even if a later operation
-would bring its result back into range. Optimization of a non-constant
-expression must preserve its runtime value and failure behavior.
+expressions. Constant evaluation must reject an operation that would trap, even
+if a later operation would bring its result back into range. Optimization of a
+non-constant expression must preserve its runtime value and failure behavior.
 
 #### Typing by context
 
@@ -335,6 +334,25 @@ var d = i8.truncate(200); // -56
 
 ### Integer arithmetic
 
+#### Precedence, associativity, and evaluation order
+
+Unary operators have the highest precedence. Binary integer operators have six
+precedence levels, from highest to lowest:
+
+1. `* / % &*`
+2. `+ - &+ &-`
+3. `<< >>`
+4. `& &^`
+5. `^`
+6. `|`
+
+Binary operators at the same precedence level associate from left to right.
+Parentheses override precedence and associativity.
+
+The left operand of a binary expression is evaluated before the right operand.
+Each operand is fully evaluated, including any runtime failure, before evaluation
+of the next operand begins.
+
 #### Operand types
 
 Binary arithmetic operators require both operands to have the identical type.
@@ -382,7 +400,12 @@ An implementation may elide an overflow check when it can prove the result is in
 range.
 
 Wrapping operators explicitly request modular arithmetic at the operand type's
-width. The retained bits are interpreted using that type's signedness.
+width. The retained bits are interpreted using that type's signedness. A binary
+wrapping operation requires at least one typed operand; an untyped operand adopts
+the other operand's type and must fit it before the operation. A destination type
+does not supply the operation's width, so `var x: u8 = 250 &+ 10;` is invalid.
+Unary wrapping negation likewise requires a typed operand. `&-u8(1)` is `u8(255)`,
+while `&-1` is invalid.
 
 ```fern
 var x: u8 = 255;
@@ -434,8 +457,8 @@ operand's type or the result type. An untyped count remains an exact integer in
 both constant and non-constant shifts; it need not first fit `int` or any other
 concrete type.
 
-Non-constant shifts follow these execution rules; constant shifts are specified
-separately below.
+Typed shifts and non-constant shifts follow these execution rules; untyped
+constant shifts are specified separately below.
 
 - The result type is the type of the left operand.
 - A negative shift count traps.
@@ -458,21 +481,21 @@ var c: i32 = 1 << 40; // compile error on every platform
 var reduced: u8 = 256 >> u8(8); // 1; only the final result must fit u8
 ```
 
-If both operands are constant expressions and the left operand is typed, the
-shift is still evaluated exactly, and the result must be representable in that
-type; a `<<` that would discard bits is a compile-time error, not a silent
-truncation.
+If the left operand is typed, a constant shift uses the same bit-discarding,
+sign-filling, and overshift rules as a non-constant shift. Changing a binding
+from `const` to `var` does not change the result of a typed shift.
 
 ```fern
-const one: i32 = 1;
-var d = one << 40; // compile error: 2⁴⁰ does not fit i32
+const high: u8 = 128;
+const discarded = high << 1; // u8(0)
+const negative: i8 = -1;
+const sign_fill = negative >> 8; // i8(-1)
 ```
 
-Constant left shifts multiply exactly by two to the power of the count. Constant
-right shifts divide by that power, rounding toward negative infinity. The
-runtime rules above (zero on overshift, discarded high bits) do not apply to
-constant shifts. A negative constant count is a compile-time error, including
-when the left operand is not constant.
+Untyped constant left shifts multiply exactly by two to the power of the count.
+Untyped constant right shifts divide by that power, rounding toward negative
+infinity. A negative constant count is a compile-time error, including when the
+left operand is not constant.
 
 #### Non-constant shifts
 
@@ -542,7 +565,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
-| Constant shift result does not fit its type | Compile error |
+| Untyped constant shift result does not fit its target type | Compile error |
 | Wrapping operators | Defined, no trap |
 | Truncating conversion | Defined, no trap |
 | Bitwise operators | Defined, no trap |

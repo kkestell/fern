@@ -1,7 +1,7 @@
 fn main() -> void {
     const exact: u8 = (250 + 10) / 2;
     var y: u8 = 10;
-    const wrapped: u8 = (250 &+ y) / 2;
+    const wrapped: u8 = (250 +% y) / 2;
     const widened: u16 = u16(y) + 1000;
 
     const bits = (((^u8(0)) ^ 0x0F) & 0xF0) | 0x02;
@@ -22,7 +22,7 @@ fn main() -> void {
     {
         const saved = status;
         status = saved + int(wrapped);
-        y = y &* 30;
+        y = y *% 30;
     }
 
     // Uncomment individually to try compile-time diagnostics.

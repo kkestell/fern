@@ -510,21 +510,21 @@ Expected exit status: 42. Future file: `examples/wrapping_operators.fern`.
 
 ### Tasks
 
-- [ ] **Lex and parse the revised operator spellings**
+- [x] **Lex and parse the revised operator spellings**
 
   - Accept `+%`, `-%`, and `*%` as binary operators and `-%` as a unary
     operator, and stop accepting `&+`, `&-`, `&*`, and `&^`.
   - Preserve operator spans and update parser tests and snapshots, including
     programs that mix `&` with a following unary `-` or `^`.
 
-- [ ] **Apply the revised precedence levels**
+- [x] **Apply the revised precedence levels**
 
   - Parse `* / % *% << >> &` at the highest binary level, `+ - +% -% | ^` at the
     next, and preserve left associativity and grouping.
   - Cover each level and its boundaries in parser tests and snapshots,
     including `a + b << c`, `a | b + c`, and `a & ^b`.
 
-- [ ] **Carry the spellings through checking and execution**
+- [x] **Carry the spellings through checking and execution**
 
   - Update operator spelling in diagnostics and shared operator metadata.
   - Update `examples/integer_expressions.fern`, add the milestone example, and

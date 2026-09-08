@@ -366,10 +366,10 @@ mod tests {
                 var x: int = 40; var y: int = 2;
                 const add = x + y; const subtract = x - y;
                 const multiply = x * y; const divide = x / y; const remainder = x % y;
-                const wrapping_add = x &+ y; const wrapping_subtract = x &- y;
-                const wrapping_multiply = x &* y;
-                const negate = -x; const wrapping_negate = &-x; const complement = ^x;
-                const and = x & y; const and_not = x &^ y;
+                const wrapping_add = x +% y; const wrapping_subtract = x -% y;
+                const wrapping_multiply = x *% y;
+                const negate = -x; const wrapping_negate = -%x; const complement = ^x;
+                const and = x & y; const and_not = x & ^y;
                 const xor = x ^ y; const or = x | y;
                 const shift_left = x << y; const shift_right = x >> y;
                 const folded: int = (250 + 10) / 2;

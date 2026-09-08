@@ -678,7 +678,6 @@ impl CheckedEntry<'_> {
                 return self.evaluate_shift(operator, operator_span, ty, untyped, left, right);
             }
             BinaryOperator::And => left & right,
-            BinaryOperator::AndNot => left & !right,
             BinaryOperator::Xor => left ^ right,
             BinaryOperator::Or => left | right,
         };
@@ -988,10 +987,10 @@ mod tests {
              const exact: u16 = 1 + 2;
              const negative: i8 = -128;
              const complemented = ^a;
-             const wrapped = a &+ 1;
-             const wrapped_negative = &-a;
+             const wrapped = a +% 1;
+             const wrapped_negative = -%a;
              exit(0);
-             const after = a &^ b;";
+             const after = a & ^b;";
         let text = format!("fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
         let checked = check(&syntax).unwrap();
@@ -1050,13 +1049,13 @@ mod tests {
         }
         for (body, offending, message) in [
             (
-                "const x = 1 &+ 2;",
-                "&+",
+                "const x = 1 +% 2;",
+                "+%",
                 "wrapping arithmetic requires a typed operand",
             ),
             (
-                "const x = &-1;",
-                "&-",
+                "const x = -%1;",
+                "-%",
                 "wrapping negation requires a typed operand",
             ),
             (
@@ -1123,14 +1122,14 @@ mod tests {
             const quotient = -7 / 3;
             const remainder = -7 % 3;
             const complement = ^0;
-            const cleared = 15 &^ 3;
+            const cleared = 15 & ^3;
             const bits = (12 & 10) ^ 3 | 16;
             const large: i64 = 1 << 40;
             const signed_shift = -8 >> 2;
-            const wrapped_add = u8(250) &+ 10;
-            const wrapped_subtract = u8(1) &- 2;
-            const wrapped_multiply = u8(200) &* 2;
-            const wrapped_negate = &-u8(1);
+            const wrapped_add = u8(250) +% 10;
+            const wrapped_subtract = u8(1) -% 2;
+            const wrapped_multiply = u8(200) *% 2;
+            const wrapped_negate = -%u8(1);
             const high: u8 = 128;
             const discarded = high << 1;
             const negative: i8 = -1;
@@ -1288,10 +1287,10 @@ mod tests {
         let text = "fn main() -> void {
             const precedence_left = 1 + 2 << 1;
             const precedence_right = 1 << 2 + 1;
-            const same_level = 15 &^ 3 & 6;
+            const same_level = 15 & ^3 & 6;
             const bit_levels = 1 | 2 ^ 3 & 4;
-            const wrapped_left = u8(250) &+ 10;
-            const wrapped_right = 250 &+ u8(10);
+            const wrapped_left = u8(250) +% 10;
+            const wrapped_right = 250 +% u8(10);
             const high: u8 = 128;
             const discarded = high << 1;
             var runtime_high: u8 = 128;
@@ -1311,8 +1310,8 @@ mod tests {
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
             [
-                Some(big(6)),
-                Some(big(8)),
+                Some(big(5)),
+                Some(big(5)),
                 Some(big(4)),
                 Some(big(3)),
                 Some(big(4)),
@@ -1331,17 +1330,17 @@ mod tests {
 
         for (body, offending, message) in [
             (
-                "const invalid: u8 = 250 &+ 10;",
-                "&+",
+                "const invalid: u8 = 250 +% 10;",
+                "+%",
                 "wrapping arithmetic requires a typed operand",
             ),
             (
-                "const invalid = &-1;",
-                "&-",
+                "const invalid = -%1;",
+                "-%",
                 "wrapping negation requires a typed operand",
             ),
             (
-                "const typed = u8(1) &+ 256;",
+                "const typed = u8(1) +% 256;",
                 "256",
                 "integer literal out of range for `u8`",
             ),

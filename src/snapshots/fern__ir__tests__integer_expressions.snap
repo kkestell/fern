@@ -239,11 +239,25 @@ Entry {
         },
         Value {
             span: Some(
-                485..487,
+                487..488,
+            ),
+            ty: Int,
+            kind: Unary {
+                operator: Complement,
+                operand: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+            },
+        },
+        Value {
+            span: Some(
+                485..486,
             ),
             ty: Int,
             kind: Binary {
-                operator: AndNot,
+                operator: And,
                 left: Value(
                     ValueId(
                         0,
@@ -251,7 +265,7 @@ Entry {
                 ),
                 right: Value(
                     ValueId(
-                        1,
+                        14,
                     ),
                 ),
             },

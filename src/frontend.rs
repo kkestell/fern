@@ -29,14 +29,12 @@ enum Token {
     Comma,
     #[token(".")]
     Dot,
-    #[token("&+")]
+    #[token("+%")]
     WrappingPlus,
-    #[token("&-")]
+    #[token("-%")]
     WrappingMinus,
-    #[token("&*")]
+    #[token("*%")]
     WrappingStar,
-    #[token("&^")]
-    AndNot,
     #[token("<<")]
     ShiftLeft,
     #[token(">>")]
@@ -171,7 +169,6 @@ pub(crate) enum BinaryOperator {
     ShiftLeft,
     ShiftRight,
     And,
-    AndNot,
     Xor,
     Or,
 }
@@ -182,15 +179,14 @@ impl BinaryOperator {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Remainder => "%",
-            Self::WrappingMultiply => "&*",
+            Self::WrappingMultiply => "*%",
             Self::Add => "+",
             Self::Subtract => "-",
-            Self::WrappingAdd => "&+",
-            Self::WrappingSubtract => "&-",
+            Self::WrappingAdd => "+%",
+            Self::WrappingSubtract => "-%",
             Self::ShiftLeft => "<<",
             Self::ShiftRight => ">>",
             Self::And => "&",
-            Self::AndNot => "&^",
             Self::Xor => "^",
             Self::Or => "|",
         }
@@ -520,19 +516,18 @@ impl Parser<'_> {
 
     fn binary_operator(&self) -> Option<(BinaryOperator, u8)> {
         Some(match self.current.as_ref()? {
-            Token::Star => (BinaryOperator::Multiply, 6),
-            Token::Slash => (BinaryOperator::Divide, 6),
-            Token::Percent => (BinaryOperator::Remainder, 6),
-            Token::WrappingStar => (BinaryOperator::WrappingMultiply, 6),
-            Token::Plus => (BinaryOperator::Add, 5),
-            Token::Minus => (BinaryOperator::Subtract, 5),
-            Token::WrappingPlus => (BinaryOperator::WrappingAdd, 5),
-            Token::WrappingMinus => (BinaryOperator::WrappingSubtract, 5),
-            Token::ShiftLeft => (BinaryOperator::ShiftLeft, 4),
-            Token::ShiftRight => (BinaryOperator::ShiftRight, 4),
-            Token::Ampersand => (BinaryOperator::And, 3),
-            Token::AndNot => (BinaryOperator::AndNot, 3),
-            Token::Caret => (BinaryOperator::Xor, 2),
+            Token::Star => (BinaryOperator::Multiply, 2),
+            Token::Slash => (BinaryOperator::Divide, 2),
+            Token::Percent => (BinaryOperator::Remainder, 2),
+            Token::WrappingStar => (BinaryOperator::WrappingMultiply, 2),
+            Token::ShiftLeft => (BinaryOperator::ShiftLeft, 2),
+            Token::ShiftRight => (BinaryOperator::ShiftRight, 2),
+            Token::Ampersand => (BinaryOperator::And, 2),
+            Token::Plus => (BinaryOperator::Add, 1),
+            Token::Minus => (BinaryOperator::Subtract, 1),
+            Token::WrappingPlus => (BinaryOperator::WrappingAdd, 1),
+            Token::WrappingMinus => (BinaryOperator::WrappingSubtract, 1),
+            Token::Caret => (BinaryOperator::Xor, 1),
             Token::Pipe => (BinaryOperator::Or, 1),
             _ => return None,
         })
@@ -788,15 +783,35 @@ mod tests {
 
     #[test]
     fn integer_operator_precedence_and_grouping_snapshot() {
-        let source = "fn main() -> void { const x = -^&-u8(1) | 2 ^ 3 & 4 &^ 5 << 6 >> 7 + 8 &+ 9 - 10 &- 11 * 12 &* 13 / 14 % 15; const y = (1 + 2) * (3 - 4); }";
+        let source = "fn main() -> void { const high = 1 * 2 / 3 % 4 *% 5 << 6 >> 7 & 8; const low = 9 + 10 - 11 +% 12 -% 13 | 14 ^ 15; const shift = 1 + 2 << 3; const add_or = 1 | 2 + 3; const and_not = 1 & ^2; const unary = -^-%u8(1); const grouping = (1 + 2) * (3 - 4); const and_negative = 7 & -2; }";
         insta::assert_snapshot!(project(&parse(source).unwrap()));
     }
 
     #[test]
     fn comments_may_touch_integer_operators() {
-        let source = "fn main() -> void { const x = ^/*a*/1/*b*/&+/*c*/2<<// d\n3; }";
+        let source = "fn main() -> void { const x = ^/*a*/1/*b*/+%/*c*/2<<// d\n3; }";
         let syntax = parse(source).unwrap();
         assert_eq!(syntax.expressions.len(), 6);
+    }
+
+    #[test]
+    fn removed_operator_spellings_are_separate_tokens() {
+        let tokens = Token::lexer("&+ &- &* &^")
+            .map(|token| token.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tokens,
+            [
+                Token::Ampersand,
+                Token::Plus,
+                Token::Ampersand,
+                Token::Minus,
+                Token::Ampersand,
+                Token::Star,
+                Token::Ampersand,
+                Token::Caret,
+            ]
+        );
     }
 
     #[test]
@@ -1001,6 +1016,8 @@ mod tests {
             "x «.»field = 1;",
             "x «[»0] = 1;",
             "const x = 1 + «;»",
+            "const x = 1 &«+» 2;",
+            "const x = 1 &«*» 2;",
             "exit(-«)»);",
             "var x = (1 + 2«;»",
             "var x = 1«»",

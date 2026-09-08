@@ -171,34 +171,14 @@ fn emit_binary_operation(
         BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
             emit_shift(emitter, id, value, operator, left, right, entry)
         }
-        BinaryOperator::And | BinaryOperator::AndNot | BinaryOperator::Xor | BinaryOperator::Or => {
-            let width = qbe_type(value.ty);
-            let left = operand(left);
-            let right = operand(right);
-            if operator == BinaryOperator::AndNot {
-                writeln!(
-                    emitter.text,
-                    "    %operation{id}_inverse ={width} xor {right}, -1"
-                )
-                .unwrap();
-                writeln!(
-                    emitter.text,
-                    "    %operation{id}_raw ={width} and {left}, %operation{id}_inverse"
-                )
-                .unwrap();
-            } else {
-                let instruction = match operator {
-                    BinaryOperator::And => "and",
-                    BinaryOperator::Xor => "xor",
-                    BinaryOperator::Or => "or",
-                    _ => unreachable!(),
-                };
-                writeln!(
-                    emitter.text,
-                    "    %operation{id}_raw ={width} {instruction} {left}, {right}"
-                )
-                .unwrap();
-            }
+        BinaryOperator::And | BinaryOperator::Xor | BinaryOperator::Or => {
+            let instruction = match operator {
+                BinaryOperator::And => "and",
+                BinaryOperator::Xor => "xor",
+                BinaryOperator::Or => "or",
+                _ => unreachable!(),
+            };
+            emit_binary_raw(&mut emitter.text, id, value.ty, instruction, left, right);
             emit_normalized(
                 &mut emitter.text,
                 id,
@@ -1111,17 +1091,17 @@ mod tests {
                     var a: {name} = 20; var b: {name} = 3;
                     const add = a + b; const subtract = a - b;
                     const multiply = a * b; const divide = a / b; const remainder = a % b;
-                    const wrapping_add = a &+ b; const wrapping_subtract = a &- b;
-                    const wrapping_multiply = a &* b;
-                    {signed_operations} const wrapping_negate = &-a; const complement = ^a;
-                    const and = a & b; const and_not = a &^ b;
+                    const wrapping_add = a +% b; const wrapping_subtract = a -% b;
+                    const wrapping_multiply = a *% b;
+                    {signed_operations} const wrapping_negate = -%a; const complement = ^a;
+                    const and = a & b; const and_not = a & ^b;
                     const xor = a ^ b; const or = a | b;
                     const shift_left = a << b; const shift_right = a >> b;
                     var maximum: {name} = {maximum}; var minimum: {name} = {minimum};
                     var one: {name} = 1;
-                    const wrapped_maximum = maximum &+ one;
-                    const wrapped_minimum = minimum &- one;
-                    const wrapped_product = maximum &* b;
+                    const wrapped_maximum = maximum +% one;
+                    const wrapped_minimum = minimum -% one;
+                    const wrapped_product = maximum *% b;
                 }}",
                 name = name,
             );
@@ -1137,6 +1117,7 @@ mod tests {
                 truncated(-20, ty),
                 truncated(!20, ty),
                 20 & 3,
+                truncated(!3, ty),
                 20 & !3,
                 20 ^ 3,
                 20 | 3,

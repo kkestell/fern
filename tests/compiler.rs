@@ -196,11 +196,16 @@ fn oversized_integer_diagnostics_are_bounded() {
 }
 
 #[test]
-fn runtime_integer_expressions_execute_and_replace_output() {
-    let (_dir, input, output) = fixture(include_str!("../examples/integer_expressions.fern"));
-    fs::write(&output, "keep me").unwrap();
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+fn integer_operator_examples_execute_and_replace_output() {
+    for source in [
+        include_str!("../examples/integer_expressions.fern"),
+        include_str!("../examples/wrapping_operators.fern"),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fs::write(&output, "keep me").unwrap();
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+    }
 }
 
 #[test]
@@ -236,7 +241,7 @@ fn integer_expressions_preserve_assignments_copies_scopes_and_nested_exits() {
         "var value = 20; const saved = value; value = saved + 22; exit(value);",
         "var value = 40; { var value = value + 1; value = value + 1; } exit(value + 2);",
         "var value = 40; { value = value + 2; { exit(value); value = value + 1; } value = 0; } exit(0);",
-        "var value: u8 = 250; const saved = value; value = value &+ 48; exit(int(value));",
+        "var value: u8 = 250; const saved = value; value = value +% 48; exit(int(value));",
     ] {
         let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
         fern::compile(&input, &output).unwrap();

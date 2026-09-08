@@ -55,9 +55,10 @@ var x = 10; // int
 
 ### Keywords
 
-`fn`, `void`, `var`, `const`, `exit`, `true`, and `false` are reserved. The ten
-integer type names listed under Integer types and `bool` are also reserved.
-Reserved words cannot be identifiers.
+`fn`, `void`, `var`, `const`, `if`, `else`, `for`, `break`, `continue`, `exit`,
+`true`, and `false` are reserved. The ten integer type names listed under
+Integer types and `bool` are also reserved. Reserved words cannot be
+identifiers.
 
 ### Integer literals
 
@@ -366,12 +367,14 @@ var d = i8.truncate(200); // -56
 
 #### Precedence, associativity, and evaluation order
 
-Unary operators have the highest precedence. Binary operators have three
+Unary operators have the highest precedence. Binary operators have five
 precedence levels, from highest to lowest:
 
 1. `* / % *% << >> &`
 2. `+ - +% -% | ^`
 3. `== != < <= > >=`
+4. `&&`
+5. `||`
 
 Binary operators at the same precedence level associate from left to right.
 Parentheses override precedence and associativity.
@@ -379,11 +382,14 @@ Parentheses override precedence and associativity.
 Every comparison binds less tightly than every arithmetic and bitwise operator,
 so `x & 1 == 0` is `(x & 1) == 0`. Shifts bind as tightly as multiplication, so
 `a + b << c` is `a + (b << c)`. Bitwise or and exclusive or bind as loosely as
-addition, so `a | b + c` is `(a | b) + c`.
+addition, so `a | b + c` is `(a | b) + c`. `&&` binds more tightly than `||`, and both
+bind less tightly than every comparison, so `a < b && c < d || e` is
+`((a < b) && (c < d)) || e`.
 
 The left operand of a binary expression is evaluated before the right operand.
 Each operand is fully evaluated, including any runtime failure, before evaluation
-of the next operand begins.
+of the next operand begins. `&&` and `||` do not always evaluate their right
+operand; see [Logical operators](#logical-operators).
 
 #### Operand types
 
@@ -553,8 +559,8 @@ A typed left operand retains its type regardless of the destination.
 
 ### Comparison
 
-`bool` is a distinct type whose values are `true` and `false`. The comparisons
-`== != < <= > >=` require identical operand types and yield `bool`. Untyped
+The comparisons `== != < <= > >=` require identical operand types and yield
+`bool`, the type specified under [The bool type](#the-bool-type). Untyped
 constants adopt the type of the other operand when their values fit. Comparison
 precedence is given under Precedence, associativity, and evaluation order.
 
@@ -563,10 +569,6 @@ always true or always false. For unsigned `x`, `x < 0` and `0 > x` yield `false`
 and `x >= 0` yields `true`. For `x: u8`, `x <= 255` yields `true`. A constant
 that does not fit the other operand's type still makes the comparison invalid;
 for example, `x < -1` is invalid when `x` is unsigned.
-
-`true` and `false` are untyped boolean constants. An untyped boolean constant
-acquires type `bool` from the context in which it is used, and `bool` is its
-default type. A `var` or `const` binding may have type `bool`.
 
 A comparison is a constant expression when both of its operands are constant
 expressions, and its result is then an untyped boolean constant. A comparison
@@ -621,13 +623,191 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Truncating conversion | Defined, no trap |
 | Bitwise operators | Defined, no trap |
 
+## Boolean Semantics
+
+### The bool type
+
+`bool` is a distinct type whose values are `true` and `false`. It is not an
+integer type, and there is no conversion between `bool` and any integer type.
+There is no truthiness: an integer cannot stand in for a condition, and a `bool`
+cannot stand in for an integer.
+
+`true` and `false` are untyped boolean constants. An untyped boolean constant
+acquires type `bool` from the context in which it is used, and `bool` is its
+default type. A `var` or `const` binding may have type `bool`.
+[Comparison](#comparison) specifies the operators that produce `bool` from
+integer operands.
+
+```fern
+var ready = true; // ready: bool
+const done: bool = false;
+```
+
+### Logical operators
+
+| Operator | Meaning |
+|----------|---------|
+| `&&` | Conjunction. Short-circuits. |
+| `\|\|` | Disjunction. Short-circuits. |
+| unary `!` | Negation |
+
+Each operand of `&&` and `||`, and the operand of `!`, must have type `bool` or
+be an untyped boolean constant. The result has type `bool`, or is an untyped
+boolean constant when every operand is one. There is no logical exclusive or;
+`a != b` compares two `bool` values. Their precedence is given under
+Precedence, associativity, and evaluation order.
+
+`&&` evaluates its left operand first. If that operand is `false`, the result is
+`false` and the right operand is not evaluated. `||` evaluates its left operand
+first; if that operand is `true`, the result is `true` and the right operand is
+not evaluated. An operand that is not evaluated cannot trap.
+
+```fern
+fn main() -> void {
+    var d = 0;
+    var n = 10;
+    if d != 0 && n / d > 1 { // n / d is not evaluated when d is 0
+        exit(1);
+    }
+    exit(0);
+}
+```
+
+### Boolean constant expressions
+
+`true` and `false` are constant expressions. A logical operation is a constant
+expression when all of its operands are constant expressions, and its result is
+then an untyped boolean constant. A reference to a `const` binding of type
+`bool` initialized by a constant expression is a constant expression, under the
+rules given in [Integer constant expressions](#untyped-constants).
+
+Short-circuiting does not exempt an unevaluated constant operand from the
+compile-time checks that apply to constant expressions. `false && 1 / 0 == 0` is
+rejected.
+
 ## Statements and Execution
 
 A function body and each nested brace-delimited block execute statements in
-source order. Declarations, assignments, compound assignments, and `exit`
-statements end with `;`. A nested block needs no trailing semicolon.
-Declarations and references must be valid even after a statement that terminates
-execution.
+source order. Declarations, assignments, compound assignments, `break`,
+`continue`, and `exit` statements end with `;`. A nested block, an `if`
+statement, and a `for` statement need no trailing semicolon. Declarations and
+references must be valid even after a statement that terminates execution.
+
+### Conditionals
+
+```text
+if c { ... }
+if c { ... } else { ... }
+if c { ... } else if c2 { ... } else { ... }
+```
+
+The condition must have type `bool` or be an untyped boolean constant. It is not
+parenthesized. Each body is a brace-delimited block and introduces a scope; the
+braces are required, and a single statement cannot replace the block.
+
+`else` is followed either by a block or by another `if` statement, which forms a
+chain. The conditions of a chain are tested in source order, and the first
+branch whose condition is `true` executes. If no condition is `true`, the
+trailing `else` block executes when one is present. At most one branch of a
+chain executes.
+
+```fern
+fn main() -> void {
+    var count = 3;
+    if count > 3 {
+        exit(2);
+    } else if count == 3 {
+        exit(1);
+    } else {
+        exit(0);
+    }
+}
+```
+
+### Loops
+
+```text
+for { ... }
+for c { ... }
+for init; c; post { ... }
+```
+
+`for` is the only loop keyword. The body is a brace-delimited block, is
+required, and introduces a scope entered afresh on each iteration.
+
+`for { ... }` repeats its body indefinitely. Execution leaves it only through
+`break`, `exit`, or a trap.
+
+`for c { ... }` evaluates `c` before each iteration and executes the body while
+`c` is `true`. The condition follows the same typing rules as an `if` condition.
+
+`for init; c; post { ... }` executes `init` once, then repeats: evaluate `c`,
+execute the body if `c` is `true`, then execute `post`. `init` is a declaration
+or an assignment; `post` is an assignment or a compound assignment. All three
+clauses are required, and `;` separates them without following `post`. To omit a
+clause, write one of the other two forms instead.
+
+A binding declared in `init` is scoped to the whole `for` statement, including
+the condition, `post`, and the body, and is not visible after the loop. The body
+block may shadow it. One such binding exists for the whole loop, not one per
+iteration.
+
+```fern
+fn main() -> void {
+    var total = 0;
+    for var i = 1; i <= 10; i = i + 1 {
+        total = total + i;
+    }
+    exit(total); // reports 55
+}
+```
+
+Iteration over arrays, slices, and strings is not yet specified.
+
+### Loop control and labels
+
+```text
+break;
+continue;
+break :name;
+continue :name;
+```
+
+`break` ends its loop, and execution continues after that loop. `continue` ends
+the current iteration; in `for init; c; post { ... }` it executes `post` and
+then tests the condition again. Neither is permitted outside a loop.
+
+A loop may carry a label, written after `for` as `:name`, ahead of the loop's
+condition or clauses:
+
+```text
+for :name { ... }
+for :name c { ... }
+for :name init; c; post { ... }
+```
+
+Unlabeled `break` and `continue` act on the innermost enclosing loop.
+`break :name` and `continue :name` act on the loop labeled `name` instead. That
+label must belong to a loop enclosing the statement in the same function; any
+other name is invalid. Labels occupy a namespace separate from bindings, so a
+label and a binding may share a name. A label may not repeat the name of a label
+on a loop that encloses it, while two loops that do not enclose each other may
+use the same label name. A label that nothing refers to is permitted.
+
+```fern
+fn main() -> void {
+    var found = 0;
+    for :rows var r = 0; r < 3; r = r + 1 {
+        for var c = 0; c < 3; c = c + 1 {
+            if r * 3 + c == 4 {
+                found = 1;
+                break :rows;
+            }
+        }
+    }
+    exit(found); // reports 1
+}
+```
 
 ### Process exit
 

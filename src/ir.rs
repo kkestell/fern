@@ -142,6 +142,9 @@ pub(crate) fn lower(checked: CheckedEntry<'_>) -> Entry {
         },
     };
     let mut bindings = HashMap::new();
+    for &statement in &checked.module_bindings {
+        lower_binding(&checked, statement, &mut bindings, &mut entry);
+    }
     lower_body(
         &checked,
         &checked.syntax.functions[checked.main].body,
@@ -255,6 +258,21 @@ fn lower_operand(
     }
 }
 
+fn lower_binding(
+    checked: &CheckedEntry<'_>,
+    statement: Idx<Statement>,
+    bindings: &mut HashMap<Idx<Binding>, ValueId>,
+    entry: &mut Entry,
+) {
+    let StatementKind::Binding { initializer, .. } = &checked.syntax.statements[statement].kind
+    else {
+        unreachable!("binding lowering requires a binding statement")
+    };
+    let value = lower_expression(checked, *initializer, bindings, entry);
+    let id = entry.push(value);
+    bindings.insert(checked.declarations[statement], id);
+}
+
 fn lower_body(
     checked: &CheckedEntry<'_>,
     body: &[Idx<Statement>],
@@ -263,11 +281,7 @@ fn lower_body(
 ) -> bool {
     for &statement in body {
         match &checked.syntax.statements[statement].kind {
-            StatementKind::Binding { initializer, .. } => {
-                let value = lower_expression(checked, *initializer, bindings, entry);
-                let id = entry.push(value);
-                bindings.insert(checked.declarations[statement], id);
-            }
+            StatementKind::Binding { .. } => lower_binding(checked, statement, bindings, entry),
             StatementKind::Assignment { value, .. } => {
                 let value = lower_expression(checked, *value, bindings, entry);
                 let id = entry.push(value);
@@ -402,6 +416,23 @@ mod tests {
             let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
             insta::assert_debug_snapshot!(name, entry.entry());
         }
+    }
+
+    #[test]
+    fn module_bindings_are_initialized_before_the_entry_body() {
+        let syntax = frontend::parse(
+            "var counter = start;
+             const start: int = 40;
+             const step = 2;
+             fn main() -> void {
+                 { var counter: u8 = 1; counter = 2; }
+                 counter = counter + step;
+                 exit(counter);
+             }",
+        )
+        .unwrap();
+        let entry = lower(semantic::check(&syntax).unwrap()).verify().unwrap();
+        insta::assert_debug_snapshot!("module_bindings", entry.entry());
     }
 
     #[test]

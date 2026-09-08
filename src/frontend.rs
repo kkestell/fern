@@ -102,8 +102,15 @@ fn block_comment(lexer: &mut logos::Lexer<'_, Token>) -> Result<logos::Skip, ()>
 pub(crate) struct Function {
     pub name: Spur,
     pub name_span: Range<usize>,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
     pub body: Vec<Idx<Statement>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TopLevelItem {
+    Function(Idx<Function>),
+    Binding(Idx<Statement>),
 }
 
 #[derive(Debug)]
@@ -118,7 +125,6 @@ pub(crate) enum StatementKind {
     Binding {
         mutable: bool,
         name: Spur,
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         name_span: Range<usize>,
         annotation: Option<TypeAnnotation>,
         initializer: Idx<Expression>,
@@ -221,6 +227,7 @@ pub(crate) enum ExpressionKind {
 #[derive(Debug, Default)]
 pub(crate) struct Syntax {
     pub names: Rodeo,
+    pub items: Vec<TopLevelItem>,
     pub functions: Arena<Function>,
     pub statements: Arena<Statement>,
     pub expressions: Arena<Expression>,
@@ -292,7 +299,14 @@ pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
     };
     parser.advance()?;
     while parser.current.is_some() {
-        parser.function()?;
+        let item = match parser.current {
+            Some(Token::Fn) => TopLevelItem::Function(parser.function()?),
+            Some(Token::Const) | Some(Token::Var) => {
+                TopLevelItem::Binding(parser.top_level_binding()?)
+            }
+            _ => return Err(parser.error("expected a top-level declaration")),
+        };
+        parser.syntax.items.push(item);
     }
     Ok(parser.syntax)
 }
@@ -359,7 +373,7 @@ impl Parser<'_> {
         Ok((name, span))
     }
 
-    fn function(&mut self) -> Result<(), Diagnostic> {
+    fn function(&mut self) -> Result<Idx<Function>, Diagnostic> {
         let start = self.expect(Token::Fn, "expected `fn`")?.start;
         let (name, name_span) = self.name("expected a function name")?;
         self.expect(Token::LeftParen, "expected `(`")?;
@@ -370,13 +384,22 @@ impl Parser<'_> {
         self.expect(Token::Arrow, "expected `->`")?;
         self.expect(Token::Void, "expected `void`")?;
         let (body, end) = self.body()?;
-        self.syntax.functions.alloc(Function {
+        Ok(self.syntax.functions.alloc(Function {
             name,
             name_span,
             span: start..end,
             body,
-        });
-        Ok(())
+        }))
+    }
+
+    fn top_level_binding(&mut self) -> Result<Idx<Statement>, Diagnostic> {
+        let start = self.span.start;
+        let kind = self.binding()?;
+        let end = self.expect(Token::Semicolon, "expected `;`")?.end;
+        Ok(self.syntax.statements.alloc(Statement {
+            kind,
+            span: start..end,
+        }))
     }
 
     fn body(&mut self) -> Result<(Vec<Idx<Statement>>, usize), Diagnostic> {
@@ -404,30 +427,7 @@ impl Parser<'_> {
             }));
         }
         let kind = match self.current {
-            Some(Token::Const) | Some(Token::Var) => {
-                let mutable = self.current == Some(Token::Var);
-                self.advance()?;
-                let (name, name_span) = self.name(if mutable {
-                    "expected a binding name after `var`"
-                } else {
-                    "expected a binding name after `const`"
-                })?;
-                let annotation = if self.current == Some(Token::Colon) {
-                    self.advance()?;
-                    Some(self.integer_annotation()?)
-                } else {
-                    None
-                };
-                self.expect(Token::Equals, "expected `=`")?;
-                let initializer = self.expression()?;
-                StatementKind::Binding {
-                    mutable,
-                    name,
-                    name_span,
-                    annotation,
-                    initializer,
-                }
-            }
+            Some(Token::Const) | Some(Token::Var) => self.binding()?,
             Some(Token::Name) => {
                 let (name, name_span) = self.name("expected an assignment target")?;
                 self.expect(Token::Equals, "expected `=`")?;
@@ -461,6 +461,31 @@ impl Parser<'_> {
             kind,
             span: start..end,
         }))
+    }
+
+    fn binding(&mut self) -> Result<StatementKind, Diagnostic> {
+        let mutable = self.current == Some(Token::Var);
+        self.advance()?;
+        let (name, name_span) = self.name(if mutable {
+            "expected a binding name after `var`"
+        } else {
+            "expected a binding name after `const`"
+        })?;
+        let annotation = if self.current == Some(Token::Colon) {
+            self.advance()?;
+            Some(self.integer_annotation()?)
+        } else {
+            None
+        };
+        self.expect(Token::Equals, "expected `=`")?;
+        let initializer = self.expression()?;
+        Ok(StatementKind::Binding {
+            mutable,
+            name,
+            name_span,
+            annotation,
+            initializer,
+        })
     }
 
     fn integer_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
@@ -626,16 +651,24 @@ mod tests {
     fn project(syntax: &Syntax) -> String {
         use std::fmt::Write;
         let mut output = String::new();
-        for (_, function) in syntax.functions.iter() {
-            writeln!(
-                output,
-                "fn {} name={:?} span={:?}",
-                syntax.names.resolve(&function.name),
-                function.name_span,
-                function.span
-            )
-            .unwrap();
-            project_body(syntax, &function.body, 1, &mut output);
+        for item in &syntax.items {
+            match item {
+                TopLevelItem::Function(id) => {
+                    let function = &syntax.functions[*id];
+                    writeln!(
+                        output,
+                        "fn {} name={:?} span={:?}",
+                        syntax.names.resolve(&function.name),
+                        function.name_span,
+                        function.span
+                    )
+                    .unwrap();
+                    project_body(syntax, &function.body, 1, &mut output);
+                }
+                TopLevelItem::Binding(id) => {
+                    project_body(syntax, std::slice::from_ref(id), 0, &mut output);
+                }
+            }
         }
         output
     }
@@ -762,6 +795,45 @@ mod tests {
     fn mixed_body_snapshot() {
         let source = "fn main() -> void { const exit_code = 0x2A; var copy: int = exit_code; exit(copy,); const after = missing; } fn helper() -> void { exit(000,); }";
         insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn interleaved_top_level_bindings_snapshot() {
+        let source = "const start: int = 40; fn main() -> void { var local = start; exit(local); } var counter = start + 2; fn helper() -> void {} const last = counter;";
+        insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn statements_are_rejected_at_top_level() {
+        for marked in [
+            "fn main() -> void {} «exit»(0);",
+            "fn main() -> void {} «value» = 1;",
+            "fn main() -> void {} «{» exit(0); }",
+            "fn main() -> void {} «42»;",
+            "fn main() -> void {} «;»",
+        ] {
+            let start = marked.find('«').unwrap();
+            let end = marked.find('»').unwrap() - '«'.len_utf8();
+            let source = marked.replace(['«', '»'], "");
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expected a top-level declaration");
+            assert_eq!(error.span, start..end, "{marked}");
+        }
+    }
+
+    #[test]
+    fn malformed_top_level_bindings_report_the_offending_token() {
+        for (source, message, span) in [
+            ("var = 1;", "expected a binding name after `var`", 4..5),
+            ("const value int = 1;", "expected `=`", 12..15),
+            ("var value: bool = 1;", "expected an integer type", 11..15),
+            ("const value = ;", "expected an expression", 14..15),
+            ("var value = 1", "expected `;`", 13..13),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source}");
+            assert_eq!(error.span, span, "{source}");
+        }
     }
 
     #[test]

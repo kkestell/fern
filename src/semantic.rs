@@ -2,14 +2,14 @@ use crate::{
     diagnostic::Diagnostic,
     frontend::{
         BinaryOperator, Expression, ExpressionKind, Function, Statement, StatementKind, Syntax,
-        UnaryOperator, integer_parts,
+        TopLevelItem, UnaryOperator, integer_parts,
     },
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Type {
@@ -148,6 +148,7 @@ pub(crate) struct CheckedExpression {
 pub(crate) struct CheckedEntry<'a> {
     pub syntax: &'a Syntax,
     pub main: Idx<Function>,
+    pub module_bindings: Vec<Idx<Statement>>,
     pub expressions: ArenaMap<Idx<Expression>, CheckedExpression>,
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
     pub bindings: Arena<Binding>,
@@ -156,31 +157,229 @@ pub(crate) struct CheckedEntry<'a> {
 
 pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
     let mut main = None;
-    for (id, function) in syntax.functions.iter() {
-        if syntax.names.resolve(&function.name) != "main" {
-            return Err(Diagnostic::new(
-                function.span.clone(),
-                "only the `main` function is supported",
-            ));
-        }
-        if main.replace(id).is_some() {
-            return Err(Diagnostic::new(
-                function.name_span.clone(),
-                "duplicate `main` function",
-            ));
+    let mut module_names = HashSet::new();
+    let mut module_declarations = HashMap::new();
+    let mut module_statements = Vec::new();
+    for item in &syntax.items {
+        match *item {
+            TopLevelItem::Function(id) => {
+                let function = &syntax.functions[id];
+                let name = syntax.names.resolve(&function.name);
+                if name == "main" && main.is_some() {
+                    return Err(Diagnostic::new(
+                        function.name_span.clone(),
+                        "duplicate `main` function",
+                    ));
+                }
+                if !module_names.insert(function.name) {
+                    return Err(Diagnostic::new(
+                        function.name_span.clone(),
+                        format!("duplicate module-level name `{name}`"),
+                    ));
+                }
+                if name == "main" {
+                    main = Some(id);
+                }
+            }
+            TopLevelItem::Binding(id) => {
+                let StatementKind::Binding {
+                    name, name_span, ..
+                } = &syntax.statements[id].kind
+                else {
+                    unreachable!("frontend only permits bindings at module level")
+                };
+                if !module_names.insert(*name) {
+                    return Err(Diagnostic::new(
+                        name_span.clone(),
+                        format!(
+                            "duplicate module-level name `{}`",
+                            syntax.names.resolve(name)
+                        ),
+                    ));
+                }
+                module_declarations.insert(*name, id);
+                module_statements.push(id);
+            }
         }
     }
     let main = main.ok_or_else(|| Diagnostic::new(0..0, "missing `main` function"))?;
     let mut checked = CheckedEntry {
         syntax,
         main,
+        module_bindings: Vec::new(),
         expressions: ArenaMap::default(),
         declarations: ArenaMap::default(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
     };
-    checked.check_body(&syntax.functions[main].body, &mut Vec::new())?;
+
+    let mut module_scope = HashMap::new();
+    for &statement in &module_statements {
+        let StatementKind::Binding { name, mutable, .. } = &syntax.statements[statement].kind
+        else {
+            unreachable!("frontend only permits bindings at module level")
+        };
+        let binding = checked.bindings.alloc(Binding {
+            ty: Type::Int,
+            mutable: *mutable,
+            constant: None,
+        });
+        checked.declarations.insert(statement, binding);
+        module_scope.insert(*name, binding);
+    }
+
+    let mut dependencies = HashMap::new();
+    for &statement in &module_statements {
+        let StatementKind::Binding { initializer, .. } = &syntax.statements[statement].kind else {
+            unreachable!("frontend only permits bindings at module level")
+        };
+        let mut references = Vec::new();
+        collect_references(syntax, *initializer, &mut references);
+        dependencies.insert(
+            statement,
+            references
+                .into_iter()
+                .filter_map(|(name, span)| {
+                    module_declarations
+                        .get(&name)
+                        .copied()
+                        .map(|declaration| ModuleDependency {
+                            declaration,
+                            name,
+                            span,
+                        })
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    let order = order_module_bindings(syntax, &module_statements, &dependencies)?;
+
+    for &statement in &order {
+        let StatementKind::Binding {
+            mutable,
+            annotation,
+            initializer,
+            ..
+        } = &syntax.statements[statement].kind
+        else {
+            unreachable!("frontend only permits bindings at module level")
+        };
+        let destination = annotation
+            .as_ref()
+            .map(|annotation| Type::named(&annotation.name).expect("frontend validates types"));
+        let expression = checked.check_expression(
+            *initializer,
+            std::slice::from_ref(&module_scope),
+            destination,
+        )?;
+        if expression.constant.is_none() {
+            return Err(Diagnostic::new(
+                syntax.expressions[*initializer].span.clone(),
+                "module-level initializer must be a constant expression",
+            ));
+        }
+        let binding = checked.declarations[statement];
+        checked.bindings[binding].ty = expression.ty;
+        checked.bindings[binding].constant = if *mutable {
+            None
+        } else {
+            expression.constant.clone()
+        };
+        checked.expressions.insert(*initializer, expression);
+    }
+    checked.module_bindings = order;
+
+    let mut scopes = vec![module_scope];
+    for item in &syntax.items {
+        if let TopLevelItem::Function(function) = *item {
+            checked.check_body(&syntax.functions[function].body, &mut scopes)?;
+        }
+    }
     Ok(checked)
+}
+
+#[derive(Clone)]
+struct ModuleDependency {
+    declaration: Idx<Statement>,
+    name: Spur,
+    span: std::ops::Range<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModuleVisit {
+    Visiting,
+    Complete,
+}
+
+fn order_module_bindings(
+    syntax: &Syntax,
+    declarations: &[Idx<Statement>],
+    dependencies: &HashMap<Idx<Statement>, Vec<ModuleDependency>>,
+) -> Result<Vec<Idx<Statement>>, Diagnostic> {
+    let mut states = HashMap::new();
+    let mut order = Vec::new();
+    for &root in declarations {
+        if states.get(&root) == Some(&ModuleVisit::Complete) {
+            continue;
+        }
+        states.insert(root, ModuleVisit::Visiting);
+        let mut stack = vec![(root, 0)];
+        while let Some((declaration, next_dependency)) = stack.last_mut() {
+            let declaration_dependencies = &dependencies[declaration];
+            if *next_dependency == declaration_dependencies.len() {
+                let declaration = *declaration;
+                stack.pop();
+                states.insert(declaration, ModuleVisit::Complete);
+                order.push(declaration);
+                continue;
+            }
+
+            let dependency = declaration_dependencies[*next_dependency].clone();
+            *next_dependency += 1;
+            match states.get(&dependency.declaration) {
+                Some(ModuleVisit::Visiting) => {
+                    return Err(Diagnostic::new(
+                        dependency.span,
+                        format!(
+                            "module-level initializer cycle involving `{}`",
+                            syntax.names.resolve(&dependency.name)
+                        ),
+                    ));
+                }
+                Some(ModuleVisit::Complete) => {}
+                None => {
+                    states.insert(dependency.declaration, ModuleVisit::Visiting);
+                    stack.push((dependency.declaration, 0));
+                }
+            }
+        }
+    }
+    Ok(order)
+}
+
+fn collect_references(
+    syntax: &Syntax,
+    expression: Idx<Expression>,
+    references: &mut Vec<(Spur, std::ops::Range<usize>)>,
+) {
+    let expression = &syntax.expressions[expression];
+    match &expression.kind {
+        ExpressionKind::Integer(_) => {}
+        ExpressionKind::Reference(name) => references.push((*name, expression.span.clone())),
+        ExpressionKind::Grouping { expression }
+        | ExpressionKind::Unary {
+            operand: expression,
+            ..
+        }
+        | ExpressionKind::Conversion {
+            operand: expression,
+            ..
+        } => collect_references(syntax, *expression, references),
+        ExpressionKind::Binary { left, right, .. } => {
+            collect_references(syntax, *left, references);
+            collect_references(syntax, *right, references);
+        }
+    }
 }
 
 impl CheckedEntry<'_> {
@@ -1673,7 +1872,96 @@ mod tests {
     }
 
     #[test]
-    fn entry_checks_keep_their_spans_and_precede_body_checks() {
+    fn module_bindings_resolve_forward_references_and_enclose_every_function() {
+        let syntax = parse(
+            "var counter = base;
+             fn helper() -> void { const saved = counter; }
+             const base: int = 40;
+             fn main() -> void {
+                 counter = counter + 2;
+                 { const counter: u8 = 1; }
+             }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        let module_statements: Vec<_> = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                TopLevelItem::Binding(statement) => Some(*statement),
+                TopLevelItem::Function(_) => None,
+            })
+            .collect();
+        let counter = checked.declarations[module_statements[0]];
+        let base = checked.declarations[module_statements[1]];
+        assert!(checked.bindings[counter].mutable);
+        assert_eq!(checked.bindings[counter].ty, Type::Int);
+        assert_eq!(checked.bindings[counter].constant, None);
+        assert_eq!(checked.bindings[base].constant, Some(big(40)));
+        assert!(
+            checked
+                .assignments
+                .iter()
+                .any(|(_, target)| *target == counter)
+        );
+        assert_eq!(checked.bindings.len(), 4);
+    }
+
+    #[test]
+    fn module_binding_failures_identify_the_declaration_contract() {
+        for (text, offending, message) in [
+            (
+                "var value = 1; const value = 2; fn main() -> void {}",
+                "value = 2",
+                "duplicate module-level name `value`",
+            ),
+            (
+                "const value = value; fn main() -> void {}",
+                "value;",
+                "module-level initializer cycle involving `value`",
+            ),
+            (
+                "const first = second; const second = third; const third = first; fn main() -> void {}",
+                "first;",
+                "module-level initializer cycle involving `first`",
+            ),
+            (
+                "var runtime = 1; const invalid = runtime; fn main() -> void {}",
+                "runtime;",
+                "module-level initializer must be a constant expression",
+            ),
+            (
+                "const value = missing; fn main() -> void {}",
+                "missing",
+                "unknown binding `missing`",
+            ),
+        ] {
+            let syntax = parse(text).unwrap();
+            let error = check(&syntax).unwrap_err();
+            let start = text.rfind(offending).unwrap();
+            let expected_len = offending
+                .trim_end_matches(';')
+                .split(' ')
+                .next()
+                .unwrap()
+                .len();
+            assert_eq!(error.span, start..start + expected_len, "{text}");
+            assert_eq!(error.message, message, "{text}");
+        }
+    }
+
+    #[test]
+    fn module_dependency_ordering_does_not_recurse_on_the_compiler_stack() {
+        let mut source = String::new();
+        for index in 0..10_000 {
+            source.push_str(&format!("const value{index} = value{};\n", index + 1));
+        }
+        source.push_str("const value10000 = 1; fn main() -> void {}");
+        check(&parse(&source).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn entry_checks_keep_their_spans_and_function_bodies_are_all_checked() {
         for (text, span, message) in [
             ("/* 🌿 */", 0..0, "missing `main` function"),
             (
@@ -1681,21 +1969,33 @@ mod tests {
                 24..28,
                 "duplicate `main` function",
             ),
-            (
-                "fn other() -> void {}",
-                0..21,
-                "only the `main` function is supported",
-            ),
         ] {
             let syntax = parse(text).unwrap();
             let error = check(&syntax).unwrap_err();
             assert_eq!(error.span, span);
             assert_eq!(error.message, message);
         }
-        let syntax = parse("fn main() -> void { exit(x); } fn other() -> void {}").unwrap();
-        assert_eq!(
-            check(&syntax).unwrap_err().message,
-            "only the `main` function is supported"
-        );
+        for (text, name) in [
+            (
+                "fn helper() -> void {} fn helper() -> void {} fn main() -> void {}",
+                "helper",
+            ),
+            ("const main = 1; fn main() -> void {}", "main"),
+        ] {
+            let syntax = parse(text).unwrap();
+            let error = check(&syntax).unwrap_err();
+            let start = text.rfind(name).unwrap();
+            assert_eq!(error.span, start..start + name.len());
+            assert_eq!(
+                error.message,
+                format!("duplicate module-level name `{name}`")
+            );
+        }
+        let text = "fn helper() -> void { exit(missing); } fn main() -> void {}";
+        let syntax = parse(text).unwrap();
+        let error = check(&syntax).unwrap_err();
+        let start = text.find("missing").unwrap();
+        assert_eq!(error.span, start..start + "missing".len());
+        assert_eq!(error.message, "unknown binding `missing`");
     }
 }

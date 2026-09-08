@@ -38,6 +38,7 @@ fn native_programs_exit_zero() {
         include_str!("../examples/empty.fern"),
         EMPTY,
         "fn main() -> void { const x = 42; var y = x; }",
+        "fn helper() -> void { const value = 1; } fn main() -> void {}",
         "\t\r\n\x0b\x0c /* 🌿 /* nested */ */ fn/*a*/main( ) -> void { // body\n } // eof",
     ] {
         let (dir, input, output) = fixture(source);
@@ -113,11 +114,27 @@ fn source_failures_preserve_output() {
             "fn main() -> void {} fn main() -> void {}",
             "duplicate `main`",
         ),
-        ("fn other() -> void {}", "only the `main`"),
         (
-            "fn main() -> void {} fn other() -> void {}",
-            "only the `main`",
+            "fn helper() -> void {} fn helper() -> void {} fn main() -> void {}",
+            "duplicate module-level name `helper`",
         ),
+        (
+            "const main = 1; fn main() -> void {}",
+            "duplicate module-level name `main`",
+        ),
+        (
+            "var value = 1; const value = 2; fn main() -> void {}",
+            "duplicate module-level name `value`",
+        ),
+        (
+            "const first = second; const second = first; fn main() -> void {}",
+            "module-level initializer cycle",
+        ),
+        (
+            "var runtime = 1; const invalid = runtime; fn main() -> void {}",
+            "module-level initializer must be a constant expression",
+        ),
+        ("fn other() -> void {}", "missing `main`"),
         ("fn main() -> void { const x = x; }", "unknown binding `x`"),
         (
             "fn main() -> void { exit(0); exit(missing); }",
@@ -153,16 +170,19 @@ fn source_failures_preserve_output() {
         ("fn main() -> void { { }", "expected `}`"),
         ("fn main(x) -> void {}", "parameters are not supported"),
         ("fn main() -> int {}", "expected `void`"),
-        ("fn main() -> void {} trailing", "expected `fn`"),
+        (
+            "fn main() -> void {} trailing",
+            "expected a top-level declaration",
+        ),
         (
             "fn main() -> void {} /* unclosed",
             "unterminated block comment",
         ),
-        ("fn main() -> void {} ;", "expected `fn`"),
+        ("fn main() -> void {} ;", "expected a top-level declaration"),
         ("fn main() -> void {", "expected `}`"),
         ("fn main() -> void {}\u{a0}", "invalid token"),
         ("fn int() -> void {}", "reserved word"),
-        ("fn main_extra() -> void {}", "only the `main`"),
+        ("fn main_extra() -> void {}", "missing `main`"),
     ] {
         let (dir, input, output) = fixture(source);
         failure(cli(&input, &output).output().unwrap(), expected);
@@ -203,6 +223,23 @@ fn integer_operator_examples_execute_and_replace_output() {
     ] {
         let (_dir, input, output) = fixture(source);
         fs::write(&output, "keep me").unwrap();
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+    }
+}
+
+#[test]
+fn module_level_bindings_initialize_shadow_and_mutate() {
+    for source in [
+        include_str!("../examples/module_level_declarations.fern"),
+        "var counter = 40;
+         fn main() -> void {
+             { var counter: u8 = 1; counter = 2; }
+             counter = counter + 2;
+             exit(counter);
+         }",
+    ] {
+        let (_dir, input, output) = fixture(source);
         fern::compile(&input, &output).unwrap();
         assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
     }

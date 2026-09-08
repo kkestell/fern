@@ -1,0 +1,8 @@
+var counter = start;
+const start: int = 40;
+const step = 2;
+
+fn main() -> void {
+    counter = counter + step;
+    exit(counter);
+}

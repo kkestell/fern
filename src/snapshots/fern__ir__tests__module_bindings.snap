@@ -1,0 +1,83 @@
+---
+source: src/ir.rs
+expression: entry.entry()
+---
+Entry {
+    values: [
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 40,
+                    ty: Int,
+                },
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Value(
+                    ValueId(
+                        0,
+                    ),
+                ),
+            ),
+        },
+        Value {
+            span: None,
+            ty: Int,
+            kind: Copy(
+                Integer {
+                    value: 2,
+                    ty: Int,
+                },
+            ),
+        },
+        Value {
+            span: None,
+            ty: U8,
+            kind: Copy(
+                Integer {
+                    value: 1,
+                    ty: U8,
+                },
+            ),
+        },
+        Value {
+            span: None,
+            ty: U8,
+            kind: Copy(
+                Integer {
+                    value: 2,
+                    ty: U8,
+                },
+            ),
+        },
+        Value {
+            span: Some(
+                209..210,
+            ),
+            ty: Int,
+            kind: Binary {
+                operator: Add,
+                left: Value(
+                    ValueId(
+                        1,
+                    ),
+                ),
+                right: Value(
+                    ValueId(
+                        2,
+                    ),
+                ),
+            },
+        },
+    ],
+    exit: Value(
+        ValueId(
+            5,
+        ),
+    ),
+}

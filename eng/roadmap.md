@@ -46,14 +46,14 @@ Expected exit status: 42. Future file:
 
 ### Tasks
 
-- [ ] **Parse top-level bindings**
+- [x] **Parse top-level bindings**
 
   - Accept `var` and `const` declarations interleaved with `fn` declarations,
     preserving spans, and reject statements at the top level.
   - Cover ordering, annotations, and malformed top-level source in parser tests
     and snapshots.
 
-- [ ] **Resolve and check module-level bindings**
+- [x] **Resolve and check module-level bindings**
 
   - Resolve references to module-level bindings from any declaration in the
     file, regardless of order, and from every function body.
@@ -62,7 +62,7 @@ Expected exit status: 42. Future file:
   - Preserve local shadowing of module-level bindings and permit assignment to a
     module-level `var` from a function body.
 
-- [ ] **Lower and execute module-level bindings**
+- [x] **Lower and execute module-level bindings**
 
   - Initialize module-level bindings before `main` runs and preserve their
     values and mutations through IR verification, snapshots, and native

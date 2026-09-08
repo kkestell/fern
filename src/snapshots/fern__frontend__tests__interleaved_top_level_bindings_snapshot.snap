@@ -1,0 +1,18 @@
+---
+source: src/frontend.rs
+expression: project(&parse(source).unwrap())
+---
+const start name=6..11 annotation=Some(TypeAnnotation { name: "int", span: 13..16 }) span=0..22
+  integer 40 span=19..21
+fn main name=26..30 span=23..76
+  var local name=47..52 annotation=None span=43..61
+    reference start span=55..60
+  exit span=62..74
+    reference local span=67..72
+var counter name=81..88 annotation=None span=77..101
+  binary Add operator=97..98 span=91..100
+    reference start span=91..96
+    integer 2 span=99..100
+fn helper name=105..111 span=102..124
+const last name=131..135 annotation=None span=125..146
+  reference counter span=138..145

@@ -1263,81 +1263,102 @@ impl Parser<'_> {
         } else if self.current == Some(Token::Name)
             && Type::named(self.lexer.slice()).is_some_and(Type::is_integer)
         {
-            self.enter_nesting()?;
-            let destination = self.type_annotation()?;
-            let truncating = if self.current == Some(Token::Dot) {
-                self.advance()?;
-                if self.current != Some(Token::Name) || self.lexer.slice() != "truncate" {
-                    return Err(self.error("expected `truncate`"));
-                }
-                self.advance()?;
-                true
-            } else {
-                false
-            };
-            if !truncating && self.current != Some(Token::LeftParen) {
-                return Err(Diagnostic::new(
-                    destination.span.clone(),
-                    "reserved word cannot be used as an identifier",
-                ));
-            }
-            self.expect(Token::LeftParen, "expected `(`")?;
-            let operand = self.expression()?;
-            let end = self.expect(Token::RightParen, "expected `)`")?.end;
-            self.nesting -= 1;
-            return Ok(self.syntax.expressions.alloc(Expression {
-                kind: ExpressionKind::Conversion {
-                    destination,
-                    truncating,
-                    operand,
-                },
-                span: span.start..end,
-                depth: self.syntax.expressions[operand].depth + 1,
-            }));
+            return self.conversion_expression(span);
         } else if matches!(self.current, Some(Token::True | Token::False)) {
             let value = self.current == Some(Token::True);
             self.advance()?;
             ExpressionKind::Boolean(value)
         } else if self.current == Some(Token::LeftParen) {
-            self.enter_nesting()?;
-            self.advance()?;
-            let expression = self.expression()?;
-            let end = self
-                .expect(Token::RightParen, "expected `)` after grouped expression")?
-                .end;
-            self.nesting -= 1;
-            return Ok(self.syntax.expressions.alloc(Expression {
-                kind: ExpressionKind::Grouping { expression },
-                span: span.start..end,
-                depth: self.syntax.expressions[expression].depth + 1,
-            }));
+            return self.grouping_expression(span);
         } else {
-            let target = self.qualified_name("expected an expression")?;
-            if self.current == Some(Token::LeftParen) {
-                let call = self.call_parts(target)?;
-                let end = call.right_paren_span.end;
-                return Ok(self.syntax.expressions.alloc(Expression {
-                    depth: call
-                        .arguments
-                        .iter()
-                        .map(|argument| self.syntax.expressions[*argument].depth)
-                        .max()
-                        .unwrap_or(0)
-                        + 1,
-                    span: span.start..end,
-                    kind: ExpressionKind::Call(call),
-                }));
-            }
-            return Ok(self.syntax.expressions.alloc(Expression {
-                span: target.span.clone(),
-                depth: 0,
-                kind: ExpressionKind::Reference(target),
-            }));
+            return self.name_expression(span);
         };
         Ok(self.syntax.expressions.alloc(Expression {
             kind,
             span,
             depth: 0,
+        }))
+    }
+
+    /// Parses a conversion, `T(x)` or `T.truncate(x)`, whose head is the name
+    /// of an integer type.
+    fn conversion_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        self.enter_nesting()?;
+        let destination = self.type_annotation()?;
+        let truncating = self.truncate_marker()?;
+        if !truncating && self.current != Some(Token::LeftParen) {
+            return Err(Diagnostic::new(
+                destination.span.clone(),
+                "reserved word cannot be used as an identifier",
+            ));
+        }
+        self.expect(Token::LeftParen, "expected `(`")?;
+        let operand = self.expression()?;
+        let end = self.expect(Token::RightParen, "expected `)`")?.end;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            kind: ExpressionKind::Conversion {
+                destination,
+                truncating,
+                operand,
+            },
+            span: span.start..end,
+            depth: self.syntax.expressions[operand].depth + 1,
+        }))
+    }
+
+    /// Consumes the `.truncate` of a truncating conversion, reporting whether
+    /// it was there.
+    fn truncate_marker(&mut self) -> Result<bool, Diagnostic> {
+        if self.current != Some(Token::Dot) {
+            return Ok(false);
+        }
+        self.advance()?;
+        if self.current != Some(Token::Name) || self.lexer.slice() != "truncate" {
+            return Err(self.error("expected `truncate`"));
+        }
+        self.advance()?;
+        Ok(true)
+    }
+
+    fn grouping_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        self.enter_nesting()?;
+        self.advance()?;
+        let expression = self.expression()?;
+        let end = self
+            .expect(Token::RightParen, "expected `)` after grouped expression")?
+            .end;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            kind: ExpressionKind::Grouping { expression },
+            span: span.start..end,
+            depth: self.syntax.expressions[expression].depth + 1,
+        }))
+    }
+
+    /// Parses a name, which is a call when an argument list follows it and a
+    /// reference otherwise.
+    fn name_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        let target = self.qualified_name("expected an expression")?;
+        if self.current != Some(Token::LeftParen) {
+            return Ok(self.syntax.expressions.alloc(Expression {
+                span: target.span.clone(),
+                depth: 0,
+                kind: ExpressionKind::Reference(target),
+            }));
+        }
+        let call = self.call_parts(target)?;
+        let end = call.right_paren_span.end;
+        Ok(self.syntax.expressions.alloc(Expression {
+            depth: call
+                .arguments
+                .iter()
+                .map(|argument| self.syntax.expressions[*argument].depth)
+                .max()
+                .unwrap_or(0)
+                + 1,
+            span: span.start..end,
+            kind: ExpressionKind::Call(call),
         }))
     }
 }

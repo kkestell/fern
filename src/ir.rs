@@ -121,6 +121,21 @@ pub(crate) enum Terminator {
     Unreachable,
 }
 
+impl Terminator {
+    /// The blocks control can reach from this terminator.
+    fn targets(&self) -> Vec<BlockId> {
+        match self {
+            Self::Jump { target } => vec![*target],
+            Self::Branch {
+                then_target,
+                else_target,
+                ..
+            } => vec![*then_target, *else_target],
+            Self::Exit { .. } | Self::Return { .. } | Self::Unreachable => Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Block {
     pub instructions: Vec<Instruction>,
@@ -292,160 +307,139 @@ impl Program {
     fn verify_function(&self, function: &Function) -> Result<(), CompileError> {
         let flow = &function.flow;
         verify_target(flow.entry, flow)?;
-
-        let mut definitions: Vec<Option<Definition>> = vec![None; function.values.len()];
-        for (block_index, block) in flow.blocks.iter().enumerate() {
-            for (position, instruction) in block.instructions.iter().enumerate() {
-                let defined = match instruction {
-                    Instruction::Value(id) => Some((*id, false)),
-                    Instruction::Call { result, .. } => result.map(|id| (id, true)),
-                    Instruction::Store { .. } => None,
-                };
-                let Some((ValueId(id), from_call)) = defined else {
-                    continue;
-                };
-                let Some(definition) = definitions.get_mut(id) else {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR defines unknown value {id}"
-                    )));
-                };
-                if definition
-                    .replace(Definition {
-                        block: block_index,
-                        position,
-                        from_call,
-                    })
-                    .is_some()
-                {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR defines value {id} more than once"
-                    )));
-                }
-            }
-        }
-        if let Some(id) = definitions.iter().position(Option::is_none) {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR does not define value {id}"
-            )));
-        }
-        // A call result exists only where a call produces it, and a call
-        // produces nothing else.
-        for (id, (value, definition)) in function.values.iter().zip(&definitions).enumerate() {
-            let from_call = definition.expect("every value is defined").from_call;
-            if (value.kind == ValueKind::CallResult) != from_call {
-                return Err(CompileError::new(format!(
-                    "internal compiler error: IR value {id} and its definition disagree on being a call result"
-                )));
-            }
-        }
-
+        let definitions = value_definitions(function)?;
         let reachable = reachable_blocks(flow)?;
         let initialized_at_entry = initialized_locals(function, &reachable);
-        for (block_index, block) in flow.blocks.iter().enumerate() {
-            if reachable[block_index] && block.terminator == Terminator::Unreachable {
+        for (index, block) in flow.blocks.iter().enumerate() {
+            if reachable[index] && block.terminator == Terminator::Unreachable {
                 return Err(CompileError::new(format!(
-                    "internal compiler error: reachable IR block {block_index} is not terminated"
+                    "internal compiler error: reachable IR block {index} is not terminated"
                 )));
             }
-            let mut initialized = initialized_at_entry[block_index].clone();
-            for (position, instruction) in block.instructions.iter().enumerate() {
-                let operand_type = |operand| {
-                    flow_operand_type(
-                        operand,
-                        &function.values,
-                        &definitions,
-                        block_index,
-                        position,
-                    )
-                };
-                match instruction {
-                    Instruction::Value(ValueId(id)) => {
-                        let value = &function.values[*id];
-                        if let ValueKind::Load(Place::Local(LocalId(local))) = value.kind
-                            && local < flow.locals.len()
-                            && !initialized.contains(local)
-                        {
-                            return Err(CompileError::new(format!(
-                                "internal compiler error: IR loads uninitialized local {local}"
-                            )));
-                        }
-                        if !valid_value(value, operand_type, |place| self.place_type(flow, place))?
-                        {
-                            return Err(invalid_value(*id, value));
-                        }
-                    }
-                    Instruction::Store { place, operand } => {
-                        let destination = self.place_type(flow, *place)?;
-                        let source = operand_type(*operand)?;
-                        if source != destination {
-                            return Err(CompileError::new(format!(
-                                "internal compiler error: IR store has type {source:?}, expected {destination:?}"
-                            )));
-                        }
-                        if let Place::Local(local) = place {
-                            initialized.insert(local.0);
-                        }
-                    }
-                    Instruction::Call {
-                        result,
-                        function: callee,
-                        arguments,
-                        ..
-                    } => self.verify_call(function, *callee, arguments, *result, operand_type)?,
-                }
-            }
-            let end = block.instructions.len();
-            let operand_type = |operand| {
-                flow_operand_type(operand, &function.values, &definitions, block_index, end)
-            };
-            match &block.terminator {
-                Terminator::Jump { target, .. } => verify_target(*target, flow)?,
-                Terminator::Branch {
-                    condition,
-                    then_target,
-                    else_target,
-                    ..
-                } => {
-                    verify_target(*then_target, flow)?;
-                    verify_target(*else_target, flow)?;
-                    if operand_type(*condition)? != Type::Bool {
-                        return Err(CompileError::new(
-                            "internal compiler error: IR branch requires bool",
-                        ));
-                    }
-                }
-                Terminator::Exit { status, .. } => {
-                    if operand_type(*status)? != Type::Int {
-                        return Err(CompileError::new(
-                            "internal compiler error: IR exit requires int",
-                        ));
-                    }
-                }
-                Terminator::Return { value } => match (function.result, value) {
-                    (None, None) => {}
-                    (None, Some(_)) => {
-                        return Err(CompileError::new(
-                            "internal compiler error: IR returns a value from a void function",
-                        ));
-                    }
-                    (Some(_), None) => {
-                        return Err(CompileError::new(
-                            "internal compiler error: IR return is missing its value",
-                        ));
-                    }
-                    (Some(result), Some(value)) => {
-                        let source = operand_type(*value)?;
-                        if source != result {
-                            return Err(CompileError::new(format!(
-                                "internal compiler error: IR returns {source:?}, expected {result:?}"
-                            )));
-                        }
-                    }
-                },
-                Terminator::Unreachable => {}
-            }
+            self.verify_block(
+                function,
+                index,
+                &definitions,
+                initialized_at_entry[index].clone(),
+            )?;
         }
         Ok(())
+    }
+
+    /// Checks one block's instructions and its terminator. `initialized` holds
+    /// the locals initialized on entry to the block and grows as stores in the
+    /// block initialize more.
+    fn verify_block(
+        &self,
+        function: &Function,
+        block_index: usize,
+        definitions: &[Definition],
+        mut initialized: LocalSet,
+    ) -> Result<(), CompileError> {
+        let block = &function.flow.blocks[block_index];
+        for (position, instruction) in block.instructions.iter().enumerate() {
+            self.verify_instruction(
+                function,
+                definitions,
+                (block_index, position),
+                instruction,
+                &mut initialized,
+            )?;
+        }
+        self.verify_terminator(function, block_index, definitions)
+    }
+
+    fn verify_instruction(
+        &self,
+        function: &Function,
+        definitions: &[Definition],
+        (block_index, position): (usize, usize),
+        instruction: &Instruction,
+        initialized: &mut LocalSet,
+    ) -> Result<(), CompileError> {
+        let flow = &function.flow;
+        let operand_type = |operand| {
+            flow_operand_type(
+                operand,
+                &function.values,
+                definitions,
+                block_index,
+                position,
+            )
+        };
+        match instruction {
+            Instruction::Value(ValueId(id)) => {
+                let value = &function.values[*id];
+                if let ValueKind::Load(Place::Local(LocalId(local))) = value.kind
+                    && local < flow.locals.len()
+                    && !initialized.contains(local)
+                {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR loads uninitialized local {local}"
+                    )));
+                }
+                if !valid_value(value, operand_type, |place| self.place_type(flow, place))? {
+                    return Err(invalid_value(*id, value));
+                }
+                Ok(())
+            }
+            Instruction::Store { place, operand } => {
+                let destination = self.place_type(flow, *place)?;
+                let source = operand_type(*operand)?;
+                if source != destination {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR store has type {source:?}, expected {destination:?}"
+                    )));
+                }
+                if let Place::Local(local) = place {
+                    initialized.insert(local.0);
+                }
+                Ok(())
+            }
+            Instruction::Call {
+                result,
+                function: callee,
+                arguments,
+                ..
+            } => self.verify_call(function, *callee, arguments, *result, operand_type),
+        }
+    }
+
+    fn verify_terminator(
+        &self,
+        function: &Function,
+        block_index: usize,
+        definitions: &[Definition],
+    ) -> Result<(), CompileError> {
+        let flow = &function.flow;
+        let block = &flow.blocks[block_index];
+        // A terminator reads values defined anywhere in its own block.
+        let end = block.instructions.len();
+        let operand_type =
+            |operand| flow_operand_type(operand, &function.values, definitions, block_index, end);
+        for target in block.terminator.targets() {
+            verify_target(target, flow)?;
+        }
+        match &block.terminator {
+            Terminator::Branch { condition, .. } => {
+                if operand_type(*condition)? != Type::Bool {
+                    return Err(CompileError::new(
+                        "internal compiler error: IR branch requires bool",
+                    ));
+                }
+                Ok(())
+            }
+            Terminator::Exit { status, .. } => {
+                if operand_type(*status)? != Type::Int {
+                    return Err(CompileError::new(
+                        "internal compiler error: IR exit requires int",
+                    ));
+                }
+                Ok(())
+            }
+            Terminator::Return { value } => verify_return(function.result, *value, operand_type),
+            Terminator::Jump { .. } | Terminator::Unreachable => Ok(()),
+        }
     }
 
     fn verify_call(
@@ -523,6 +517,12 @@ impl LocalSet {
         }
     }
 
+    fn union(&mut self, other: &Self) {
+        for (word, other) in self.0.iter_mut().zip(&other.0) {
+            *word |= other;
+        }
+    }
+
     fn intersect(&mut self, other: &Self) {
         for (word, other) in self.0.iter_mut().zip(&other.0) {
             *word &= other;
@@ -530,70 +530,41 @@ impl LocalSet {
     }
 }
 
+/// The locals initialized on entry to each block. A local counts as
+/// initialized only when every reachable path to the block initializes it, so
+/// the analysis starts optimistic and shrinks to a fixed point.
 fn initialized_locals(function: &Function, reachable: &[bool]) -> Vec<LocalSet> {
     let flow = &function.flow;
-    let mut predecessors = vec![Vec::new(); flow.blocks.len()];
-    let mut stores = vec![Vec::new(); flow.blocks.len()];
-    for (block_index, block) in flow.blocks.iter().enumerate() {
-        for instruction in &block.instructions {
-            if let Instruction::Store {
-                place: Place::Local(local),
-                ..
-            } = instruction
-            {
-                stores[block_index].push(local.0);
-            }
-        }
-        match block.terminator {
-            Terminator::Jump { target } => {
-                if let Some(target_predecessors) = predecessors.get_mut(target.0) {
-                    target_predecessors.push(block_index);
-                }
-            }
-            Terminator::Branch {
-                then_target,
-                else_target,
-                ..
-            } => {
-                if let Some(target_predecessors) = predecessors.get_mut(then_target.0) {
-                    target_predecessors.push(block_index);
-                }
-                if let Some(target_predecessors) = predecessors.get_mut(else_target.0) {
-                    target_predecessors.push(block_index);
-                }
-            }
-            Terminator::Exit { .. } | Terminator::Return { .. } | Terminator::Unreachable => {}
-        }
-    }
-
-    let mut initialized = vec![LocalSet::full(flow.locals.len()); flow.blocks.len()];
+    let predecessors = block_predecessors(flow);
+    let stores = local_stores(flow, flow.locals.len());
+    let locals = flow.locals.len();
+    let mut initialized = vec![LocalSet::full(locals); flow.blocks.len()];
     // Arguments initialize the parameters before the entry block runs.
-    let mut at_entry = LocalSet::empty(flow.locals.len());
+    let mut at_entry = LocalSet::empty(locals);
     for parameter in 0..function.parameters {
         at_entry.insert(parameter);
     }
     initialized[flow.entry.0] = at_entry;
     for (block, is_reachable) in reachable.iter().enumerate() {
         if !is_reachable {
-            initialized[block] = LocalSet::empty(flow.locals.len());
+            initialized[block] = LocalSet::empty(locals);
         }
     }
     loop {
         let mut changed = false;
         for block in 0..flow.blocks.len() {
+            // Both of these blocks keep the set they started with.
             if !reachable[block] || block == flow.entry.0 {
                 continue;
             }
-            let mut incoming = LocalSet::full(flow.locals.len());
+            let mut incoming = LocalSet::full(locals);
             for &predecessor in predecessors[block]
                 .iter()
                 .filter(|predecessor| reachable[**predecessor])
             {
-                let mut predecessor_initialized = initialized[predecessor].clone();
-                for &local in &stores[predecessor] {
-                    predecessor_initialized.insert(local);
-                }
-                incoming.intersect(&predecessor_initialized);
+                let mut leaving = initialized[predecessor].clone();
+                leaving.union(&stores[predecessor]);
+                incoming.intersect(&leaving);
             }
             if incoming != initialized[block] {
                 initialized[block] = incoming;
@@ -604,6 +575,39 @@ fn initialized_locals(function: &Function, reachable: &[bool]) -> Vec<LocalSet> 
             return initialized;
         }
     }
+}
+
+/// The blocks that can reach each block.
+fn block_predecessors(flow: &ControlFlow) -> Vec<Vec<usize>> {
+    let mut predecessors = vec![Vec::new(); flow.blocks.len()];
+    for (block_index, block) in flow.blocks.iter().enumerate() {
+        for target in block.terminator.targets() {
+            if let Some(target_predecessors) = predecessors.get_mut(target.0) {
+                target_predecessors.push(block_index);
+            }
+        }
+    }
+    predecessors
+}
+
+/// The locals each block stores to.
+fn local_stores(flow: &ControlFlow, locals: usize) -> Vec<LocalSet> {
+    flow.blocks
+        .iter()
+        .map(|block| {
+            let mut stored = LocalSet::empty(locals);
+            for instruction in &block.instructions {
+                if let Instruction::Store {
+                    place: Place::Local(local),
+                    ..
+                } = instruction
+                {
+                    stored.insert(local.0);
+                }
+            }
+            stored
+        })
+        .collect()
 }
 
 fn invalid_value(index: usize, value: &Value) -> CompileError {
@@ -645,33 +649,114 @@ fn reachable_blocks(flow: &ControlFlow) -> Result<Vec<bool>, CompileError> {
         if std::mem::replace(&mut reachable[block.0], true) {
             continue;
         }
-        match flow.blocks[block.0].terminator {
-            Terminator::Jump { target } => pending.push_back(target),
-            Terminator::Branch {
-                then_target,
-                else_target,
-                ..
-            } => {
-                pending.push_back(then_target);
-                pending.push_back(else_target);
-            }
-            Terminator::Exit { .. } | Terminator::Return { .. } | Terminator::Unreachable => {}
-        }
+        pending.extend(flow.blocks[block.0].terminator.targets());
     }
     Ok(reachable)
+}
+
+/// Where each value of `function` is defined. Every value is defined exactly
+/// once, and only a call defines a call result.
+fn value_definitions(function: &Function) -> Result<Vec<Definition>, CompileError> {
+    let mut found: Vec<Option<Definition>> = vec![None; function.values.len()];
+    for (block, block_data) in function.flow.blocks.iter().enumerate() {
+        for (position, instruction) in block_data.instructions.iter().enumerate() {
+            record_definition(&mut found, instruction, block, position)?;
+        }
+    }
+    let definitions = found
+        .into_iter()
+        .enumerate()
+        .map(|(id, definition)| {
+            definition.ok_or_else(|| {
+                CompileError::new(format!(
+                    "internal compiler error: IR does not define value {id}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (id, (value, definition)) in function.values.iter().zip(&definitions).enumerate() {
+        if (value.kind == ValueKind::CallResult) != definition.from_call {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR value {id} and its definition disagree on being a call result"
+            )));
+        }
+    }
+    Ok(definitions)
+}
+
+/// Records the value one instruction defines, rejecting a second definition of
+/// it.
+fn record_definition(
+    found: &mut [Option<Definition>],
+    instruction: &Instruction,
+    block: usize,
+    position: usize,
+) -> Result<(), CompileError> {
+    let defined = match instruction {
+        Instruction::Value(id) => Some((*id, false)),
+        Instruction::Call { result, .. } => result.map(|id| (id, true)),
+        Instruction::Store { .. } => None,
+    };
+    let Some((ValueId(id), from_call)) = defined else {
+        return Ok(());
+    };
+    let Some(definition) = found.get_mut(id) else {
+        return Err(CompileError::new(format!(
+            "internal compiler error: IR defines unknown value {id}"
+        )));
+    };
+    if definition
+        .replace(Definition {
+            block,
+            position,
+            from_call,
+        })
+        .is_some()
+    {
+        return Err(CompileError::new(format!(
+            "internal compiler error: IR defines value {id} more than once"
+        )));
+    }
+    Ok(())
+}
+
+/// Checks that a return carries exactly the value its function's result needs.
+fn verify_return(
+    result: Option<Type>,
+    value: Option<Operand>,
+    mut operand_type: impl FnMut(Operand) -> Result<Type, CompileError>,
+) -> Result<(), CompileError> {
+    match (result, value) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(CompileError::new(
+            "internal compiler error: IR returns a value from a void function",
+        )),
+        (Some(_), None) => Err(CompileError::new(
+            "internal compiler error: IR return is missing its value",
+        )),
+        (Some(result), Some(value)) => {
+            let source = operand_type(value)?;
+            if source != result {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR returns {source:?}, expected {result:?}"
+                )));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn flow_operand_type(
     operand: Operand,
     values: &[Value],
-    definitions: &[Option<Definition>],
+    definitions: &[Definition],
     block: usize,
     position: usize,
 ) -> Result<Type, CompileError> {
     match operand {
         Operand::Integer { value, ty } => verify_integer(value, ty),
         Operand::Value(ValueId(id)) => {
-            let Some(Some(definition)) = definitions.get(id) else {
+            let Some(definition) = definitions.get(id) else {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR references undefined value {id}"
                 )));

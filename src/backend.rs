@@ -132,62 +132,80 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     for (block_id, block) in flow.blocks.iter().enumerate() {
         writeln!(emitter.text, "@block{block_id}").unwrap();
         for instruction in &block.instructions {
-            match instruction {
-                Instruction::Value(ValueId(id)) => emit_value(emitter, function, *id),
-                Instruction::Store {
-                    place: destination,
-                    operand: source,
-                } => {
-                    let width = match destination {
-                        Place::Local(local) => qbe_type(flow.locals[local.0]),
-                        Place::Global(global) => qbe_type(emitter.globals[global.0].ty),
-                    };
-                    writeln!(
-                        emitter.text,
-                        "    store{width} {}, {}",
-                        operand(*source),
-                        place(*destination)
-                    )
-                    .unwrap();
-                }
-                Instruction::Call {
-                    result,
-                    function: callee,
-                    arguments,
-                    ..
-                } => {
-                    let target = &emitter.functions[callee.0];
-                    let arguments = arguments
-                        .iter()
-                        .enumerate()
-                        .map(|(index, argument)| {
-                            format!(
-                                "{} {}",
-                                qbe_type(target.flow.locals[index]),
-                                operand(*argument)
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let symbol = function_symbol(emitter.main, *callee);
-                    match result {
-                        Some(ValueId(id)) => writeln!(
-                            emitter.text,
-                            "    %v{id} ={} call ${symbol}({arguments})",
-                            qbe_type(
-                                target
-                                    .result
-                                    .expect("a call result requires a callee that returns one")
-                            )
-                        ),
-                        None => writeln!(emitter.text, "    call ${symbol}({arguments})"),
-                    }
-                    .unwrap();
-                }
-            }
+            emit_instruction(emitter, function, flow, instruction);
         }
         emit_terminator(emitter, BlockId(block_id), &block.terminator);
     }
+}
+
+fn emit_instruction(
+    emitter: &mut Emitter<'_>,
+    function: &Function,
+    flow: &ControlFlow,
+    instruction: &Instruction,
+) {
+    match instruction {
+        Instruction::Value(ValueId(id)) => emit_value(emitter, function, *id),
+        Instruction::Store {
+            place: destination,
+            operand: source,
+        } => {
+            let width = match destination {
+                Place::Local(local) => qbe_type(flow.locals[local.0]),
+                Place::Global(global) => qbe_type(emitter.globals[global.0].ty),
+            };
+            writeln!(
+                emitter.text,
+                "    store{width} {}, {}",
+                operand(*source),
+                place(*destination)
+            )
+            .unwrap();
+        }
+        Instruction::Call {
+            result,
+            function: callee,
+            arguments,
+            ..
+        } => emit_call(emitter, *callee, arguments, *result),
+    }
+}
+
+fn emit_call(
+    emitter: &mut Emitter<'_>,
+    callee: FunctionId,
+    arguments: &[Operand],
+    result: Option<ValueId>,
+) {
+    let target = &emitter.functions[callee.0];
+    // The callee's leading locals hold its parameters, so they give each
+    // argument its type.
+    let arguments = arguments
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            format!(
+                "{} {}",
+                qbe_type(target.flow.locals[index]),
+                operand(*argument)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let symbol = function_symbol(emitter.main, callee);
+    match result {
+        Some(ValueId(id)) => writeln!(
+            emitter.text,
+            "    %v{id} ={} call ${symbol}({arguments})",
+            qbe_type(
+                target
+                    .result
+                    .expect("a call result requires a callee that returns one")
+            )
+        ),
+        None => writeln!(emitter.text, "    call ${symbol}({arguments})"),
+    }
+    .unwrap();
 }
 
 fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Terminator) {

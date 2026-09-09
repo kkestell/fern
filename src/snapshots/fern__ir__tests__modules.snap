@@ -1,0 +1,424 @@
+---
+source: src/ir.rs
+expression: lowered_tree(MODULE_TREE).program()
+---
+Program {
+    globals: [
+        Global {
+            ty: Int,
+            value: 0,
+        },
+    ],
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        141..142,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 20,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: Some(
+                        148..149,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Subtract,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                3,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 10,
+                            ty: Int,
+                        },
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 20,
+                                    ty: Int,
+                                },
+                            },
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    1,
+                                ),
+                                arguments: [],
+                                span: 102..114,
+                            },
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    2,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            0,
+                                        ),
+                                    ),
+                                ],
+                                span: 88..101,
+                            },
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 0,
+            result: Some(
+                Int,
+            ),
+            values: [],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [],
+                blocks: [
+                    Block {
+                        instructions: [],
+                        terminator: Return {
+                            value: Some(
+                                Integer {
+                                    value: 6,
+                                    ty: Int,
+                                },
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: Some(
+                Int,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: Some(
+                        339..340,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    4,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            1,
+                                        ),
+                                    ),
+                                ],
+                                span: 341..364,
+                            },
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        3,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 0,
+            result: None,
+            values: [],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 255,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Return {
+                            value: None,
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: Some(
+                Int,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        510..511,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Multiply,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 2,
+                            ty: Int,
+                        },
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
+}

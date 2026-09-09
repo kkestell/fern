@@ -1,0 +1,9 @@
+use counter;
+
+const base: int = 20;
+
+fn main() -> void {
+    counter::value = base;
+    counter::bump(step_total());
+    exit(counter::value + base - 10); // reports 42
+}

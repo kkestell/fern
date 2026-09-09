@@ -2,9 +2,10 @@ use crate::{
     diagnostic::Diagnostic,
     frontend::{
         BinaryOperator, Call, ComparisonOperator, Expression, ExpressionKind, ForHeader, Function,
-        FunctionResult, LogicalOperator, Statement, StatementKind, Syntax, TopLevelItem,
-        TypeAnnotation, UnaryOperator, integer_parts,
+        FunctionResult, LogicalOperator, PathComponent, QualifiedName, Statement, StatementKind,
+        Syntax, TopLevelItem, TypeAnnotation, UnaryOperator, integer_parts,
     },
+    module::Module,
     types::Type,
 };
 use la_arena::{Arena, ArenaMap, Idx};
@@ -96,207 +97,432 @@ pub(crate) struct CheckedProgram<'a> {
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
     pub bindings: Arena<Binding>,
     pub assignments: ArenaMap<Idx<Statement>, Idx<Binding>>,
-    pub function_names: HashMap<Spur, Idx<Function>>,
     pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
+    /// Checking state: the module-level functions of the module being checked,
+    /// which an unqualified call resolves against. It is replaced per module,
+    /// so it never describes the whole program.
+    function_names: HashMap<Spur, Idx<Function>>,
+    /// Checking state: each checked module's namespace, in module order, which
+    /// a qualified name reaches through its file's imports.
+    namespaces: Vec<Namespace>,
+    /// Checking state: each source file's imported names, indexed by file.
+    imports: Vec<FileImports>,
+    /// Checking state: the file whose declarations are being checked, which
+    /// selects the imports name resolution sees.
+    file: usize,
 }
 
-pub(crate) fn check(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
-    let mut main = None;
-    let mut module_names = HashSet::new();
-    let mut module_declarations = HashMap::new();
-    let mut function_names = HashMap::new();
-    let mut module_statements = Vec::new();
-    for item in &syntax.items {
-        match *item {
-            TopLevelItem::Function(id) => {
-                let function = &syntax.functions[id];
-                let name = syntax.names.resolve(&function.name);
-                if name == "main" && main.is_some() {
-                    return Err(Diagnostic::new(
-                        function.name_span.clone(),
-                        "duplicate `main` function",
-                    ));
-                }
-                if !module_names.insert(function.name) {
-                    return Err(Diagnostic::new(
-                        function.name_span.clone(),
-                        format!("duplicate module-level name `{name}`"),
-                    ));
-                }
-                let mut parameter_names = HashSet::new();
-                for parameter in &function.parameters {
-                    if !parameter_names.insert(parameter.name) {
-                        return Err(Diagnostic::new(
-                            parameter.name_span.clone(),
-                            format!(
-                                "duplicate parameter name `{}`",
-                                syntax.names.resolve(&parameter.name)
-                            ),
-                        ));
-                    }
-                }
-                if name == "main" {
-                    if let Some(parameter) = function.parameters.first() {
-                        return Err(Diagnostic::new(
-                            parameter.name_span.clone(),
-                            "`main` must not have parameters",
-                        ));
-                    }
-                    if let FunctionResult::Value(annotation) = &function.result {
-                        return Err(Diagnostic::new(
-                            annotation.span.clone(),
-                            "`main` must return `void`",
-                        ));
-                    }
-                }
-                if name == "main" {
-                    main = Some(id);
-                }
-                function_names.insert(function.name, id);
-            }
-            TopLevelItem::Binding(id) => {
-                let StatementKind::Binding {
-                    name, name_span, ..
-                } = &syntax.statements[id].kind
-                else {
-                    unreachable!("frontend only permits bindings at module level")
-                };
-                if !module_names.insert(*name) {
-                    return Err(Diagnostic::new(
-                        name_span.clone(),
-                        format!(
-                            "duplicate module-level name `{}`",
-                            syntax.names.resolve(name)
-                        ),
-                    ));
-                }
-                module_declarations.insert(*name, id);
-                module_statements.push(id);
-            }
+/// A module-level declaration, as another file or module sees it.
+#[derive(Debug, Clone, Copy)]
+struct Declaration {
+    public: bool,
+    kind: DeclarationKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeclarationKind {
+    Binding(Idx<Binding>),
+    Function(Idx<Function>),
+}
+
+/// One module's declarations by name.
+type Namespace = HashMap<Spur, Declaration>;
+
+/// What a name introduced by a `use` declaration refers to. A whole-module
+/// import holds the module's index into `CheckedProgram::namespaces` rather
+/// than a copy of its namespace.
+#[derive(Debug, Clone, Copy)]
+enum Imported {
+    Module(usize),
+    Declaration(DeclarationKind),
+}
+
+/// What a name is being resolved as, which selects the wording of the
+/// diagnostics an unqualified name shares between call and value position.
+#[derive(Debug, Clone, Copy)]
+enum Wanted {
+    Function,
+    Value,
+}
+
+impl Wanted {
+    /// The tail of "module `m` is not ...".
+    fn article_noun(self) -> &'static str {
+        match self {
+            Self::Function => "a function",
+            Self::Value => "a value",
         }
     }
-    let main = main.ok_or_else(|| Diagnostic::new(0..0, "missing `main` function"))?;
+
+    /// The head of "... `n`", naming what was looked for and not found.
+    fn unknown(self) -> &'static str {
+        match self {
+            Self::Function => "unknown function",
+            Self::Value => "unknown binding",
+        }
+    }
+}
+
+/// One file's imported names. `introduced` keeps declaration order and spans,
+/// so an unreferenced import reports the first one.
+#[derive(Debug, Default)]
+struct FileImports {
+    names: HashMap<Spur, Imported>,
+    introduced: Vec<(Spur, std::ops::Range<usize>)>,
+    used: HashSet<Spur>,
+}
+
+/// Adds one name introduced by a `use` declaration to its file, rejecting a
+/// name the file's module already declares or the file already imports.
+fn introduce(
+    file: &mut FileImports,
+    namespace: &Namespace,
+    component: &PathComponent,
+    imported: Imported,
+    syntax: &Syntax,
+) -> Result<(), Diagnostic> {
+    let name = syntax.names.resolve(&component.name);
+    if namespace.contains_key(&component.name) {
+        return Err(Diagnostic::new(
+            component.name_span.clone(),
+            format!("imported name `{name}` conflicts with a module-level declaration"),
+        ));
+    }
+    if file.names.contains_key(&component.name) {
+        return Err(Diagnostic::new(
+            component.name_span.clone(),
+            format!("duplicate imported name `{name}`"),
+        ));
+    }
+    file.names.insert(component.name, imported);
+    file.introduced
+        .push((component.name, component.name_span.clone()));
+    Ok(())
+}
+
+pub(crate) fn check<'a>(
+    syntax: &'a Syntax,
+    modules: &[Module],
+    imports: &[Vec<usize>],
+) -> Result<CheckedProgram<'a>, Diagnostic> {
+    let root = modules.last().expect("a program has a root module");
     let mut checked = CheckedProgram {
         syntax,
-        main,
+        main: entry_point(syntax, root)?,
         module_bindings: Vec::new(),
         expressions: ArenaMap::default(),
         declarations: ArenaMap::default(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
-        function_names,
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
-    };
-
-    let mut module_scope = HashMap::new();
-    for &statement in &module_statements {
-        let StatementKind::Binding {
-            name,
-            mutable,
-            annotation,
-            ..
-        } = &syntax.statements[statement].kind
-        else {
-            unreachable!("frontend only permits bindings at module level")
-        };
-        let binding = checked.bindings.alloc(Binding {
-            ty: annotation_type(annotation.as_ref()).unwrap_or(Type::Int),
-            mutable: *mutable,
-            constant: None,
-        });
-        checked.declarations.insert(statement, binding);
-        module_scope.insert(*name, binding);
-    }
-
-    for item in &syntax.items {
-        let TopLevelItem::Function(function) = *item else {
-            continue;
-        };
-        let function_syntax = &syntax.functions[function];
-        let parameters = function_syntax
-            .parameters
+        function_names: HashMap::new(),
+        namespaces: Vec::new(),
+        imports: syntax
+            .files
             .iter()
-            .map(|parameter| {
-                checked.bindings.alloc(Binding {
-                    ty: parameter.annotation.ty,
-                    mutable: false,
-                    constant: None,
-                })
+            .map(|_| FileImports::default())
+            .collect(),
+        file: 0,
+    };
+    // Dependencies come before dependents, so an imported module's namespace is
+    // built and its bindings are ordered before any module that imports it.
+    for module in modules {
+        checked.check_module(module, imports)?;
+    }
+    Ok(checked)
+}
+
+/// Checks `syntax` as one root module with no imports.
+#[cfg(test)]
+pub(crate) fn check_root(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
+    let (modules, imports) = crate::module::single(syntax);
+    check(syntax, &modules, &imports)
+}
+
+/// The root module's sole `main`, with the entry-point signature. A `main` in a
+/// dependency module is an ordinary function.
+fn entry_point(syntax: &Syntax, root: &Module) -> Result<Idx<Function>, Diagnostic> {
+    let mut main = None;
+    for file in root.files.clone() {
+        for item in &syntax.files[file].items {
+            let TopLevelItem::Function { function: id, .. } = *item else {
+                continue;
+            };
+            let function = &syntax.functions[id];
+            if syntax.names.resolve(&function.name) != "main" {
+                continue;
+            }
+            if main.is_some() {
+                return Err(Diagnostic::new(
+                    function.name_span.clone(),
+                    "duplicate `main` function",
+                ));
+            }
+            if let Some(parameter) = function.parameters.first() {
+                return Err(Diagnostic::new(
+                    parameter.name_span.clone(),
+                    "`main` must not have parameters",
+                ));
+            }
+            if let FunctionResult::Value(annotation) = &function.result {
+                return Err(Diagnostic::new(
+                    annotation.span.clone(),
+                    "`main` must return `void`",
+                ));
+            }
+            main = Some(id);
+        }
+    }
+    main.ok_or_else(|| Diagnostic::new(0..0, "missing `main` function"))
+}
+
+impl CheckedProgram<'_> {
+    /// Checks one module: its module-level names, its signatures, each of its
+    /// files' imports, its module-level initializers, and its function bodies.
+    /// Appends the namespace that later modules import from.
+    fn check_module(&mut self, module: &Module, imports: &[Vec<usize>]) -> Result<(), Diagnostic> {
+        let syntax = self.syntax;
+        let items: Vec<(usize, TopLevelItem)> = module
+            .files
+            .clone()
+            .flat_map(|file| {
+                syntax.files[file]
+                    .items
+                    .iter()
+                    .map(move |item| (file, *item))
             })
             .collect();
-        let result = match &function_syntax.result {
-            FunctionResult::Void => None,
-            FunctionResult::Value(annotation) => Some(annotation.ty),
-        };
-        checked
-            .functions
-            .insert(function, FunctionSignature { parameters, result });
-    }
 
-    let mut dependencies = HashMap::new();
-    for &statement in &module_statements {
-        let StatementKind::Binding { initializer, .. } = &syntax.statements[statement].kind else {
-            unreachable!("frontend only permits bindings at module level")
-        };
-        let mut references = Vec::new();
-        collect_references(syntax, *initializer, &mut references);
-        dependencies.insert(
-            statement,
-            references
-                .into_iter()
-                .filter_map(|(name, span)| {
-                    module_declarations
-                        .get(&name)
-                        .copied()
-                        .map(|declaration| ModuleDependency {
-                            declaration,
-                            name,
-                            span,
-                        })
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
-    let order = order_module_bindings(syntax, &module_statements, &dependencies)?;
-
-    for &statement in &order {
-        let StatementKind::Binding {
-            mutable,
-            annotation,
-            initializer,
-            ..
-        } = &syntax.statements[statement].kind
-        else {
-            unreachable!("frontend only permits bindings at module level")
-        };
-        let destination = annotation_type(annotation.as_ref());
-        let expression = checked.check_expression(
-            *initializer,
-            std::slice::from_ref(&module_scope),
-            destination,
-        )?;
-        if expression.constant.is_none() {
-            return Err(Diagnostic::new(
-                syntax.expressions[*initializer].span.clone(),
-                "module-level initializer must be a constant expression",
-            ));
+        let mut module_names = HashSet::new();
+        let mut module_declarations = HashMap::new();
+        let mut module_statements = Vec::new();
+        let mut statement_files = HashMap::new();
+        self.function_names = HashMap::new();
+        for &(file, item) in &items {
+            match item {
+                TopLevelItem::Function { function: id, .. } => {
+                    let function = &syntax.functions[id];
+                    if !module_names.insert(function.name) {
+                        return Err(Diagnostic::new(
+                            function.name_span.clone(),
+                            format!(
+                                "duplicate module-level name `{}`",
+                                syntax.names.resolve(&function.name)
+                            ),
+                        ));
+                    }
+                    let mut parameter_names = HashSet::new();
+                    for parameter in &function.parameters {
+                        if !parameter_names.insert(parameter.name) {
+                            return Err(Diagnostic::new(
+                                parameter.name_span.clone(),
+                                format!(
+                                    "duplicate parameter name `{}`",
+                                    syntax.names.resolve(&parameter.name)
+                                ),
+                            ));
+                        }
+                    }
+                    self.function_names.insert(function.name, id);
+                }
+                TopLevelItem::Binding { binding: id, .. } => {
+                    let StatementKind::Binding {
+                        name, name_span, ..
+                    } = &syntax.statements[id].kind
+                    else {
+                        unreachable!("frontend only permits bindings at module level")
+                    };
+                    if !module_names.insert(*name) {
+                        return Err(Diagnostic::new(
+                            name_span.clone(),
+                            format!(
+                                "duplicate module-level name `{}`",
+                                syntax.names.resolve(name)
+                            ),
+                        ));
+                    }
+                    module_declarations.insert(*name, id);
+                    module_statements.push(id);
+                    statement_files.insert(id, file);
+                }
+            }
         }
-        let binding = checked.declarations[statement];
-        checked.bindings[binding].ty = expression.ty;
-        checked.bindings[binding].constant = if *mutable {
-            None
-        } else {
-            expression.constant.clone()
-        };
-        checked.expressions.insert(*initializer, expression);
-    }
-    checked.module_bindings = order;
 
-    for item in &syntax.items {
-        if let TopLevelItem::Function(function) = *item {
-            let parameter_bindings = checked.functions[function].parameters.clone();
+        let mut module_scope = HashMap::new();
+        let mut namespace = Namespace::new();
+        for &(_, item) in &items {
+            let TopLevelItem::Binding {
+                binding: statement,
+                public,
+            } = item
+            else {
+                continue;
+            };
+            let StatementKind::Binding {
+                name,
+                mutable,
+                annotation,
+                ..
+            } = &syntax.statements[statement].kind
+            else {
+                unreachable!("frontend only permits bindings at module level")
+            };
+            let binding = self.bindings.alloc(Binding {
+                ty: annotation_type(annotation.as_ref()).unwrap_or(Type::Int),
+                mutable: *mutable,
+                constant: None,
+            });
+            self.declarations.insert(statement, binding);
+            module_scope.insert(*name, binding);
+            namespace.insert(
+                *name,
+                Declaration {
+                    public,
+                    kind: DeclarationKind::Binding(binding),
+                },
+            );
+        }
+
+        for &(_, item) in &items {
+            let TopLevelItem::Function { function, public } = item else {
+                continue;
+            };
+            let function_syntax = &syntax.functions[function];
+            let parameters = function_syntax
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    self.bindings.alloc(Binding {
+                        ty: parameter.annotation.ty,
+                        mutable: false,
+                        constant: None,
+                    })
+                })
+                .collect();
+            let result = match &function_syntax.result {
+                FunctionResult::Void => None,
+                FunctionResult::Value(annotation) => Some(annotation.ty),
+            };
+            self.functions
+                .insert(function, FunctionSignature { parameters, result });
+            namespace.insert(
+                function_syntax.name,
+                Declaration {
+                    public,
+                    kind: DeclarationKind::Function(function),
+                },
+            );
+        }
+
+        for file in module.files.clone() {
+            let mut file_imports = FileImports::default();
+            for (index, import) in syntax.files[file].imports.iter().enumerate() {
+                let resolved = imports[file][index];
+                let path: Vec<&str> = import
+                    .path
+                    .iter()
+                    .map(|component| syntax.names.resolve(&component.name))
+                    .collect();
+                let path = path.join("::");
+                let target = &self.namespaces[resolved];
+                match &import.selection {
+                    None => {
+                        let last = import.path.last().expect("an import path has components");
+                        let imported = Imported::Module(resolved);
+                        introduce(&mut file_imports, &namespace, last, imported, syntax)?;
+                    }
+                    Some(selection) => {
+                        for component in selection {
+                            let name = syntax.names.resolve(&component.name);
+                            let Some(declaration) = target.get(&component.name).copied() else {
+                                return Err(Diagnostic::new(
+                                    component.name_span.clone(),
+                                    format!("module `{path}` has no declaration named `{name}`"),
+                                ));
+                            };
+                            if !declaration.public {
+                                return Err(Diagnostic::new(
+                                    component.name_span.clone(),
+                                    format!("declaration `{name}` is private to module `{path}`"),
+                                ));
+                            }
+                            let imported = Imported::Declaration(declaration.kind);
+                            introduce(&mut file_imports, &namespace, component, imported, syntax)?;
+                        }
+                    }
+                }
+            }
+            self.imports[file] = file_imports;
+        }
+
+        let mut dependencies = HashMap::new();
+        for &statement in &module_statements {
+            let StatementKind::Binding { initializer, .. } = &syntax.statements[statement].kind
+            else {
+                unreachable!("frontend only permits bindings at module level")
+            };
+            let mut references = Vec::new();
+            collect_references(syntax, *initializer, &mut references);
+            dependencies.insert(
+                statement,
+                references
+                    .into_iter()
+                    .filter_map(|(name, span)| {
+                        module_declarations.get(&name).copied().map(|declaration| {
+                            ModuleDependency {
+                                declaration,
+                                name,
+                                span,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let order = order_module_bindings(syntax, &module_statements, &dependencies)?;
+
+        for &statement in &order {
+            let StatementKind::Binding {
+                mutable,
+                annotation,
+                initializer,
+                ..
+            } = &syntax.statements[statement].kind
+            else {
+                unreachable!("frontend only permits bindings at module level")
+            };
+            self.file = statement_files[&statement];
+            let destination = annotation_type(annotation.as_ref());
+            let expression = self.check_expression(
+                *initializer,
+                std::slice::from_ref(&module_scope),
+                destination,
+            )?;
+            if expression.constant.is_none() {
+                return Err(Diagnostic::new(
+                    syntax.expressions[*initializer].span.clone(),
+                    "module-level initializer must be a constant expression",
+                ));
+            }
+            let binding = self.declarations[statement];
+            self.bindings[binding].ty = expression.ty;
+            self.bindings[binding].constant = if *mutable {
+                None
+            } else {
+                expression.constant.clone()
+            };
+            self.expressions.insert(*initializer, expression);
+        }
+        self.module_bindings.extend(order);
+
+        for &(file, item) in &items {
+            let TopLevelItem::Function { function, .. } = item else {
+                continue;
+            };
+            self.file = file;
+            let parameter_bindings = self.functions[function].parameters.clone();
             let parameter_scope = syntax.functions[function]
                 .parameters
                 .iter()
@@ -304,9 +530,9 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
                 .map(|(parameter, binding)| (parameter.name, binding))
                 .collect();
             let mut scopes = vec![module_scope.clone(), parameter_scope];
-            let result = checked.functions[function].result;
+            let result = self.functions[function].result;
             let body = &syntax.functions[function].body;
-            checked.check_body(body, result, &mut scopes, &mut Vec::new())?;
+            self.check_body(body, result, &mut scopes, &mut Vec::new())?;
             if result.is_some() && !body_terminates(syntax, body) {
                 let function = &syntax.functions[function];
                 return Err(Diagnostic::new(
@@ -318,8 +544,27 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
                 ));
             }
         }
+
+        for file in module.files.clone() {
+            let file_imports = &self.imports[file];
+            if let Some((name, span)) = file_imports
+                .introduced
+                .iter()
+                .find(|(name, _)| !file_imports.used.contains(name))
+            {
+                return Err(Diagnostic::new(
+                    span.clone(),
+                    format!(
+                        "imported name `{}` is never referenced",
+                        syntax.names.resolve(name)
+                    ),
+                ));
+            }
+        }
+
+        self.namespaces.push(namespace);
+        Ok(())
     }
-    Ok(checked)
 }
 
 /// Reports whether every path through `body` ends in a `return` or `exit`, using
@@ -466,7 +711,10 @@ fn collect_references(
     let expression = &syntax.expressions[expression];
     match &expression.kind {
         ExpressionKind::Integer(_) | ExpressionKind::Boolean(_) => {}
-        ExpressionKind::Reference(name) => references.push((*name, expression.span.clone())),
+        ExpressionKind::Reference(name) if name.qualifier.is_none() => {
+            references.push((name.name, expression.span.clone()));
+        }
+        ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
             operand: expression,
@@ -542,25 +790,20 @@ impl CheckedProgram<'_> {
                 self.declarations.insert(statement, binding);
                 scopes.last_mut().unwrap().insert(*name, binding);
             }
-            StatementKind::Assignment {
-                name,
-                name_span,
-                value,
-            } => {
-                let binding = self.assignment_target(*name, name_span, scopes)?;
+            StatementKind::Assignment { target, value } => {
+                let binding = self.assignment_target(target, scopes)?;
                 let expression =
                     self.check_expression(*value, scopes, Some(self.bindings[binding].ty))?;
                 self.expressions.insert(*value, expression);
                 self.assignments.insert(statement, binding);
             }
             StatementKind::CompoundAssignment {
-                name,
-                name_span,
+                target,
                 operator,
                 operator_span,
                 value,
             } => {
-                let binding = self.assignment_target(*name, name_span, scopes)?;
+                let binding = self.assignment_target(target, scopes)?;
                 let ty = self.bindings[binding].ty;
                 let compound_operator = format!("{}=", operator.spelling());
                 let left = CheckedExpression {
@@ -700,20 +943,19 @@ impl CheckedProgram<'_> {
     }
 
     fn assignment_target(
-        &self,
-        name: Spur,
-        name_span: &std::ops::Range<usize>,
+        &mut self,
+        target: &QualifiedName,
         scopes: &[HashMap<Spur, Idx<Binding>>],
     ) -> Result<Idx<Binding>, Diagnostic> {
-        let binding = self.resolve(name, name_span.clone(), scopes)?;
+        let binding = self.resolve(target, scopes)?;
         if self.bindings[binding].mutable {
             Ok(binding)
         } else {
             Err(Diagnostic::new(
-                name_span.clone(),
+                target.span.clone(),
                 format!(
                     "cannot assign to immutable binding `{}`",
-                    self.syntax.names.resolve(&name)
+                    self.syntax.names.resolve(&target.name)
                 ),
             ))
         }
@@ -739,10 +981,10 @@ impl CheckedProgram<'_> {
         let signature = self.functions[function].clone();
         if call.arguments.len() != signature.parameters.len() {
             return Err(Diagnostic::new(
-                call.target_span.clone(),
+                call.target.span.clone(),
                 format!(
                     "function `{}` expects {} argument{}, found {}",
-                    self.syntax.names.resolve(&call.target),
+                    self.syntax.names.resolve(&call.target.name),
                     signature.parameters.len(),
                     if signature.parameters.len() == 1 {
                         ""
@@ -760,10 +1002,10 @@ impl CheckedProgram<'_> {
         }
         if value_context && signature.result.is_none() {
             return Err(Diagnostic::new(
-                call.target_span.clone(),
+                call.target.span.clone(),
                 format!(
                     "void function `{}` cannot be used as a value",
-                    self.syntax.names.resolve(&call.target)
+                    self.syntax.names.resolve(&call.target.name)
                 ),
             ));
         }
@@ -771,53 +1013,163 @@ impl CheckedProgram<'_> {
     }
 
     fn resolve_call(
-        &self,
+        &mut self,
         call: &Call,
         scopes: &[HashMap<Spur, Idx<Binding>>],
     ) -> Result<Idx<Function>, Diagnostic> {
-        if scopes
-            .iter()
-            .rev()
-            .any(|scope| scope.contains_key(&call.target))
-        {
-            return Err(Diagnostic::new(
-                call.target_span.clone(),
-                format!(
-                    "cannot call non-function binding `{}`",
-                    self.syntax.names.resolve(&call.target)
-                ),
-            ));
-        }
-        self.function_names
-            .get(&call.target)
-            .copied()
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    call.target_span.clone(),
+        let target = &call.target;
+        let declaration = if target.qualifier.is_some() {
+            self.qualified(target, scopes)?
+        } else {
+            if scopes
+                .iter()
+                .rev()
+                .any(|scope| scope.contains_key(&target.name))
+            {
+                return Err(Diagnostic::new(
+                    target.span.clone(),
                     format!(
-                        "unknown function `{}`",
-                        self.syntax.names.resolve(&call.target)
+                        "cannot call non-function binding `{}`",
+                        self.syntax.names.resolve(&target.name)
                     ),
-                )
-            })
+                ));
+            }
+            if let Some(&function) = self.function_names.get(&target.name) {
+                return Ok(function);
+            }
+            self.imported(target, Wanted::Function)?
+        };
+        match declaration {
+            DeclarationKind::Function(function) => Ok(function),
+            DeclarationKind::Binding(_) => Err(Diagnostic::new(
+                target.span.clone(),
+                format!(
+                    "cannot call non-function declaration `{}`",
+                    self.syntax.names.resolve(&target.name)
+                ),
+            )),
+        }
     }
 
     fn resolve(
-        &self,
-        name: Spur,
-        span: std::ops::Range<usize>,
+        &mut self,
+        name: &QualifiedName,
         scopes: &[HashMap<Spur, Idx<Binding>>],
     ) -> Result<Idx<Binding>, Diagnostic> {
-        scopes
+        let declaration = if name.qualifier.is_some() {
+            self.qualified(name, scopes)?
+        } else {
+            if let Some(binding) = scopes.iter().rev().find_map(|scope| scope.get(&name.name)) {
+                return Ok(*binding);
+            }
+            self.imported(name, Wanted::Value)?
+        };
+        match declaration {
+            DeclarationKind::Binding(binding) => Ok(binding),
+            DeclarationKind::Function(_) => Err(Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "cannot use function `{}` as a value",
+                    self.syntax.names.resolve(&name.name)
+                ),
+            )),
+        }
+    }
+
+    /// The declaration an unqualified name reaches through its file's imports,
+    /// marking that import referenced. `wanted` only chooses the wording of the
+    /// diagnostics.
+    fn imported(
+        &mut self,
+        name: &QualifiedName,
+        wanted: Wanted,
+    ) -> Result<DeclarationKind, Diagnostic> {
+        let syntax = self.syntax;
+        let spelling = syntax.names.resolve(&name.name);
+        match self.imports[self.file].names.get(&name.name) {
+            Some(&Imported::Declaration(kind)) => {
+                self.imports[self.file].used.insert(name.name);
+                Ok(kind)
+            }
+            Some(Imported::Module(_)) => Err(Diagnostic::new(
+                name.span.clone(),
+                format!("module `{spelling}` is not {}", wanted.article_noun()),
+            )),
+            None => Err(Diagnostic::new(
+                name.span.clone(),
+                format!("{} `{spelling}`", wanted.unknown()),
+            )),
+        }
+    }
+
+    /// Resolves a `module::name` against the current file's imports. A lexical
+    /// binding shadows an imported module name, so a qualifier it holds cannot
+    /// reach the module.
+    fn qualified(
+        &mut self,
+        name: &QualifiedName,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<DeclarationKind, Diagnostic> {
+        let qualifier = name
+            .qualifier
+            .as_ref()
+            .expect("the caller checked the qualifier");
+        if scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&name).copied())
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    span,
-                    format!("unknown binding `{}`", self.syntax.names.resolve(&name)),
-                )
-            })
+            .any(|scope| scope.contains_key(&qualifier.name))
+        {
+            return Err(Diagnostic::new(
+                qualifier.name_span.clone(),
+                format!(
+                    "cannot use binding `{}` as a module",
+                    self.syntax.names.resolve(&qualifier.name)
+                ),
+            ));
+        }
+        let module = match self.imports[self.file].names.get(&qualifier.name) {
+            Some(&Imported::Module(module)) => module,
+            Some(Imported::Declaration(_)) => {
+                return Err(Diagnostic::new(
+                    qualifier.name_span.clone(),
+                    format!(
+                        "`{}` is not a module",
+                        self.syntax.names.resolve(&qualifier.name)
+                    ),
+                ));
+            }
+            None => {
+                return Err(Diagnostic::new(
+                    qualifier.name_span.clone(),
+                    format!(
+                        "unknown module `{}`",
+                        self.syntax.names.resolve(&qualifier.name)
+                    ),
+                ));
+            }
+        };
+        self.imports[self.file].used.insert(qualifier.name);
+        let Some(declaration) = self.namespaces[module].get(&name.name).copied() else {
+            return Err(Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "module `{}` has no declaration named `{}`",
+                    self.syntax.names.resolve(&qualifier.name),
+                    self.syntax.names.resolve(&name.name)
+                ),
+            ));
+        };
+        if !declaration.public {
+            return Err(Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "declaration `{}` is private to module `{}`",
+                    self.syntax.names.resolve(&name.name),
+                    self.syntax.names.resolve(&qualifier.name)
+                ),
+            ));
+        }
+        Ok(declaration.kind)
     }
 
     fn check_expression(
@@ -873,7 +1225,7 @@ impl CheckedProgram<'_> {
                 constant: Some(BigInt::from(*value)),
             },
             ExpressionKind::Reference(name) => {
-                let binding = self.resolve(*name, expression.span.clone(), scopes)?;
+                let binding = self.resolve(name, scopes)?;
                 CheckedExpression {
                     ty: self.bindings[binding].ty,
                     untyped: false,
@@ -1650,7 +2002,11 @@ fn truncate_integer(value: &BigInt, ty: Type) -> BigInt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::parse;
+    use crate::source::SourceMap;
+
+    fn parse(text: &str) -> Result<Syntax, Diagnostic> {
+        crate::frontend::parse(&SourceMap::from_text(text))
+    }
 
     fn literal(value: u128, base: u32) -> String {
         match base {
@@ -1666,12 +2022,315 @@ mod tests {
         BigInt::from(value)
     }
 
+    /// A `counter` module beside the `app` root module, with one public
+    /// function, one public `var`, one public `const`, and one private `const`.
+    const COUNTER: &str = "pub var value = 0;
+pub const step = 2;
+const origin = 10;
+pub fn bump(amount: int) -> int {
+    value = value + amount;
+    return value;
+}
+";
+
+    /// Loads a tree of `(relative path, source)` files rooted at `app` and
+    /// checks it, so multi-module tests run through real import resolution.
+    fn load_tree<'a>(
+        files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> (tempfile::TempDir, crate::module::Program) {
+        let dir = crate::module::tree(files);
+        let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
+            .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
+        (dir, program)
+    }
+
+    fn accepts_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) {
+        let (_dir, program) = load_tree(files);
+        check(&program.syntax, &program.modules, &program.imports).unwrap();
+    }
+
+    fn tree_error<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Diagnostic {
+        let (_dir, program) = load_tree(files);
+        check(&program.syntax, &program.modules, &program.imports).unwrap_err()
+    }
+
+    fn rejects_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>, message: &str) {
+        assert_eq!(tree_error(files).message, message);
+    }
+
+    /// Rejects a tree whose root module is one `app/main.fern` file, checking
+    /// the diagnostic's span against `marked`, where `«»` bracket it.
+    fn rejects_root(marked: &str, message: &str) {
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let main = marked.replace(['«', '»'], "");
+        let error = tree_error([
+            ("app/main.fern", main.as_str()),
+            ("counter/counter.fern", COUNTER),
+        ]);
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(error.span, start..end, "{marked}");
+    }
+
+    #[test]
+    fn public_declarations_are_reachable_through_both_import_forms() {
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter;
+                 fn main() -> void {
+                     counter::value = counter::bump(counter::step);
+                     exit(counter::value + doubled());
+                 }",
+            ),
+            (
+                "app/totals.fern",
+                "use counter::{step, bump};
+                 fn doubled() -> int { return bump(step) * step; }",
+            ),
+            ("counter/counter.fern", COUNTER),
+        ]);
+    }
+
+    #[test]
+    fn a_private_declaration_is_module_wide_but_not_visible_to_importers() {
+        // Another file of the same module reads the private `origin`.
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter::{doubled_origin};
+                 fn main() -> void { exit(doubled_origin); }",
+            ),
+            ("counter/counter.fern", COUNTER),
+            (
+                "counter/extra.fern",
+                "pub const doubled_origin = origin * 2;",
+            ),
+        ]);
+        rejects_root(
+            "use counter; fn main() -> void { exit(«counter::origin»); }",
+            "declaration `origin` is private to module `counter`",
+        );
+        rejects_root(
+            "use counter::{«origin»}; fn main() -> void { exit(origin); }",
+            "declaration `origin` is private to module `counter`",
+        );
+        rejects_root(
+            "use counter; fn main() -> void { exit(«counter::missing»); }",
+            "module `counter` has no declaration named `missing`",
+        );
+        rejects_root(
+            "use counter::{«missing»}; fn main() -> void { exit(missing); }",
+            "module `counter` has no declaration named `missing`",
+        );
+    }
+
+    #[test]
+    fn imported_bindings_keep_their_mutability_across_modules() {
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter::{value};
+                 fn main() -> void { value = 7; exit(value); }",
+            ),
+            ("counter/counter.fern", COUNTER),
+        ]);
+        rejects_root(
+            "use counter; fn main() -> void { «counter::step» = 1; exit(0); }",
+            "cannot assign to immutable binding `step`",
+        );
+        rejects_root(
+            "use counter::{step}; fn main() -> void { «step» = 1; exit(0); }",
+            "cannot assign to immutable binding `step`",
+        );
+    }
+
+    #[test]
+    fn a_module_level_initializer_reads_an_imported_constant() {
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter::{step};
+                 const total = step * 3;
+                 fn main() -> void { exit(total); }",
+            ),
+            ("counter/counter.fern", COUNTER),
+        ]);
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter;
+                 const total = counter::step * 3;
+                 fn main() -> void { exit(total); }",
+            ),
+            ("counter/counter.fern", COUNTER),
+        ]);
+    }
+
+    #[test]
+    fn an_introduced_name_must_not_collide_in_its_file() {
+        for (marked, name) in [
+            (
+                "use counter::{«step»}; const step = 1; fn main() -> void { exit(step); }",
+                "step",
+            ),
+            (
+                "use counter::{«bump»}; fn bump() -> void {} fn main() -> void { bump(); }",
+                "bump",
+            ),
+        ] {
+            rejects_root(
+                marked,
+                &format!("imported name `{name}` conflicts with a module-level declaration"),
+            );
+        }
+        rejects_root(
+            "use counter::{step}; use counter::{«step»}; fn main() -> void { exit(step); }",
+            "duplicate imported name `step`",
+        );
+        rejects_root(
+            "use counter; use «counter»; fn main() -> void { exit(counter::step); }",
+            "duplicate imported name `counter`",
+        );
+    }
+
+    #[test]
+    fn an_introduced_name_must_be_referenced_in_its_own_file() {
+        rejects_root(
+            "use «counter»; fn main() -> void { exit(0); }",
+            "imported name `counter` is never referenced",
+        );
+        rejects_root(
+            "use counter::{«step»}; fn main() -> void { exit(0); }",
+            "imported name `step` is never referenced",
+        );
+        // An import is file-local, so the other file neither sees it nor keeps
+        // it referenced.
+        rejects_tree(
+            [
+                (
+                    "app/main.fern",
+                    "use counter::{step}; fn main() -> void { exit(0); }",
+                ),
+                (
+                    "app/totals.fern",
+                    "fn tripled() -> int { return step * 3; }",
+                ),
+                ("counter/counter.fern", COUNTER),
+            ],
+            "unknown binding `step`",
+        );
+        rejects_tree(
+            [
+                (
+                    "app/main.fern",
+                    "use counter::{step}; fn main() -> void { exit(0); }",
+                ),
+                (
+                    "app/totals.fern",
+                    "use counter::{step}; fn tripled() -> int { return step * 3; }",
+                ),
+                ("counter/counter.fern", COUNTER),
+            ],
+            "imported name `step` is never referenced",
+        );
+    }
+
+    #[test]
+    fn a_local_binding_shadows_an_imported_name() {
+        accepts_tree([
+            (
+                "app/main.fern",
+                "use counter::{step};
+                 fn main() -> void {
+                     const outer = step;
+                     { var step = 5; step = 7; }
+                     exit(outer);
+                 }",
+            ),
+            ("counter/counter.fern", COUNTER),
+        ]);
+        rejects_root(
+            "use counter; fn main() -> void { const counter = 1; exit(«counter»::step); }",
+            "cannot use binding `counter` as a module",
+        );
+    }
+
+    #[test]
+    fn a_qualified_name_resolves_only_through_an_imported_module() {
+        rejects_root(
+            "use counter; fn main() -> void { exit(counter::step + «text»::width); }",
+            "unknown module `text`",
+        );
+        rejects_root(
+            "use counter::{step}; fn main() -> void { exit(«step»::inner); }",
+            "`step` is not a module",
+        );
+        rejects_root(
+            "use counter; fn main() -> void { exit(«counter»); }",
+            "module `counter` is not a value",
+        );
+        rejects_root(
+            "use counter; fn main() -> void { «counter»(); }",
+            "module `counter` is not a function",
+        );
+        rejects_root(
+            "use counter; fn main() -> void { const f = «counter::bump»; exit(f); }",
+            "cannot use function `bump` as a value",
+        );
+        rejects_root(
+            "use counter; fn main() -> void { «counter::value»(); }",
+            "cannot call non-function declaration `value`",
+        );
+        rejects_root(
+            "use counter::{value}; fn main() -> void { «value»(); }",
+            "cannot call non-function declaration `value`",
+        );
+    }
+
+    #[test]
+    fn only_the_root_modules_main_is_the_entry_point() {
+        let (_dir, program) = load_tree([
+            (
+                "app/main.fern",
+                "use counter; fn main() -> void { exit(counter::bump(1)); }",
+            ),
+            (
+                "counter/counter.fern",
+                "pub var value = 0;
+                 pub fn bump(amount: int) -> int { value = value + amount; return value; }
+                 fn main(flag: int) -> int { return flag; }",
+            ),
+        ]);
+        let checked = check(&program.syntax, &program.modules, &program.imports).unwrap();
+        let root = program.modules.last().unwrap();
+        let entry = program.syntax.files[root.files.start].items[0];
+        assert!(matches!(
+            entry,
+            TopLevelItem::Function { function, .. } if function == checked.main
+        ));
+
+        rejects_tree(
+            [
+                (
+                    "app/main.fern",
+                    "use counter; fn helper() -> int { return counter::value; }",
+                ),
+                (
+                    "counter/counter.fern",
+                    "pub var value = 1; fn main() -> void {}",
+                ),
+            ],
+            "missing `main` function",
+        );
+    }
+
     #[test]
     fn bindings_have_concrete_types_and_distinct_identities() {
         let text =
             "fn main() -> void { const x = 1; var x: int = x; const x = x; exit(x); exit(0); }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert!(std::ptr::eq(checked.syntax, &syntax));
         let statements = &syntax.functions[checked.main].body;
         let ids: Vec<_> = statements[..3]
@@ -1701,7 +2360,7 @@ mod tests {
     #[test]
     fn nested_scopes_resolve_binding_identity_and_mutability() {
         let syntax = parse("fn main() -> void { var x = 1; { x = 2; const x = x; { var x = x; x = x; } exit(x); } x = x; const x = x; exit(x); }").unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let ids: Vec<_> = checked.bindings.iter().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 4);
         let mutable: Vec<_> = checked.bindings.iter().map(|(_, b)| b.mutable).collect();
@@ -1779,14 +2438,14 @@ mod tests {
             "var x = 1; { const x = x; } x = 2;",
         ] {
             let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-            check(&syntax).unwrap();
+            check_root(&syntax).unwrap();
         }
     }
 
     fn rejects(body: &str, offending: &str, message: &str) {
         let text = format!("/* 🌿 */ fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
-        let error = check(&syntax).unwrap_err();
+        let error = check_root(&syntax).unwrap_err();
         let start = text.rfind(offending).unwrap();
         assert_eq!(error.span, start..start + offending.len(), "{body}");
         assert_eq!(error.message, message, "{body}");
@@ -1795,12 +2454,12 @@ mod tests {
     fn accepts(body: &str) {
         let text = format!("fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
-        check(&syntax).unwrap();
+        check_root(&syntax).unwrap();
     }
 
     fn rejects_source(text: &str, offending: &str, message: &str) {
         let syntax = parse(text).unwrap();
-        let error = check(&syntax).unwrap_err();
+        let error = check_root(&syntax).unwrap_err();
         let start = text.rfind(offending).unwrap();
         assert_eq!(error.span, start..start + offending.len(), "{text}");
         assert_eq!(error.message, message, "{text}");
@@ -1808,7 +2467,7 @@ mod tests {
 
     fn accepts_source(text: &str) {
         let syntax = parse(text).unwrap();
-        check(&syntax).unwrap();
+        check_root(&syntax).unwrap();
     }
 
     #[test]
@@ -1833,7 +2492,7 @@ mod tests {
                     }
                     fn main() -> void {}";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let returned = syntax
             .statements
             .iter()
@@ -1941,7 +2600,7 @@ mod tests {
                          mutual_left(4);
                      }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
 
         assert_eq!(checked.function_names.len(), 6);
         assert_eq!(checked.functions.iter().count(), 6);
@@ -1975,7 +2634,7 @@ mod tests {
              }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2062,7 +2721,7 @@ mod tests {
              fn main() -> void {}",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let typed = syntax
             .functions
             .iter()
@@ -2129,7 +2788,7 @@ mod tests {
              }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert!(
             checked
                 .bindings
@@ -2165,7 +2824,7 @@ mod tests {
             }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2194,7 +2853,7 @@ mod tests {
                 "fn main() -> void {{ const result = 1 {operator} 2; }}"
             ))
             .unwrap();
-            let checked = check(&syntax).unwrap();
+            let checked = check_root(&syntax).unwrap();
             assert_eq!(
                 checked.bindings.iter().next().unwrap().1.constant,
                 Some(BigInt::from(expected))
@@ -2231,7 +2890,7 @@ mod tests {
             }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2438,7 +3097,7 @@ mod tests {
              const after = a & ^b;";
         let text = format!("fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let types: Vec<_> = checked
             .bindings
             .iter()
@@ -2548,7 +3207,7 @@ mod tests {
              const after = copy ^ 1;";
         let text = format!("fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2588,7 +3247,7 @@ mod tests {
             const not_constant = saved + 1;
         }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2702,7 +3361,7 @@ mod tests {
             const mutable_copy = mutable;
         }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let expression_constants: Vec<_> = syntax.functions[checked.main]
             .body
             .iter()
@@ -2747,7 +3406,7 @@ mod tests {
             const reduced: u8 = 256 >> u8(8);
         }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2809,7 +3468,7 @@ mod tests {
             const complemented: u16 = ^(1 << count);
         }";
         let syntax = parse(text).unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -2850,7 +3509,7 @@ mod tests {
         ] {
             let text = format!("fn main() -> void {{ {body} }}");
             let syntax = parse(&text).unwrap();
-            let error = check(&syntax).unwrap_err();
+            let error = check_root(&syntax).unwrap_err();
             assert_eq!(error.message, "integer value out of range for `int`");
             assert!(text[error.span].contains("1 <<"));
         }
@@ -2870,7 +3529,7 @@ mod tests {
         }
 
         let syntax = parse("fn main() -> void { const value = (1 + 2) * (3 + 4); }").unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let root = match syntax.statements[syntax.functions[checked.main].body[0]].kind {
             StatementKind::Binding { initializer, .. } => initializer,
             _ => unreachable!(),
@@ -2896,7 +3555,7 @@ mod tests {
             // In the forward-reference case the later declaration has the same name.
             let text = format!("/* 🌿 */ fn main() -> void {{ {body} }}");
             let syntax = parse(&text).unwrap();
-            let error = check(&syntax).unwrap_err();
+            let error = check_root(&syntax).unwrap_err();
             let start = if body.starts_with("exit(x)") {
                 text.find("exit(x)").unwrap() + 5
             } else {
@@ -2918,7 +3577,7 @@ mod tests {
                     "fn main() -> void {{ var x: {name} = {maximum}; x = {maximum}; }}"
                 ))
                 .unwrap();
-                let checked = check(&syntax).unwrap();
+                let checked = check_root(&syntax).unwrap();
                 assert!(checked.bindings.iter().all(|(_, binding)| binding.ty == ty));
                 assert!(
                     checked
@@ -2949,7 +3608,7 @@ mod tests {
                         let body = format!("const source: {source_name} = 1; {scope}");
                         if source == destination {
                             let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                            check(&syntax).unwrap();
+                            check_root(&syntax).unwrap();
                         } else {
                             rejects(
                                 &body,
@@ -2965,7 +3624,7 @@ mod tests {
             let body = format!("const source: {source_name} = 1; exit(source);");
             if source == Type::Int {
                 let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
-                check(&syntax).unwrap();
+                check_root(&syntax).unwrap();
             } else {
                 rejects(
                     &body,
@@ -2991,7 +3650,7 @@ mod tests {
             }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let constants: Vec<_> = checked
             .bindings
             .iter()
@@ -3049,7 +3708,7 @@ mod tests {
                 "fn main() -> void {{ const result = int(u8.truncate({literal})); }}"
             ))
             .unwrap();
-            let checked = check(&syntax).unwrap();
+            let checked = check_root(&syntax).unwrap();
             assert_eq!(
                 checked.bindings.iter().next().unwrap().1.constant,
                 Some(big(255))
@@ -3077,7 +3736,7 @@ mod tests {
             }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         assert_eq!(
             checked
                 .bindings
@@ -3101,7 +3760,12 @@ mod tests {
             "const negative = i8.truncate(255); const bad = u64(negative);",
         ] {
             let syntax = parse(&format!("fn main() -> void {{ exit(0); {body} }}")).unwrap();
-            assert!(check(&syntax).unwrap_err().message.contains("would trap"));
+            assert!(
+                check_root(&syntax)
+                    .unwrap_err()
+                    .message
+                    .contains("would trap")
+            );
         }
     }
 
@@ -3129,13 +3793,14 @@ mod tests {
              }",
         )
         .unwrap();
-        let checked = check(&syntax).unwrap();
+        let checked = check_root(&syntax).unwrap();
         let module_statements: Vec<_> = syntax
-            .items
+            .files
             .iter()
+            .flat_map(|file| &file.items)
             .filter_map(|item| match item {
-                TopLevelItem::Binding(statement) => Some(*statement),
-                TopLevelItem::Function(_) => None,
+                TopLevelItem::Binding { binding, .. } => Some(*binding),
+                TopLevelItem::Function { .. } => None,
             })
             .collect();
         let counter = checked.declarations[module_statements[0]];
@@ -3183,7 +3848,7 @@ mod tests {
             ),
         ] {
             let syntax = parse(text).unwrap();
-            let error = check(&syntax).unwrap_err();
+            let error = check_root(&syntax).unwrap_err();
             let start = text.rfind(offending).unwrap();
             let expected_len = offending
                 .trim_end_matches(';')
@@ -3203,7 +3868,7 @@ mod tests {
             source.push_str(&format!("const value{index} = value{};\n", index + 1));
         }
         source.push_str("const value10000 = 1; fn main() -> void {}");
-        check(&parse(&source).unwrap()).unwrap();
+        check_root(&parse(&source).unwrap()).unwrap();
     }
 
     #[test]
@@ -3217,7 +3882,7 @@ mod tests {
             ),
         ] {
             let syntax = parse(text).unwrap();
-            let error = check(&syntax).unwrap_err();
+            let error = check_root(&syntax).unwrap_err();
             assert_eq!(error.span, span);
             assert_eq!(error.message, message);
         }
@@ -3229,7 +3894,7 @@ mod tests {
             ("const main = 1; fn main() -> void {}", "main"),
         ] {
             let syntax = parse(text).unwrap();
-            let error = check(&syntax).unwrap_err();
+            let error = check_root(&syntax).unwrap_err();
             let start = text.rfind(name).unwrap();
             assert_eq!(error.span, start..start + name.len());
             assert_eq!(
@@ -3239,7 +3904,7 @@ mod tests {
         }
         let text = "fn helper() -> void { exit(missing); } fn main() -> void {}";
         let syntax = parse(text).unwrap();
-        let error = check(&syntax).unwrap_err();
+        let error = check_root(&syntax).unwrap_err();
         let start = text.find("missing").unwrap();
         assert_eq!(error.span, start..start + "missing".len());
         assert_eq!(error.message, "unknown binding `missing`");

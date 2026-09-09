@@ -1,0 +1,13 @@
+use text::format;
+
+pub var value = 0;
+const origin = 10;
+
+pub fn bump(amount: int) -> int {
+    value = value + format::doubled(amount);
+    return value;
+}
+
+fn main() -> void {
+    value = 255;
+}

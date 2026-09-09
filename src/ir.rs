@@ -134,8 +134,9 @@ pub(crate) struct ControlFlow {
     pub blocks: Vec<Block>,
 }
 
-/// A module-level `var`. Its initializer is a constant expression, so it needs
-/// an initial value rather than initialization code.
+/// A module-level `var` of any module in the program. Its initializer is a
+/// constant expression, so it needs an initial value rather than
+/// initialization code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
@@ -685,12 +686,22 @@ fn flow_operand_type(
     }
 }
 
-/// The IR function ID of a syntax function. Lowering visits `syntax.functions`
-/// in arena order, so a function's position is its raw arena index.
+/// The IR function ID of a syntax function. `syntax.functions` holds every
+/// function of every module in the program, and lowering visits it in arena
+/// order, so a function's raw arena index is its program-wide ID and two
+/// modules cannot claim one ID.
 fn function_id(id: Idx<SyntaxFunction>) -> FunctionId {
     FunctionId(id.into_raw().into_u32() as usize)
 }
 
+/// Lowers a checked program, whose syntax and bindings span every module it
+/// loaded, into one IR program.
+///
+/// `checked.module_bindings` covers every module's bindings with dependencies
+/// before dependents, so each module-level `var` becomes exactly one `Global`
+/// and a dependency's globals precede its dependents'. Module-level
+/// initializers are constant expressions, so globals are static data: nothing
+/// initializes them while the program runs, and no ordering code is emitted.
 pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
     let mut globals = Vec::new();
     let mut module_places = HashMap::new();
@@ -978,7 +989,7 @@ fn lower_flow_statement(
                 checked,
                 checked.calls[statement],
                 &call.arguments,
-                call.target_span.clone(),
+                call.target.span.clone(),
                 bindings,
                 builder,
             );
@@ -1463,12 +1474,71 @@ mod tests {
     }
 
     fn lowered(source: &str) -> VerifiedProgram {
-        let syntax = frontend::parse(source).unwrap();
-        lower(semantic::check(&syntax).unwrap()).verify().unwrap()
+        let syntax = frontend::parse(&crate::source::SourceMap::from_text(source)).unwrap();
+        lower(semantic::check_root(&syntax).unwrap())
+            .verify()
+            .unwrap()
+    }
+
+    /// Loads, checks, lowers, and verifies a tree of `(relative path, source)`
+    /// files whose root module is `app`, so multi-module lowering runs through
+    /// real import resolution.
+    fn lowered_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> VerifiedProgram {
+        let dir = crate::module::tree(files);
+        let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
+            .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
+        lower(
+            semantic::check(&program.syntax, &program.modules, &program.imports)
+                .unwrap_or_else(|error| panic!("{}", error.render(&program.sources))),
+        )
+        .verify()
+        .unwrap()
     }
 
     fn main_of(program: &VerifiedProgram) -> &Function {
-        &program.program().functions[program.program().main.0]
+        main_of_program(program.program())
+    }
+
+    fn main_of_program(program: &Program) -> &Function {
+        &program.functions[program.main.0]
+    }
+
+    fn instructions(function: &Function) -> impl Iterator<Item = &Instruction> {
+        function
+            .flow
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+    }
+
+    /// Every function `function` calls, in instruction order.
+    fn call_targets(function: &Function) -> Vec<FunctionId> {
+        instructions(function)
+            .filter_map(|instruction| match instruction {
+                Instruction::Call { function, .. } => Some(*function),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn stores(function: &Function) -> Vec<(Place, Operand)> {
+        instructions(function)
+            .filter_map(|instruction| match instruction {
+                Instruction::Store { place, operand } => Some((*place, *operand)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn loads(function: &Function) -> Vec<Place> {
+        function
+            .values
+            .iter()
+            .filter_map(|value| match value.kind {
+                ValueKind::Load(place) => Some(place),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -1682,6 +1752,252 @@ mod tests {
              }",
         );
         insta::assert_debug_snapshot!("functions", program.program());
+    }
+
+    /// The milestone example's module tree, with `app` as the root module.
+    const MODULE_TREE: [(&str, &str); 5] = [
+        (
+            "app/main.fern",
+            "use counter;
+
+const base: int = 20;
+
+fn main() -> void {
+    counter::value = base;
+    counter::bump(step_total());
+    exit(counter::value + base - 10);
+}
+",
+        ),
+        (
+            "app/totals.fern",
+            "use counter::{step};
+
+fn step_total() -> int {
+    return step * 3;
+}
+",
+        ),
+        (
+            "counter/counter.fern",
+            "use text::format;
+
+pub var value = 0;
+const origin = 10;
+
+pub fn bump(amount: int) -> int {
+    value = value + format::doubled(amount);
+    return value;
+}
+
+fn main() -> void {
+    value = 255;
+}
+",
+        ),
+        ("counter/step.fern", "pub const step = origin - 8;\n"),
+        (
+            "text/format/format.fern",
+            "pub fn doubled(value: int) -> int {
+    return value * 2;
+}
+",
+        ),
+    ];
+
+    #[test]
+    fn cross_module_calls_reads_and_assignments_lower_like_local_ones() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use dep;
+                 use dep::{doubled};
+                 fn main() -> void {
+                     dep::value = 1;
+                     dep::bump(doubled(2));
+                     exit(dep::value);
+                 }",
+            ),
+            (
+                "dep/dep.fern",
+                "pub var value = 0;
+                 pub fn doubled(amount: int) -> int { return amount * 2; }
+                 pub fn bump(amount: int) -> void { value = value + amount; }",
+            ),
+        ]);
+        let program = program.program();
+        // One global for `dep::value`, addressed from both modules.
+        let value = Place::Global(GlobalId(0));
+        assert_eq!(
+            program.globals,
+            vec![Global {
+                ty: Type::Int,
+                value: 0,
+            }]
+        );
+
+        // The root module's files parse first, so `main` is the first function.
+        assert_eq!(program.main, FunctionId(0));
+        let main = main_of_program(program);
+        assert_eq!(call_targets(main), [FunctionId(1), FunctionId(2)]);
+        assert_eq!(
+            stores(main),
+            [(
+                value,
+                Operand::Integer {
+                    value: 1,
+                    ty: Type::Int,
+                }
+            )]
+        );
+        assert_eq!(loads(main), [value]);
+
+        // `value = value + amount` in the callee reads the same global and its
+        // own parameter local.
+        let bump = &program.functions[2];
+        assert_eq!(loads(bump), [value, Place::Local(LocalId(0))]);
+        assert_eq!(stores(bump).len(), 1);
+        assert_eq!(stores(bump)[0].0, value);
+    }
+
+    #[test]
+    fn every_module_function_is_lowered_once_under_its_own_id() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use dep;
+                 fn main() -> void { exit(dep::used()); }",
+            ),
+            (
+                "dep/dep.fern",
+                "fn unused() -> int { return 7; }
+                 pub fn used() -> int { return 1; }",
+            ),
+        ]);
+        let program = program.program();
+        // A dependency's private, uncalled function is still lowered in place.
+        assert_eq!(program.functions.len(), 3);
+        assert_eq!(program.main, FunctionId(0));
+        assert_eq!(call_targets(main_of_program(program)), [FunctionId(2)]);
+        assert_eq!(
+            program.functions[1].flow.blocks[0].terminator,
+            Terminator::Return {
+                value: Some(Operand::Integer {
+                    value: 7,
+                    ty: Type::Int,
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn a_dependencys_main_is_lowered_as_an_ordinary_function() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use dep;
+                 fn main() -> void { exit(dep::probe()); }",
+            ),
+            (
+                "dep/dep.fern",
+                "pub var value = 1;
+                 pub fn probe() -> int { return value; }
+                 fn main() -> void { value = 255; }",
+            ),
+        ]);
+        let program = program.program();
+        assert_eq!(program.main, FunctionId(0));
+
+        // The dependency's `main` is neither the entry point nor pruned.
+        let dependency_main = &program.functions[2];
+        assert_eq!(dependency_main.result, None);
+        assert_eq!(
+            stores(dependency_main),
+            [(
+                Place::Global(GlobalId(0)),
+                Operand::Integer {
+                    value: 255,
+                    ty: Type::Int,
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn a_binding_two_modules_use_is_one_global() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use left;
+                 use right;
+                 fn main() -> void { left::add(); exit(right::read()); }",
+            ),
+            (
+                "left/left.fern",
+                "use shared;
+                 pub fn add() -> void { shared::total = shared::total + 1; }",
+            ),
+            (
+                "right/right.fern",
+                "use shared::{total};
+                 pub fn read() -> int { return total; }",
+            ),
+            ("shared/shared.fern", "pub var total = 0;"),
+        ]);
+        let program = program.program();
+        let total = Place::Global(GlobalId(0));
+        assert_eq!(
+            program.globals,
+            vec![Global {
+                ty: Type::Int,
+                value: 0,
+            }]
+        );
+
+        // `shared` loads once, so both dependents address the same storage.
+        let add = &program.functions[1];
+        assert_eq!(loads(add), [total]);
+        assert_eq!(stores(add).len(), 1);
+        assert_eq!(stores(add)[0].0, total);
+        assert_eq!(loads(&program.functions[2]), [total]);
+    }
+
+    #[test]
+    fn globals_follow_dependency_order_and_fold_imported_constants() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use dep;
+                 var here = dep::seed + 1;
+                 fn main() -> void { here = here + dep::there; exit(here); }",
+            ),
+            (
+                "dep/dep.fern",
+                "pub const seed = 5;
+                 pub var there = 2;",
+            ),
+        ]);
+        let program = program.program();
+        // The dependency's global comes first; the imported `const` folds into
+        // the root module's initializer instead of taking storage.
+        assert_eq!(
+            program.globals,
+            vec![
+                Global {
+                    ty: Type::Int,
+                    value: 2,
+                },
+                Global {
+                    ty: Type::Int,
+                    value: 6,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_the_module_tree() {
+        insta::assert_debug_snapshot!("modules", lowered_tree(MODULE_TREE).program());
     }
 
     #[test]

@@ -50,7 +50,7 @@ fn native_programs_exit_zero() {
 #[test]
 fn documented_examples_compile() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let mut inputs = fs::read_dir(examples)
+    let mut inputs = fs::read_dir(&examples)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
@@ -61,6 +61,8 @@ fn documented_examples_compile() {
     inputs.sort();
 
     assert!(!inputs.is_empty());
+    // The modules tour is a directory of modules rather than a single file.
+    inputs.push(examples.join("modules_and_imports").join("app"));
     let outputs = tempdir().unwrap();
     for input in inputs {
         let output = outputs.path().join(input.file_stem().unwrap());
@@ -978,4 +980,371 @@ fn excessive_nesting_reports_an_error_and_preserves_output() {
         assert_eq!(fs::read_to_string(&output).unwrap(), "keep me");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
+}
+
+/// Writes a module directory holding `(file name, source)` pairs, returning the
+/// module root and an output path outside it.
+fn module(files: &[(&str, &str)]) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("app");
+    fs::create_dir(&root).unwrap();
+    for (name, source) in files {
+        fs::write(root.join(name), source).unwrap();
+    }
+    let output = dir.path().join("output");
+    (dir, root, output)
+}
+
+#[test]
+fn module_files_share_one_namespace_and_execute() {
+    let (_dir, root, output) = module(&[
+        (
+            "main.fern",
+            "const base: int = 20;\n\nfn main() -> void {\n    exit(total());\n}\n",
+        ),
+        (
+            "totals.fern",
+            "fn total() -> int {\n    return base + 22;\n}\n",
+        ),
+    ]);
+    fern::compile(&root, &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn the_entry_point_is_found_in_any_file_of_the_root_module() {
+    let (_dir, root, output) = module(&[
+        (
+            "helpers.fern",
+            "fn twice(value: int) -> int { return value * 2; }",
+        ),
+        ("zzz_entry.fern", "fn main() -> void { exit(twice(21)); }"),
+    ]);
+    fern::compile(&root, &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn module_diagnostics_identify_the_file_they_point_into() {
+    for (files, message, location) in [
+        (
+            [
+                ("first.fern", "fn main() -> void {\n    exit(0);\n}\n"),
+                ("second.fern", "const value = 1;\nconst value = 2;\n"),
+            ],
+            "duplicate module-level name `value`",
+            "second.fern:2:7",
+        ),
+        (
+            [
+                ("first.fern", "fn main() -> void {\n    exit(0);\n}\n"),
+                (
+                    "second.fern",
+                    "fn helper() -> void {\n    exit(missing);\n}\n",
+                ),
+            ],
+            "unknown binding `missing`",
+            "second.fern:2:10",
+        ),
+        (
+            [
+                ("first.fern", "fn main() -> void {\n    exit(broken);\n}\n"),
+                ("second.fern", "const other = 1;\n"),
+            ],
+            "unknown binding `broken`",
+            "first.fern:2:10",
+        ),
+    ] {
+        let (_dir, root, output) = module(&files);
+        let error = fern::compile(&root, &output).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+        assert!(error.contains(location), "{error}");
+        assert!(!output.exists());
+    }
+}
+
+#[test]
+fn entry_point_failures_span_the_files_of_a_module() {
+    for (files, message) in [
+        (
+            [
+                ("first.fern", "fn main() -> void {}"),
+                ("second.fern", "fn main() -> void {}"),
+            ],
+            "duplicate `main` function",
+        ),
+        (
+            [
+                ("first.fern", "fn helper() -> void {}"),
+                ("second.fern", "fn other() -> void {}"),
+            ],
+            "missing `main` function",
+        ),
+    ] {
+        let (_dir, root, output) = module(&files);
+        let error = fern::compile(&root, &output).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+        assert!(!output.exists());
+    }
+}
+
+#[test]
+fn runtime_failures_report_the_file_they_occurred_in() {
+    let (_dir, root, output) = module(&[
+        (
+            "main.fern",
+            "fn main() -> void {\n    exit(divide(1, 0));\n}\n",
+        ),
+        (
+            "math.fern",
+            "fn divide(left: int, right: int) -> int {\n    return left / right;\n}\n",
+        ),
+    ]);
+    fern::compile(&root, &output).unwrap();
+    let result = Command::new(&output).output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        stderr.contains("integer `/` has a zero divisor"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("math.fern:2:"), "{stderr}");
+    assert!(!stderr.contains("main.fern"), "{stderr}");
+}
+
+#[test]
+fn a_module_directory_holds_its_own_fern_files_only() {
+    let (dir, root, output) = module(&[
+        ("main.fern", "fn main() -> void { exit(42); }"),
+        ("notes.txt", "fn main() -> void { exit(1); }"),
+    ]);
+    let nested = root.join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("broken.fern"), "this is not fern").unwrap();
+    fern::compile(&root, &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+
+    let empty = dir.path().join("empty");
+    fs::create_dir(&empty).unwrap();
+    let error = fern::compile(&empty, &output).unwrap_err().to_string();
+    assert!(error.contains("holds no `.fern` source files"), "{error}");
+    let error = fern::compile(&nested.join("missing"), &output)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cannot read"), "{error}");
+}
+
+#[test]
+fn output_cannot_alias_a_module_source_file() {
+    let (_dir, root, _) = module(&[
+        ("main.fern", "fn main() -> void { exit(42); }"),
+        ("helper.fern", "fn helper() -> void {}"),
+    ]);
+    for name in ["main.fern", "helper.fern"] {
+        failure(
+            cli(&root, &root.join(name)).output().unwrap(),
+            "overwrite the input",
+        );
+    }
+}
+
+/// Writes `(relative path, source)` pairs under a fresh directory, creating
+/// each file's parent directories.
+fn tree(files: &[(&str, &str)]) -> TempDir {
+    let dir = tempdir().unwrap();
+    for (path, source) in files {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, source).unwrap();
+    }
+    dir
+}
+
+const IMPORTING_MODULE: [(&str, &str); 4] = [
+    (
+        "app/main.fern",
+        "use text;\nfn main() -> void { exit(text::width); }\n",
+    ),
+    ("text/text.fern", "pub const width = 1;\n"),
+    ("vendor/text/text.fern", "pub const width = 2;\n"),
+    ("empty/notes.txt", "not a Fern source file\n"),
+];
+
+#[test]
+fn imports_resolve_against_the_root_modules_parent_directory() {
+    let dir = tree(&IMPORTING_MODULE);
+    let output = dir.path().join("output");
+    assert!(
+        cli(&dir.path().join("app"), &output)
+            .status()
+            .unwrap()
+            .success()
+    );
+    // The exit status names the root that resolved `text`.
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(1));
+}
+
+#[test]
+fn fernpath_replaces_the_default_search_roots() {
+    let dir = tree(&IMPORTING_MODULE);
+    let output = dir.path().join("output");
+
+    assert!(
+        cli(&dir.path().join("app"), &output)
+            .env("FERNPATH", dir.path().join("vendor"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(2));
+
+    // `FERNPATH` replaces the default root rather than extending it, so the
+    // module beside the root module is no longer found.
+    fs::remove_file(&output).unwrap();
+    let roots = [dir.path().join("empty"), dir.path().join("missing")];
+    failure(
+        cli(&dir.path().join("app"), &output)
+            .env("FERNPATH", std::env::join_paths(&roots).unwrap())
+            .output()
+            .unwrap(),
+        &format!(
+            "unresolved import `text`, searched roots in order: {}, {}",
+            roots[0].display(),
+            roots[1].display()
+        ),
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn a_relative_root_module_searches_the_directory_above_it() {
+    let dir = tree(&[
+        (
+            "proj/main.fern",
+            "use text;\nfn main() -> void { exit(text::width); }\n",
+        ),
+        // Beside the root module, where the default search root looks.
+        ("text/text.fern", "pub const width = 2;\n"),
+        // Inside the root module, where it must not look.
+        ("proj/text/text.fern", "pub const width = 1;\n"),
+    ]);
+    let output = dir.path().join("output");
+    let absolute = dir.path().join("proj");
+
+    // The root module directory is `proj` in each form, so a relative
+    // argument names the same search root as an absolute one.
+    for (working_directory, root) in [
+        (absolute.clone(), Path::new("main.fern")),
+        (absolute.clone(), Path::new(".")),
+        (dir.path().to_owned(), Path::new("proj")),
+        (dir.path().to_owned(), absolute.as_path()),
+    ] {
+        let result = cli(root, &output)
+            .current_dir(&working_directory)
+            .env_remove("FERNPATH")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{root:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            Command::new(&output).status().unwrap().code(),
+            Some(2),
+            "{root:?}"
+        );
+        fs::remove_file(&output).unwrap();
+    }
+}
+
+#[test]
+fn cross_module_calls_and_public_binding_mutation_execute() {
+    let dir = tree(&[
+        (
+            "app/main.fern",
+            "use counter;\nuse counter::{bump};\n\
+             fn main() -> void {\n\
+             counter::value = 20;\n\
+             bump(22);\n\
+             exit(counter::value);\n\
+             }\n",
+        ),
+        (
+            "counter/counter.fern",
+            "pub var value = 0;\n\
+             pub fn bump(amount: int) -> int { value = value + amount; return value; }\n",
+        ),
+    ]);
+    let output = dir.path().join("output");
+    fern::compile(&dir.path().join("app"), &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn same_named_declarations_in_two_modules_execute_independently() {
+    let declarations = "pub var value = 0;\npub fn total() -> int { return value; }\n";
+    let dir = tree(&[
+        (
+            "app/main.fern",
+            "use first;\nuse second;\n\
+             fn main() -> void {\n\
+             first::value = 40;\n\
+             second::value = 2;\n\
+             exit(first::total() + second::total());\n\
+             }\n",
+        ),
+        ("first/first.fern", declarations),
+        ("second/second.fern", declarations),
+    ]);
+    let output = dir.path().join("output");
+    fern::compile(&dir.path().join("app"), &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn a_dependency_modules_main_does_not_run() {
+    let dir = tree(&[
+        (
+            "app/main.fern",
+            "use counter;\nfn main() -> void { exit(counter::value); }\n",
+        ),
+        (
+            "counter/counter.fern",
+            "pub var value = 42;\nfn main() -> void { value = 255; }\n",
+        ),
+    ]);
+    let output = dir.path().join("output");
+    fern::compile(&dir.path().join("app"), &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn every_modules_bindings_hold_their_initial_values_when_main_begins() {
+    let dir = tree(&[
+        (
+            "app/main.fern",
+            "use first;\nuse second;\nconst local = 6;\n\
+             fn main() -> void { exit(first::start + second::start + local); }\n",
+        ),
+        ("first/first.fern", "pub const start = 30;\n"),
+        (
+            "second/second.fern",
+            "use first;\npub var start = first::start / 5;\n",
+        ),
+    ]);
+    let output = dir.path().join("output");
+    fern::compile(&dir.path().join("app"), &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn the_modules_and_imports_fixture_executes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/programs/modules_and_imports")
+        .join("app");
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("output");
+    fern::compile(&root, &output).unwrap();
+    assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
 }

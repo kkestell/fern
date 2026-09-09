@@ -3,6 +3,7 @@ mod backend;
 mod diagnostic;
 mod frontend;
 mod ir;
+mod module;
 mod semantic;
 mod source;
 mod types;
@@ -29,24 +30,39 @@ impl fmt::Display for CompileError {
 }
 impl std::error::Error for CompileError {}
 
-/// Compile a Fern source file to a native executable, replacing `output` on success.
+/// Compile a Fern root module to a native executable, replacing `output` on success.
+///
+/// `root` is either a directory whose `.fern` files form one module or a single
+/// `.fern` file forming a one-file module. Its imports resolve against the
+/// ordered module search roots, which default to the root module directory's
+/// parent and are replaced by `FERNPATH` when it is set.
 ///
 /// # Errors
-/// Returns an error for invalid source, an output aliasing the input, file failures,
-/// or failed native tools. Compilation failures preserve an existing output.
-pub fn compile(input: &Path, output: &Path) -> Result<(), CompileError> {
-    let source = source::Source::load(input)?;
-    reject_input_output_alias(input, output)?;
-    let syntax = frontend::parse(&source.text).map_err(|e| CompileError::new(e.render(&source)))?;
-    let checked = semantic::check(&syntax).map_err(|e| CompileError::new(e.render(&source)))?;
+/// Returns an error for invalid source, an unresolved import, a module
+/// dependency cycle, an output aliasing a source file, file failures, or
+/// failed native tools. Compilation failures preserve an existing output.
+pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
+    let roots = module::search_roots(root)?;
+    let program = module::load(root, &roots).map_err(module::LoadError::into_compile_error)?;
+    let (sources, syntax) = (program.sources, program.syntax);
+    reject_input_output_alias(&sources, output)?;
+    let checked = semantic::check(&syntax, &program.modules, &program.imports)
+        .map_err(|e| CompileError::new(e.render(&sources)))?;
     let entry = ir::lower(checked).verify()?;
-    backend::build(&entry, &source, output)
+    backend::build(&entry, &sources, output)
 }
 
-fn reject_input_output_alias(input: &Path, output: &Path) -> Result<(), CompileError> {
-    let input_path = fs::canonicalize(input)
-        .map_err(|e| CompileError::new(format!("cannot resolve {}: {e}", input.display())))?;
-    if let Ok(output_path) = fs::canonicalize(output) {
+fn reject_input_output_alias(
+    sources: &source::SourceMap,
+    output: &Path,
+) -> Result<(), CompileError> {
+    let Ok(output_path) = fs::canonicalize(output) else {
+        return Ok(());
+    };
+    for source in sources.files() {
+        let input = source.path.as_path();
+        let input_path = fs::canonicalize(input)
+            .map_err(|e| CompileError::new(format!("cannot resolve {}: {e}", input.display())))?;
         let mut same = input_path == output_path;
         #[cfg(unix)]
         {

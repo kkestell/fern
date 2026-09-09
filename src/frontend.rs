@@ -1,4 +1,6 @@
-use crate::{diagnostic::Diagnostic, types::Type};
+#[cfg(test)]
+use crate::source::SourceMap;
+use crate::{diagnostic::Diagnostic, source::Source, types::Type};
 use la_arena::{Arena, Idx};
 use lasso::{Rodeo, Spur};
 use logos::Logos;
@@ -35,6 +37,12 @@ enum Token {
     False,
     #[regex("[0-9][a-zA-Z0-9_]*")]
     Integer,
+    #[token("pub")]
+    Pub,
+    #[token("use")]
+    Use,
+    #[token("::")]
+    ColonColon,
     #[token(":")]
     Colon,
     #[token("=")]
@@ -158,6 +166,34 @@ fn block_comment(lexer: &mut logos::Lexer<'_, Token>) -> Result<logos::Skip, ()>
     Err(())
 }
 
+/// One `::`-separated identifier in an import path, a selective import list, or
+/// the qualifier of a qualified name.
+#[derive(Debug)]
+pub(crate) struct PathComponent {
+    pub name: Spur,
+    pub name_span: Range<usize>,
+}
+
+/// A `module::name` reference, call target, or assignment target. `span` covers
+/// the qualifier and the name together.
+#[derive(Debug)]
+pub(crate) struct QualifiedName {
+    pub qualifier: Option<PathComponent>,
+    pub name: Spur,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
+    pub name_span: Range<usize>,
+    pub span: Range<usize>,
+}
+
+/// A `use` declaration. `selection` is the brace form's imported names.
+#[derive(Debug)]
+pub(crate) struct Import {
+    pub path: Vec<PathComponent>,
+    pub selection: Option<Vec<PathComponent>>,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
+    pub span: Range<usize>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Function {
     pub name: Spur,
@@ -184,8 +220,14 @@ pub(crate) enum FunctionResult {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TopLevelItem {
-    Function(Idx<Function>),
-    Binding(Idx<Statement>),
+    Function {
+        function: Idx<Function>,
+        public: bool,
+    },
+    Binding {
+        binding: Idx<Statement>,
+        public: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -204,13 +246,11 @@ pub(crate) enum StatementKind {
         initializer: Idx<Expression>,
     },
     Assignment {
-        name: Spur,
-        name_span: Range<usize>,
+        target: QualifiedName,
         value: Idx<Expression>,
     },
     CompoundAssignment {
-        name: Spur,
-        name_span: Range<usize>,
+        target: QualifiedName,
         operator: BinaryOperator,
         operator_span: Range<usize>,
         value: Idx<Expression>,
@@ -253,8 +293,7 @@ pub(crate) struct Label {
 
 #[derive(Debug)]
 pub(crate) struct Call {
-    pub target: Spur,
-    pub target_span: Range<usize>,
+    pub target: QualifiedName,
     #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub left_paren_span: Range<usize>,
     pub right_paren_span: Range<usize>,
@@ -356,7 +395,7 @@ impl BinaryOperator {
 pub(crate) enum ExpressionKind {
     Integer(String),
     Boolean(bool),
-    Reference(Spur),
+    Reference(QualifiedName),
     Grouping {
         expression: Idx<Expression>,
     },
@@ -395,10 +434,18 @@ pub(crate) enum ExpressionKind {
     Call(Call),
 }
 
+/// One source file's declarations. Imports are file-local, so they are kept
+/// per file rather than pooled across the module.
+#[derive(Debug)]
+pub(crate) struct FileSyntax {
+    pub imports: Vec<Import>,
+    pub items: Vec<TopLevelItem>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Syntax {
     pub names: Rodeo,
-    pub items: Vec<TopLevelItem>,
+    pub files: Vec<FileSyntax>,
     pub functions: Arena<Function>,
     pub statements: Arena<Statement>,
     pub expressions: Arena<Expression>,
@@ -462,36 +509,79 @@ struct Parser<'a> {
     lexer: logos::Lexer<'a, Token>,
     current: Option<Token>,
     span: Range<usize>,
-    syntax: Syntax,
+    /// The file's start in the source map's shared offset space, added to
+    /// every span the lexer reports.
+    base: usize,
+    syntax: &'a mut Syntax,
     nesting: usize,
 }
 
 // Bound recursive parsing, checking, and lowering before entering another level.
 const MAX_NESTING: usize = 128;
 
-pub(crate) fn parse(text: &str) -> Result<Syntax, Diagnostic> {
+/// Parses one source file, appending its declarations to `syntax`, which holds
+/// the whole program's name interner and arenas.
+pub(crate) fn parse_file(syntax: &mut Syntax, source: &Source) -> Result<(), Diagnostic> {
     let mut parser = Parser {
-        lexer: Token::lexer(text),
+        lexer: Token::lexer(&source.text),
         current: None,
-        span: 0..0,
-        syntax: Syntax::default(),
+        span: source.base..source.base,
+        base: source.base,
+        syntax,
         nesting: 0,
     };
-    parser.advance()?;
-    while parser.current.is_some() {
-        let item = match parser.current {
-            Some(Token::Fn) => TopLevelItem::Function(parser.function()?),
-            Some(Token::Const) | Some(Token::Var) => {
-                TopLevelItem::Binding(parser.top_level_binding()?)
-            }
-            _ => return Err(parser.error("expected a top-level declaration")),
-        };
-        parser.syntax.items.push(item);
+    let file = parser.file()?;
+    parser.syntax.files.push(file);
+    Ok(())
+}
+
+/// Parses every file of one module into a single `Syntax`.
+#[cfg(test)]
+pub(crate) fn parse(sources: &SourceMap) -> Result<Syntax, Diagnostic> {
+    let mut syntax = Syntax::default();
+    for source in sources.files() {
+        parse_file(&mut syntax, source)?;
     }
-    Ok(parser.syntax)
+    Ok(syntax)
 }
 
 impl Parser<'_> {
+    fn file(&mut self) -> Result<FileSyntax, Diagnostic> {
+        self.advance()?;
+        let mut imports = Vec::new();
+        while self.current == Some(Token::Use) {
+            imports.push(self.import()?);
+        }
+        let mut items = Vec::new();
+        while self.current.is_some() {
+            let public_span = (self.current == Some(Token::Pub)).then(|| self.span.clone());
+            if public_span.is_some() {
+                self.advance()?;
+            }
+            let public = public_span.is_some();
+            items.push(match self.current {
+                Some(Token::Fn) => TopLevelItem::Function {
+                    function: self.function()?,
+                    public,
+                },
+                Some(Token::Const) | Some(Token::Var) => TopLevelItem::Binding {
+                    binding: self.top_level_binding()?,
+                    public,
+                },
+                Some(Token::Use) => {
+                    return Err(match public_span {
+                        Some(span) => {
+                            Diagnostic::new(span, "`pub` is not permitted on a `use` declaration")
+                        }
+                        None => self.error("`use` declarations must precede the first declaration"),
+                    });
+                }
+                _ => return Err(self.error("expected a top-level declaration")),
+            });
+        }
+        Ok(FileSyntax { imports, items })
+    }
+
     fn enter_nesting(&mut self) -> Result<(), Diagnostic> {
         if self.nesting == MAX_NESTING {
             return Err(self.nesting_error());
@@ -503,9 +593,11 @@ impl Parser<'_> {
     fn advance(&mut self) -> Result<(), Diagnostic> {
         let token = self.lexer.next();
         self.span = if token.is_some() {
-            self.lexer.span()
+            let span = self.lexer.span();
+            self.base + span.start..self.base + span.end
         } else {
-            self.lexer.source().len()..self.lexer.source().len()
+            let end = self.base + self.lexer.source().len();
+            end..end
         };
         self.current = match token {
             Some(Ok(Token::Integer)) => {
@@ -557,6 +649,77 @@ impl Parser<'_> {
         let span = self.span.clone();
         self.advance()?;
         Ok((name, span))
+    }
+
+    fn path_component(&mut self, expected: &str) -> Result<PathComponent, Diagnostic> {
+        let (name, name_span) = self.name(expected)?;
+        Ok(PathComponent { name, name_span })
+    }
+
+    fn import(&mut self) -> Result<Import, Diagnostic> {
+        let start = self.expect(Token::Use, "expected `use`")?.start;
+        let mut path = vec![self.path_component("expected a module name after `use`")?];
+        let mut selection = None;
+        while self.current == Some(Token::ColonColon) {
+            self.advance()?;
+            if self.current == Some(Token::LeftBrace) {
+                selection = Some(self.import_selection()?);
+                break;
+            }
+            path.push(self.path_component("expected a name after `::`")?);
+        }
+        let end = self
+            .expect(Token::Semicolon, "expected `;` after import path")?
+            .end;
+        Ok(Import {
+            path,
+            selection,
+            span: start..end,
+        })
+    }
+
+    fn import_selection(&mut self) -> Result<Vec<PathComponent>, Diagnostic> {
+        self.expect(Token::LeftBrace, "expected `{`")?;
+        if self.current == Some(Token::RightBrace) {
+            return Err(self.error("expected an imported name"));
+        }
+        let mut selection = Vec::new();
+        loop {
+            selection.push(self.path_component("expected an imported name")?);
+            if self.current != Some(Token::Comma) {
+                break;
+            }
+            self.advance()?;
+            if self.current == Some(Token::RightBrace) {
+                break;
+            }
+        }
+        self.expect(Token::RightBrace, "expected `}` after imported names")?;
+        Ok(selection)
+    }
+
+    /// Parses a `name` or `module::name`. Longer paths appear only in `use`.
+    fn qualified_name(&mut self, expected: &str) -> Result<QualifiedName, Diagnostic> {
+        let (name, name_span) = self.name(expected)?;
+        if self.current != Some(Token::ColonColon) {
+            let span = name_span.clone();
+            return Ok(QualifiedName {
+                qualifier: None,
+                name,
+                name_span,
+                span,
+            });
+        }
+        self.advance()?;
+        let qualifier = PathComponent { name, name_span };
+        let (name, name_span) = self.name("expected a name after `::`")?;
+        let span = qualifier.name_span.start..name_span.end;
+        Ok(QualifiedName {
+            qualifier: Some(qualifier),
+            name,
+            name_span,
+            span,
+        })
     }
 
     fn function(&mut self) -> Result<Idx<Function>, Diagnostic> {
@@ -634,6 +797,9 @@ impl Parser<'_> {
 
     fn statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
         let start = self.span.start;
+        if self.current == Some(Token::Pub) {
+            return Err(self.error("`pub` is not permitted on a local declaration"));
+        }
         match self.current {
             Some(Token::LeftBrace) => {
                 let (body, end) = self.body()?;
@@ -699,23 +865,18 @@ impl Parser<'_> {
     }
 
     fn assignment(&mut self) -> Result<StatementKind, Diagnostic> {
-        let (name, name_span) = self.name("expected an assignment target")?;
+        let target = self.qualified_name("expected an assignment target")?;
         let (operator, operator_span) = self.assignment_operator()?;
         let value = self.expression()?;
         Ok(if let Some(operator) = operator {
             StatementKind::CompoundAssignment {
-                name,
-                name_span,
+                target,
                 operator,
                 operator_span,
                 value,
             }
         } else {
-            StatementKind::Assignment {
-                name,
-                name_span,
-                value,
-            }
+            StatementKind::Assignment { target, value }
         })
     }
 
@@ -851,40 +1012,58 @@ impl Parser<'_> {
         }))
     }
 
-    fn starts_assignment(&self) -> bool {
+    /// Returns the token that follows a qualified name starting at the current
+    /// token, or `None` when no qualified name starts here.
+    fn token_after_qualified_name(&self) -> Option<Token> {
         if self.current != Some(Token::Name) || reserved(self.lexer.slice()) {
-            return false;
+            return None;
         }
+        let mut lexer = self.lexer.clone();
+        let mut following = lexer.next();
+        if following == Some(Ok(Token::ColonColon)) {
+            if lexer.next() != Some(Ok(Token::Name)) {
+                return None;
+            }
+            following = lexer.next();
+        }
+        match following {
+            Some(Ok(token)) => Some(token),
+            Some(Err(())) | None => None,
+        }
+    }
+
+    fn starts_assignment(&self) -> bool {
         matches!(
-            self.lexer.clone().next(),
-            Some(Ok(Token::Equals
-                | Token::PlusEquals
-                | Token::MinusEquals
-                | Token::StarEquals
-                | Token::SlashEquals
-                | Token::PercentEquals
-                | Token::AmpersandEquals
-                | Token::PipeEquals
-                | Token::CaretEquals
-                | Token::ShiftLeftEquals
-                | Token::ShiftRightEquals
-                | Token::WrappingPlusEquals
-                | Token::WrappingMinusEquals
-                | Token::WrappingStarEquals))
+            self.token_after_qualified_name(),
+            Some(
+                Token::Equals
+                    | Token::PlusEquals
+                    | Token::MinusEquals
+                    | Token::StarEquals
+                    | Token::SlashEquals
+                    | Token::PercentEquals
+                    | Token::AmpersandEquals
+                    | Token::PipeEquals
+                    | Token::CaretEquals
+                    | Token::ShiftLeftEquals
+                    | Token::ShiftRightEquals
+                    | Token::WrappingPlusEquals
+                    | Token::WrappingMinusEquals
+                    | Token::WrappingStarEquals
+            )
         )
     }
 
     fn starts_call(&self) -> bool {
-        self.current == Some(Token::Name)
-            && matches!(self.lexer.clone().next(), Some(Ok(Token::LeftParen)))
+        self.token_after_qualified_name() == Some(Token::LeftParen)
     }
 
     fn call(&mut self) -> Result<Call, Diagnostic> {
-        let (target, target_span) = self.name("expected a call target")?;
-        self.call_parts(target, target_span)
+        let target = self.qualified_name("expected a call target")?;
+        self.call_parts(target)
     }
 
-    fn call_parts(&mut self, target: Spur, target_span: Range<usize>) -> Result<Call, Diagnostic> {
+    fn call_parts(&mut self, target: QualifiedName) -> Result<Call, Diagnostic> {
         self.enter_nesting()?;
         let left_paren_span = self.expect(Token::LeftParen, "expected `(` after call target")?;
         let mut arguments = Vec::new();
@@ -908,7 +1087,6 @@ impl Parser<'_> {
         self.nesting -= 1;
         Ok(Call {
             target,
-            target_span,
             left_paren_span,
             right_paren_span,
             arguments,
@@ -1134,9 +1312,9 @@ impl Parser<'_> {
                 depth: self.syntax.expressions[expression].depth + 1,
             }));
         } else {
-            let (name, target_span) = self.name("expected an expression")?;
+            let target = self.qualified_name("expected an expression")?;
             if self.current == Some(Token::LeftParen) {
-                let call = self.call_parts(name, target_span)?;
+                let call = self.call_parts(target)?;
                 let end = call.right_paren_span.end;
                 return Ok(self.syntax.expressions.alloc(Expression {
                     depth: call
@@ -1150,7 +1328,11 @@ impl Parser<'_> {
                     kind: ExpressionKind::Call(call),
                 }));
             }
-            ExpressionKind::Reference(name)
+            return Ok(self.syntax.expressions.alloc(Expression {
+                span: target.span.clone(),
+                depth: 0,
+                kind: ExpressionKind::Reference(target),
+            }));
         };
         Ok(self.syntax.expressions.alloc(Expression {
             kind,
@@ -1164,16 +1346,96 @@ impl Parser<'_> {
 mod tests {
     use super::*;
 
-    fn project(syntax: &Syntax) -> String {
+    /// Spells a qualified name as it appeared in source.
+    fn spell(syntax: &Syntax, name: &QualifiedName) -> String {
+        match &name.qualifier {
+            Some(qualifier) => format!(
+                "{}::{}",
+                syntax.names.resolve(&qualifier.name),
+                syntax.names.resolve(&name.name)
+            ),
+            None => syntax.names.resolve(&name.name).to_owned(),
+        }
+    }
+
+    /// Trails a qualified name's qualifier span, so plain names project
+    /// unchanged.
+    fn qualifier(name: &QualifiedName) -> String {
+        match &name.qualifier {
+            Some(qualifier) => format!(" qualifier={:?}", qualifier.name_span),
+            None => String::new(),
+        }
+    }
+
+    fn spell_path(syntax: &Syntax, path: &[PathComponent], separator: &str) -> String {
+        path.iter()
+            .map(|component| syntax.names.resolve(&component.name))
+            .collect::<Vec<_>>()
+            .join(separator)
+    }
+
+    fn path_spans(path: &[PathComponent]) -> Vec<Range<usize>> {
+        path.iter()
+            .map(|component| component.name_span.clone())
+            .collect()
+    }
+
+    fn parse(text: &str) -> Result<Syntax, Diagnostic> {
+        super::parse(&SourceMap::from_text(text))
+    }
+
+    fn projected(text: &str) -> String {
+        let sources = SourceMap::from_text(text);
+        project(&sources, &super::parse(&sources).unwrap())
+    }
+
+    /// Projects each file's imports and items. A path header separates the
+    /// files of a multi-file module.
+    fn project(sources: &SourceMap, syntax: &Syntax) -> String {
         use std::fmt::Write;
         let mut output = String::new();
-        for item in &syntax.items {
+        for (source, file) in sources.files().iter().zip(&syntax.files) {
+            if syntax.files.len() > 1 {
+                writeln!(output, "// {}", source.path.display()).unwrap();
+            }
+            project_file(syntax, file, &mut output);
+        }
+        output
+    }
+
+    fn project_file(syntax: &Syntax, file: &FileSyntax, output: &mut String) {
+        use std::fmt::Write;
+        for import in &file.imports {
+            let path = spell_path(syntax, &import.path, "::");
+            match &import.selection {
+                Some(selection) => writeln!(
+                    output,
+                    "use {path}::{{{}}} span={:?} path={:?} selection={:?}",
+                    spell_path(syntax, selection, ", "),
+                    import.span,
+                    path_spans(&import.path),
+                    path_spans(selection),
+                ),
+                None => writeln!(
+                    output,
+                    "use {path} span={:?} path={:?}",
+                    import.span,
+                    path_spans(&import.path),
+                ),
+            }
+            .unwrap();
+        }
+        for item in &file.items {
             match item {
-                TopLevelItem::Function(id) => {
+                TopLevelItem::Function {
+                    function: id,
+                    public,
+                } => {
                     let function = &syntax.functions[*id];
                     writeln!(
                         output,
-                        "fn {} name={:?} result={:?} span={:?}",
+                        "{}fn {} name={:?} result={:?} span={:?}",
+                        if *public { "pub " } else { "" },
                         syntax.names.resolve(&function.name),
                         function.name_span,
                         function.result,
@@ -1190,14 +1452,19 @@ mod tests {
                         )
                         .unwrap();
                     }
-                    project_body(syntax, &function.body, 1, &mut output);
+                    project_body(syntax, &function.body, 1, output);
                 }
-                TopLevelItem::Binding(id) => {
-                    project_body(syntax, std::slice::from_ref(id), 0, &mut output);
+                TopLevelItem::Binding {
+                    binding: id,
+                    public,
+                } => {
+                    if *public {
+                        output.push_str("pub ");
+                    }
+                    project_body(syntax, std::slice::from_ref(id), 0, output);
                 }
             }
         }
-        output
     }
 
     fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: &mut String) {
@@ -1222,31 +1489,29 @@ mod tests {
                     .unwrap();
                     *initializer
                 }
-                StatementKind::Assignment {
-                    name,
-                    name_span,
-                    value,
-                } => {
+                StatementKind::Assignment { target, value } => {
                     write!(
                         output,
-                        "{indent}assign {} name={name_span:?}",
-                        syntax.names.resolve(name)
+                        "{indent}assign {} name={:?}{}",
+                        spell(syntax, target),
+                        target.name_span,
+                        qualifier(target)
                     )
                     .unwrap();
                     *value
                 }
                 StatementKind::CompoundAssignment {
-                    name,
-                    name_span,
+                    target,
                     operator,
                     operator_span,
                     value,
                 } => {
                     write!(
                         output,
-                        "{indent}compound assign {} {:?}= name={name_span:?} operator={operator_span:?}",
-                        syntax.names.resolve(name),
-                        operator
+                        "{indent}compound assign {} {operator:?}= name={:?} operator={operator_span:?}{}",
+                        spell(syntax, target),
+                        target.name_span,
+                        qualifier(target)
                     )
                     .unwrap();
                     *value
@@ -1263,12 +1528,13 @@ mod tests {
                 StatementKind::Call { call } => {
                     writeln!(
                         output,
-                        "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}",
-                        syntax.names.resolve(&call.target),
-                        call.target_span,
+                        "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}{}",
+                        spell(syntax, &call.target),
+                        call.target.name_span,
                         call.left_paren_span,
                         call.right_paren_span,
-                        statement.span
+                        statement.span,
+                        qualifier(&call.target)
                     )
                     .unwrap();
                     for &argument in &call.arguments {
@@ -1383,9 +1649,10 @@ mod tests {
             }
             ExpressionKind::Reference(name) => writeln!(
                 output,
-                "{indent}reference {} span={:?}",
-                syntax.names.resolve(name),
-                expression.span
+                "{indent}reference {} span={:?}{}",
+                spell(syntax, name),
+                expression.span,
+                qualifier(name)
             )
             .unwrap(),
             ExpressionKind::Grouping { expression: inner } => {
@@ -1480,12 +1747,13 @@ mod tests {
             ExpressionKind::Call(call) => {
                 writeln!(
                     output,
-                    "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}",
-                    syntax.names.resolve(&call.target),
-                    call.target_span,
+                    "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}{}",
+                    spell(syntax, &call.target),
+                    call.target.name_span,
                     call.left_paren_span,
                     call.right_paren_span,
-                    expression.span
+                    expression.span,
+                    qualifier(&call.target)
                 )
                 .unwrap();
                 for &argument in &call.arguments {
@@ -1498,19 +1766,19 @@ mod tests {
     #[test]
     fn mixed_body_snapshot() {
         let source = "fn main() -> void { const exit_code = 0x2A; var copy: int = exit_code; exit(copy,); const after = missing; } fn helper() -> void { exit(000,); }";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
     fn interleaved_top_level_bindings_snapshot() {
         let source = "const start: int = 40; fn main() -> void { var local = start; exit(local); } var counter = start + 2; fn helper() -> void {} const last = counter;";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
     fn function_signatures_calls_and_returns_snapshot() {
         let source = "fn mark(digit: int, flag: bool,) -> int { return digit; } fn nothing() -> void { return; } fn main() -> void { mark(1, true,); nothing(); const value = mark(mark(2, false), true) + mark(3, true); if value > 0 && true { return; } }";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
@@ -1566,6 +1834,136 @@ mod tests {
     }
 
     #[test]
+    fn modules_imports_and_qualified_names_snapshot() {
+        let source = "\
+use fmt;
+use network::http;
+use fs::{flag, mode,};
+pub const limit: int = 4;
+pub var total = 0;
+const private = 1;
+fn helper() -> int { return private; }
+pub fn main() -> void {
+    http::serve(fmt::width(limit) + helper());
+    http::total = limit;
+    http::total += 2;
+    const value = http::total;
+    exit(value);
+}
+";
+        insta::assert_snapshot!(projected(source));
+    }
+
+    #[test]
+    fn module_files_parse_into_one_syntax_with_file_local_spans_snapshot() {
+        let sources = SourceMap::from_named_texts(&[
+            ("first.fern", "use fmt;\nconst base = 1;\n"),
+            ("second.fern", "pub fn helper() -> int { return base; }\n"),
+        ]);
+        let syntax = super::parse(&sources).unwrap();
+        insta::assert_snapshot!(project(&sources, &syntax));
+
+        // The second file's spans start past the first file's text and its
+        // one-byte gap, so a span identifies the file it points into.
+        let base = sources.files()[1].base;
+        assert_eq!(base, sources.files()[0].text.len() + 1);
+        let helper = syntax.functions.iter().next().unwrap().1;
+        assert!(helper.name_span.start >= base);
+        assert_eq!(sources.index_at(helper.name_span.start), 1);
+        assert_eq!(sources.index_at(base - 1), 0);
+    }
+
+    #[test]
+    fn malformed_modules_imports_and_qualified_names_report_the_offending_token() {
+        for (marked, message) in [
+            (
+                "«pub» use fmt;",
+                "`pub` is not permitted on a `use` declaration",
+            ),
+            (
+                "fn main() -> void {} «use» fmt;",
+                "`use` declarations must precede the first declaration",
+            ),
+            (
+                "fn main() -> void { «pub» var x = 1; }",
+                "`pub` is not permitted on a local declaration",
+            ),
+            ("use «::»fmt;", "expected a module name after `use`"),
+            ("use fmt «as» f;", "expected `;` after import path"),
+            ("use fmt«»", "expected `;` after import path"),
+            ("use fmt::«;»", "expected a name after `::`"),
+            (
+                "use fmt::«const»;",
+                "reserved word cannot be used as an identifier",
+            ),
+            ("use fs::{«}»;", "expected an imported name"),
+            ("use fs::{flag,«,»};", "expected an imported name"),
+            (
+                "use fs::{flag«::»mode};",
+                "expected `}` after imported names",
+            ),
+            ("fn a«::»b() -> void {}", "expected `(`"),
+            (
+                "fn f(a«::»b: int) -> void {}",
+                "expected `:` after parameter name",
+            ),
+            ("fn main() -> void { var a«::»b = 1; }", "expected `=`"),
+            (
+                "fn main() -> void { for :a«::»b {} }",
+                "expected an expression",
+            ),
+            ("fn main() -> void { const x = a::b«::»c; }", "expected `;`"),
+            (
+                "fn main() -> void { a::«=» 1; }",
+                "expected a name after `::`",
+            ),
+            (
+                "fn main() -> void { a::«(»1); }",
+                "expected a name after `::`",
+            ),
+        ] {
+            let prefix = "/* 🌿 */ ";
+            let start = marked.find('«').unwrap();
+            let end = marked.find('»').unwrap() - '«'.len_utf8();
+            let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, message, "{marked}");
+            assert_eq!(
+                error.span,
+                prefix.len() + start..prefix.len() + end,
+                "{marked}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_declarations_and_qualified_names_are_recorded_on_their_nodes() {
+        let syntax = parse("pub fn f() -> void {} var private = 0; pub const shared = 1;").unwrap();
+        let public: Vec<_> = syntax
+            .files
+            .iter()
+            .flat_map(|file| &file.items)
+            .map(|item| match item {
+                TopLevelItem::Function { public, .. } | TopLevelItem::Binding { public, .. } => {
+                    *public
+                }
+            })
+            .collect();
+        assert_eq!(public, [true, false, true]);
+
+        let syntax = parse("fn main() -> void { const x = plain; const y = a::b; }").unwrap();
+        let qualifiers: Vec<_> = syntax
+            .expressions
+            .iter()
+            .filter_map(|(_, expression)| match &expression.kind {
+                ExpressionKind::Reference(name) => Some(name.qualifier.is_some()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(qualifiers, [false, true]);
+    }
+
+    #[test]
     fn statements_are_rejected_at_top_level() {
         for marked in [
             "fn main() -> void {} «exit»(0);",
@@ -1601,7 +1999,7 @@ mod tests {
     #[test]
     fn assignment_and_blocks_snapshot() {
         let source = "fn main() -> void { var x = 1; x = x; {} { const copy = x; { x = 42; } exit(copy); } exit(x); }";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
@@ -1612,19 +2010,19 @@ mod tests {
             source.push_str(&format!("{{ const copy: /* type */ {name} = value; }}\n"));
         }
         source.push('}');
-        insta::assert_snapshot!(project(&parse(&source).unwrap()));
+        insta::assert_snapshot!(projected(&source));
     }
 
     #[test]
     fn integer_operator_precedence_and_grouping_snapshot() {
         let source = "fn main() -> void { const high = 1 * 2 / 3 % 4 *% 5 << 6 >> 7 & 8; const low = 9 + 10 - 11 +% 12 -% 13 | 14 ^ 15; const shift = 1 + 2 << 3; const add_or = 1 | 2 + 3; const and_not = 1 & ^2; const unary = -^-%u8(1); const grouping = (1 + 2) * (3 - 4); const and_negative = 7 & -2; }";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
     fn boolean_expressions_and_control_flow_snapshot() {
         let source = "fn main() -> void { var ready: bool = true; const stopped = false; const result = 1 + 2 < 4 && !stopped || ready == false; if ready { exit(1); } else if stopped { exit(2); } else {} for { break; } for ready { continue; } for :rows var i: int = 0; i < 4; i += 1 { if i >= 2 { break :rows; } } for cursor = 0; cursor != 2; cursor = cursor + 1 { continue; } }";
-        insta::assert_snapshot!(project(&parse(source).unwrap()));
+        insta::assert_snapshot!(projected(source));
     }
 
     #[test]
@@ -2067,7 +2465,7 @@ mod tests {
                 "}".repeat(blocks),
             );
             let syntax = parse(&text).unwrap();
-            let checked = crate::semantic::check(&syntax).unwrap();
+            let checked = crate::semantic::check_root(&syntax).unwrap();
             crate::ir::lower(checked).verify().unwrap();
         }
         for (blocks, conversions) in [(128, 0), (0, 128), (64, 64), (100_000, 0), (0, 100_000)] {
@@ -2092,12 +2490,12 @@ mod tests {
             ")".repeat(127),
         );
         let syntax = parse(&grouped).unwrap();
-        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        crate::ir::lower(crate::semantic::check_root(&syntax).unwrap())
             .verify()
             .unwrap();
         let binary = format!("fn main() -> void {{ exit({}1); }}", "1 + ".repeat(127));
         let syntax = parse(&binary).unwrap();
-        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        crate::ir::lower(crate::semantic::check_root(&syntax).unwrap())
             .verify()
             .unwrap();
         for source in [

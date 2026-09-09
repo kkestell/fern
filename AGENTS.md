@@ -35,6 +35,8 @@ missing. The architecture document is not required to begin planning.
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
 - `src/types.rs` — the Fern type enum and its spellings, shared by every phase.
 - `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
+- `src/module.rs` — module discovery, import resolution, and the dependency
+  graph.
 - `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
 - `src/snapshots/` — checked-in frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.

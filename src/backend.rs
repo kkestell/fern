@@ -6,7 +6,7 @@ use crate::{
         BinaryForm, BlockId, ControlFlow, Function, FunctionId, Global, Instruction, Operand,
         Place, Terminator, Value, ValueId, ValueKind, VerifiedProgram,
     },
-    source::Source,
+    source::SourceMap,
     types::Type,
 };
 use std::{env, fmt::Write, fs, path::Path, process::Command};
@@ -56,7 +56,7 @@ fn place(place: Place) -> String {
     }
 }
 
-pub(crate) fn emit(verified: &VerifiedProgram, source_file: Option<&Source>) -> String {
+pub(crate) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> String {
     let program = verified.program();
     let mut emitter = Emitter {
         text: String::new(),
@@ -66,7 +66,7 @@ pub(crate) fn emit(verified: &VerifiedProgram, source_file: Option<&Source>) -> 
         main: program.main,
         function: 0,
         qbe_result: None,
-        diagnostics: source_file.map(DiagnosticRenderer::new),
+        diagnostics: sources.map(DiagnosticRenderer::new),
     };
     for (id, global) in program.globals.iter().enumerate() {
         writeln!(
@@ -1079,10 +1079,10 @@ fn emit_truncation_operand(
 
 pub(crate) fn build(
     program: &VerifiedProgram,
-    source: &Source,
+    sources: &SourceMap,
     output: &Path,
 ) -> Result<(), CompileError> {
-    build_text(&emit(program, Some(source)), output)
+    build_text(&emit(program, Some(sources)), output)
 }
 
 fn build_text(text: &str, output: &Path) -> Result<(), CompileError> {
@@ -1139,7 +1139,7 @@ fn run(command: &mut Command) -> Result<(), CompileError> {
 mod tests {
     use super::*;
     use crate::ir::Program;
-    use std::path::PathBuf;
+    use std::collections::BTreeSet;
 
     fn integer(value: i32) -> Operand {
         Operand::Integer {
@@ -1182,10 +1182,49 @@ mod tests {
     }
 
     fn lowered(text: &str) -> VerifiedProgram {
-        let syntax = crate::frontend::parse(text).unwrap();
-        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        let syntax = crate::frontend::parse(&SourceMap::from_text(text)).unwrap();
+        crate::ir::lower(crate::semantic::check_root(&syntax).unwrap())
             .verify()
             .unwrap()
+    }
+
+    /// Loads, checks, lowers, and verifies a tree of `(relative path, source)`
+    /// files whose root module is `app`, so emission runs over a program built
+    /// from several modules.
+    fn lowered_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> VerifiedProgram {
+        let dir = crate::module::tree(files);
+        let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
+            .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
+        crate::ir::lower(
+            crate::semantic::check(&program.syntax, &program.modules, &program.imports)
+                .unwrap_or_else(|error| panic!("{}", error.render(&program.sources))),
+        )
+        .verify()
+        .unwrap()
+    }
+
+    /// The symbol of every emitted function definition, paired with whether
+    /// the definition is exported.
+    fn definitions(qbe: &str) -> Vec<(&str, bool)> {
+        qbe.lines()
+            .filter_map(|line| {
+                let exported = line.starts_with("export function");
+                let rest = line
+                    .strip_prefix("export function ")
+                    .or_else(|| line.strip_prefix("function "))?;
+                let head = rest.split('(').next().expect("a definition head");
+                // The head is either `$symbol` or `<result type> $symbol`.
+                Some((head.rsplit('$').next().expect("a symbol"), exported))
+            })
+            .collect()
+    }
+
+    /// The symbol of every emitted data definition.
+    fn data_symbols(qbe: &str) -> Vec<&str> {
+        qbe.lines()
+            .filter_map(|line| line.strip_prefix("data $"))
+            .map(|line| line.split(' ').next().expect("a data symbol"))
+            .collect()
     }
 
     // Observe every emitted value at its full QBE width before the exit mask.
@@ -1255,11 +1294,8 @@ mod tests {
         }
         text.push_str("}\n");
         let program = lowered(&text);
-        let source = Source {
-            path: PathBuf::from("many_traps.fern"),
-            text,
-        };
-        let qbe = emit(&program, Some(&source));
+        let sources = SourceMap::from_text(&text);
+        let qbe = emit(&program, Some(&sources));
         assert!(qbe.len() < 5_000_000, "QBE was {} bytes", qbe.len());
         assert!(qbe.contains("b \"Error"));
     }
@@ -1512,7 +1548,7 @@ mod tests {
 
     #[test]
     fn runtime_shifts_define_discarded_bits_and_large_counts() {
-        let syntax = crate::frontend::parse(
+        let syntax = crate::frontend::parse(&SourceMap::from_text(
             "fn main() -> void {
                 var high: u8 = 128; var one: uint = 1; var width: u64 = 8;
                 var huge: u64 = 18446744073709551615;
@@ -1525,9 +1561,9 @@ mod tests {
                 var zero: int = 0;
                 const unchanged = high << zero;
             }",
-        )
+        ))
         .unwrap();
-        let program = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        let program = crate::ir::lower(crate::semantic::check_root(&syntax).unwrap())
             .verify()
             .unwrap();
         assert_native_values(
@@ -1619,11 +1655,11 @@ mod tests {
 
     #[test]
     fn infallible_conversions_do_not_emit_trap_blocks_or_messages() {
-        let syntax = crate::frontend::parse(
+        let syntax = crate::frontend::parse(&SourceMap::from_text(
             "fn main() -> void { var x: u8 = 42; var y = int(x); exit(y); }",
-        )
+        ))
         .unwrap();
-        let program = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        let program = crate::ir::lower(crate::semantic::check_root(&syntax).unwrap())
             .verify()
             .unwrap();
         let text = emit(&program, None);
@@ -1635,7 +1671,7 @@ mod tests {
 
     #[test]
     fn source_unsigned_high_bits_survive_assignment_copies_and_shadowing() {
-        let syntax = crate::frontend::parse(
+        let syntax = crate::frontend::parse(&SourceMap::from_text(
             "fn main() -> void {
             var x: u8 = 255;
             const saved = u64(x);
@@ -1648,9 +1684,9 @@ mod tests {
             const copy = result;
             result = saved;
         }",
-        )
+        ))
         .unwrap();
-        let checked = crate::semantic::check(&syntax).unwrap();
+        let checked = crate::semantic::check_root(&syntax).unwrap();
         assert_native_values(
             &crate::ir::lower(checked).verify().unwrap(),
             &[
@@ -1756,7 +1792,7 @@ mod tests {
         ] {
             assert!(symbols.contains(&symbol), "{symbols:?}");
         }
-        let unique: std::collections::BTreeSet<&&str> = symbols.iter().collect();
+        let unique: BTreeSet<&&str> = symbols.iter().collect();
         assert_eq!(unique.len(), symbols.len(), "{symbols:?}");
 
         let dir = tempfile::tempdir().unwrap();
@@ -1808,5 +1844,94 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn only_the_root_modules_main_is_exported() {
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use counter;\nfn main() -> void { exit(counter::bump()); }\n",
+            ),
+            (
+                "counter/counter.fern",
+                "pub fn bump() -> int { return 42; }\nfn main() -> void {}\n",
+            ),
+        ]);
+        let qbe = emit(&program, None);
+        let definitions = definitions(&qbe);
+        assert_eq!(definitions.len(), program.program().functions.len());
+        let exported: Vec<&str> = definitions
+            .iter()
+            .filter(|(_, exported)| *exported)
+            .map(|(symbol, _)| *symbol)
+            .collect();
+        assert_eq!(exported, ["main"]);
+        // A dependency's `main` is an ordinary function, so it takes an `fn`
+        // symbol and collides with neither the entry point nor libc.
+        for (symbol, _) in definitions.iter().filter(|(symbol, _)| *symbol != "main") {
+            assert!(symbol.starts_with("fn"), "{symbol}");
+        }
+    }
+
+    #[test]
+    fn same_named_declarations_in_two_modules_take_distinct_symbols() {
+        let declarations = "pub var value = 0;\n\
+             pub fn bump(amount: int) -> int { return value + amount; }\n";
+        let program = lowered_tree([
+            (
+                "app/main.fern",
+                "use first;\nuse second;\n\
+                 fn main() -> void {\n\
+                 first::value = 1;\n\
+                 second::value = 2;\n\
+                 exit(first::bump(0) + second::bump(0));\n\
+                 }\n",
+            ),
+            ("first/first.fern", declarations),
+            ("second/second.fern", declarations),
+        ]);
+        let qbe = emit(&program, None);
+
+        // `main` and the two same-named `bump` functions.
+        let definitions = definitions(&qbe);
+        assert_eq!(definitions.len(), 3);
+        let functions: BTreeSet<&str> = definitions.iter().map(|(symbol, _)| *symbol).collect();
+        assert_eq!(functions.len(), definitions.len(), "{definitions:?}");
+
+        let data = data_symbols(&qbe);
+        assert_eq!(
+            data.iter().collect::<BTreeSet<_>>().len(),
+            data.len(),
+            "{data:?}"
+        );
+        let globals: Vec<&str> = data
+            .iter()
+            .copied()
+            .filter(|symbol| symbol.starts_with("global"))
+            .collect();
+        assert_eq!(globals.len(), 2, "{data:?}");
+
+        // Each same-named `bump`, and `main`, owns its own trap messages.
+        let owners: BTreeSet<&str> = data
+            .iter()
+            .filter(|symbol| symbol.ends_with("_message"))
+            .map(|symbol| {
+                symbol
+                    .split_once("_operation")
+                    .expect("a trap message symbol")
+                    .0
+            })
+            .collect();
+        assert_eq!(owners.len(), 3, "{data:?}");
+
+        // The two same-named `pub var`s are separate storage.
+        let stores: BTreeSet<&str> = qbe
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("store"))
+            .filter_map(|line| line.rsplit(", ").next())
+            .filter(|target| target.starts_with('$'))
+            .collect();
+        assert_eq!(stores.len(), 2, "{qbe}");
     }
 }

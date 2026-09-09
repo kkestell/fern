@@ -9,7 +9,7 @@ fn main() -> ExitCode {
         || args[2].is_empty()
         || args[2].to_string_lossy().starts_with('-')
     {
-        eprintln!("usage: fern <input.fern> -o <output>");
+        eprintln!("usage: fern <root> -o <output>");
         return ExitCode::FAILURE;
     }
     match fern::compile(Path::new(&args[0]), Path::new(&args[2])) {

@@ -20,6 +20,10 @@ The examples form a tour of the currently supported language, grouped by topic:
   three `for` forms, and loop control.
 - [Functions](examples/functions.fern) covers parameters, nested and recursive
   calls, and value and `void` returns.
+- [Modules and imports](examples/modules_and_imports/) covers module
+  directories, `pub` declarations, whole-module, nested-path, and selective
+  imports, and qualified references. Its root module is
+  `examples/modules_and_imports/app`.
 
 ## Build and run
 
@@ -34,19 +38,32 @@ target/literals
 echo $?
 ```
 
-The CLI is `fern <input.fern> -o <output>`. The output directory must already
-exist. Prefix filenames beginning with `-` with `./`.
+The CLI is `fern <root> -o <output>`. The root module argument is either a
+directory, whose `.fern` files together form one module, or a single `.fern`
+file forming a one-file module. Files in nested directories are not part of the
+module, and a directory holding no `.fern` file is rejected. The output
+directory must already exist. Prefix filenames beginning with `-` with `./`.
+
+Imports resolve against an ordered list of module search roots. The default
+list is one root: the root module directory's parent. `FERNPATH` replaces that
+default with its platform-separated entries, in order. Empty entries are
+ignored, and a `FERNPATH` left with no entry keeps the default root rather than
+searching nowhere. An import path's components name directories beneath a root,
+and the first root whose directory holds a `.fern` file is the imported module.
+A root that does not exist is skipped. An unresolved import lists every searched
+root in search order, and a module dependency cycle reports its chain of
+modules.
 
 `QBE` and `CC` can each specify a tool executable name or path. They do not
 accept command-line flags. QBE must default to the development host's target;
 cross-compilation is not supported.
 
-Source diagnostics include the input path and source location. Invalid UTF-8
-reports a zero-based byte offset. File and tool failures return a nonzero
-compiler status; tool failures include stderr. The compiler uses temporary
-intermediates beside the requested output and publishes the executable only
-after QBE and the C toolchain succeed. A failed compilation preserves an
-existing output, and an output aliasing the input is rejected.
+Source diagnostics include the source file's path and the location within it.
+Invalid UTF-8 reports a zero-based byte offset. File and tool failures return a
+nonzero compiler status; tool failures include stderr. The compiler uses
+temporary intermediates beside the requested output and publishes the executable
+only after QBE and the C toolchain succeed. A failed compilation preserves an
+existing output, and an output aliasing a source file is rejected.
 
 The compiler accepts recursive source nesting up to 128 levels, counting the
 function body, blocks, conversions, parenthesized groups, unary operators, and

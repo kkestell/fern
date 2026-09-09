@@ -1,0 +1,5 @@
+use counter::{step};
+
+fn step_total() -> int {
+    return step * 3;
+}

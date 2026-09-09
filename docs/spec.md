@@ -55,10 +55,10 @@ var x = 10; // int
 
 ### Keywords
 
-`fn`, `void`, `var`, `const`, `if`, `else`, `for`, `break`, `continue`, `exit`,
-`true`, and `false` are reserved. The ten integer type names listed under
-Integer types and `bool` are also reserved. Reserved words cannot be
-identifiers.
+`fn`, `void`, `var`, `const`, `pub`, `use`, `if`, `else`, `for`, `break`,
+`continue`, `return`, `exit`, `true`, and `false` are reserved. The ten integer
+type names listed under Integer types and `bool` are also reserved. Reserved
+words cannot be identifiers.
 
 ### Integer literals
 
@@ -87,8 +87,33 @@ var b = u8(42);
 
 ### Functions
 
-The program entry point is a top-level function named `main`, with no parameters
-and the explicit return annotation `void`:
+Every function is a module-level declaration with an explicit result type:
+
+```text
+fn name(first: T, second: U) -> R {
+    ...
+}
+```
+
+Each parameter has a name and an explicit type. Parameters are fixed and
+positional: a call supplies exactly one argument for each parameter in source
+order. Parameter names must be unique within a function. The parameter list may
+be empty, and a nonempty list may have a trailing comma. The result type is
+either `void` or one value type. `void` is not a value type and is not permitted
+as a parameter type.
+
+Parameters are immutable bindings whose scope is the function body. A local
+binding may shadow a parameter under the ordinary shadowing rules. Each
+argument is copied into its parameter before the body begins executing.
+
+Function names participate in the namespace described under
+[Module-level declarations](#module-level-declarations). A function name is
+visible throughout its module regardless of declaration order. Functions are
+not overloaded. A function may call itself or participate in mutual recursion.
+
+An executable build designates one module as its root module. The program entry
+point is the root module's sole top-level function named `main`, with no
+parameters and the explicit return annotation `void`:
 
 ```fern
 fn main() -> void {
@@ -97,8 +122,34 @@ fn main() -> void {
 
 The body is a brace-delimited sequence of statements and may be empty. No
 semicolon follows the closing brace. A program must have exactly one entry
-point. Reaching the end of `main` terminates the program with exit status zero.
-Explicit termination is defined under Process exit.
+point. A function named `main` in a dependency module is an ordinary function
+and does not affect entry-point selection. Whether `main` is public does not
+affect its selection. Reaching the end of `main` terminates the program with
+exit status zero. Explicit termination is defined under Process exit.
+
+### Calls
+
+```text
+name(first, second)
+```
+
+A call target is a direct function name, resolved using the ordinary lexical
+name rules. An imported function may also be called through its qualified name.
+The target must resolve to a function; function names are not values. A local
+binding may shadow a function name, in which case that name is not callable
+within the binding's scope.
+
+A call must supply the same number of arguments as the function has parameters.
+An empty argument list is permitted, and a nonempty list may have a trailing
+comma. Arguments are evaluated completely from left to right, then copied into
+their corresponding parameters. Each argument must be valid as the initializer
+of an annotated binding whose type is the parameter type.
+
+A call to a value-returning function is an expression of the function's result
+type. A call to a `void` function produces no value and is permitted only as a
+call statement. Any call may be used as a call statement ending in `;`; a value
+returned by such a statement is discarded. A call is never a constant
+expression, even when every argument is constant.
 
 ### Variable declarations
 
@@ -110,24 +161,28 @@ const name: T = e;
 ```
 
 A declaration introduces a binding initialized to the value of `e`. A type
-annotation determines the binding's type. Without an annotation, the binding
-takes the initializer's type, with untyped integer constants defaulting to
-`int`. A binding reference has the binding's type. Initialization copies the
+annotation determines the binding's type. A typed initializer must have that
+same type, while an untyped constant must be representable by the annotated
+type. Other integer conversions must be explicit. Without an annotation, the
+binding takes the initializer's type, with untyped integer constants defaulting
+to `int`. A binding reference has the binding's type. Initialization copies the
 integer value; later assignment to the source binding does not change the copy.
 
 ### Module-level declarations
 
-A source file contains function declarations and module-level `var` and `const`
-declarations, in any order. Statements appear only in function bodies.
+A source file contains `use` declarations followed by function declarations and
+module-level `var` and `const` declarations, in any order. Statements appear
+only in function bodies.
 
 A module-level declaration uses the declaration syntax above, and its
 initializer must be a constant expression. Module-level bindings are initialized
 before `main` runs.
 
-A module-level binding is visible throughout its file, including in declarations
-that appear before it. Two module-level declarations in a file may not use the
-same name. A module-level initializer that refers to the binding it initializes,
-directly or through other module-level bindings, is a compile-time error.
+A module-level binding is visible throughout its module, including in other
+files and in declarations that appear before it. No two module-level
+declarations, including functions, in the same module may use the same name. A
+module-level initializer that refers to the binding it initializes, directly or
+through other module-level bindings, is a compile-time error.
 
 ```fern
 var counter = base;
@@ -144,9 +199,9 @@ fn main() -> void {
 Bindings use lexical block scope. Each brace-delimited statement block,
 including a function body, introduces a scope. A binding declared in a block is
 not visible outside that block. Nested blocks can access bindings in enclosing
-scopes unless those bindings are shadowed. The bindings of a file's module-level
-declarations enclose every function body in that file, and a local binding may
-shadow one of them.
+scopes unless those bindings are shadowed. A module's module-level bindings
+enclose every function body in the module, and a local binding may shadow one
+of them.
 
 A local binding becomes visible only after its initializer. The initializer
 resolves names using the bindings already in scope, including any earlier
@@ -688,10 +743,10 @@ rejected.
 ## Statements and Execution
 
 A function body and each nested brace-delimited block execute statements in
-source order. Declarations, assignments, compound assignments, `break`,
-`continue`, and `exit` statements end with `;`. A nested block, an `if`
-statement, and a `for` statement need no trailing semicolon. Declarations and
-references must be valid even after a statement that terminates execution.
+source order. Declarations, assignments, compound assignments, calls, `break`,
+`continue`, `return`, and `exit` statements end with `;`. A nested block, an
+`if` statement, and a `for` statement need no trailing semicolon. Declarations
+and references must be valid even after a statement that terminates execution.
 
 ### Conditionals
 
@@ -809,6 +864,27 @@ fn main() -> void {
 }
 ```
 
+### Function return
+
+```text
+return;
+return e;
+```
+
+`return` ends the current function call. A `void` function may use `return;` or
+reach the end of its body, but it may not return an expression. A
+value-returning function must use `return e;`. The expression is evaluated
+before the call ends and must be valid as the initializer of an annotated
+binding whose type is the declared result type.
+
+The end of a value-returning function body must be unreachable under a
+structural check. A `return` or `exit` makes its following path unreachable. An
+`if` chain makes its following path unreachable only when it has a final `else`
+and every branch does so. The path after `for { ... }` is unreachable when no
+reachable `break` targets that loop. Other `for` forms may fall through.
+Boolean constants and constant expressions do not remove paths for this check.
+Statements on unreachable paths are still checked.
+
 ### Process exit
 
 ```text
@@ -834,54 +910,106 @@ fn main() -> void {
 
 ### Module directories
 
-A module is a directory of `.fern` source files. Its directory path relative to
-a module search root is its import path, with `::` separating path components.
-All source files in the directory share one module namespace and can access each
-other's declarations, including private declarations. Each source file has its
-own imports.
+A module consists of all `.fern` source files directly within one directory.
+Nested directories define separate modules. All source files in a module share
+one module namespace and can access each other's declarations, including
+private declarations. Each source file has its own imports.
 
-The directory defines the namespace; source filenames do not introduce
-namespaces. For example, `example/print.fern` belongs to module `example`. A
-function named `println` declared in that file has the qualified name
-`example::println`. Module and function names in this section,
-`example::println` included, are illustrative; the specification does not define
-a standard library.
+A module's directory path relative to a module search root is its import path.
+An import path contains one or more identifier components separated by `::`;
+the components map to directories beneath the search root. The directory
+defines the namespace, and source filenames do not introduce namespaces. For
+example, `example/print.fern` belongs to module `example`. A function named
+`println` declared in that file has the qualified name `example::println`.
+Module and function names in this section, `example::println` included, are
+illustrative; the specification does not define a standard library.
+
+An executable build designates a directory as its root module. The root module
+need not have a special directory name. Entry-point selection is defined under
+[Functions](#functions).
+
+### Public declarations
+
+`pub` may precede a module-level function, `var`, or `const` declaration. It
+makes that declaration accessible to other modules. A declaration without
+`pub` is private to its module. `pub` is not permitted on a local declaration
+or a `use` declaration.
+
+```fern
+pub fn print() -> void {
+}
+
+pub var output_enabled = true;
+const buffer_size = 4096;
+```
+
+Code in another module may read a public binding. It may assign to a public
+`var`, through either a qualified or selective import, but it may not assign to
+a public `const`. A private declaration cannot be accessed from another module.
 
 ### Use declarations
 
-Imports are file-local `use` declarations terminated by `;`. Importing a module
-introduces its name in that file; access to its members is qualified with `::`.
-A selective import introduces the selected submodule or member for unqualified
-use in that file.
+Imports are file-local `use` declarations terminated by `;`. Every `use` in a
+file must appear before the file's first function, `var`, or `const`
+declaration.
+
+A whole-module import names a module by its full import path and introduces the
+path's final component in that file. Its public declarations are accessed with
+`::`. A selective import introduces the named public declarations for
+unqualified use in that file. The brace form selects declarations only; a
+nested module is imported with its full path.
 
 ```text
-use fmt;        // import a standard-library module
-use fs::{flag}; // introduce flag for unqualified use
-use example;   // import a module found through the module search path
+use fmt;             // introduce the module name fmt
+use fs::{flag};      // introduce the public declaration flag
+use network::http;   // introduce the module name http
 
-example::println(...);
+fmt::println(...);
+http::serve(...);
 ```
 
+A name introduced by `use` must not already refer to a module-level declaration
+or another imported name in that file. This rule also rejects repeating an
+import that introduces the same name, even when both imports resolve to the
+same declaration or module. A local binding in a function may shadow an
+imported name under the ordinary shadowing rules.
+
+Every name introduced by a `use` declaration must be referenced in that source
+file. A module or declaration cannot be imported only for side effects. A `use`
+declaration cannot rename a module or declaration.
+
 A `use` declaration in one file does not introduce imported names in other
-files, even when those files belong to the same module.
+files, even when those files belong to the same module. Imported names are not
+part of the importing module's public interface and are never re-exported.
 
 ### Module resolution and dependencies
 
-Module resolution is path-based. An implementation resolves imports against an
-ordered list of module search roots. It must document how callers supply those
-roots and what defaults apply. A command-line implementation may accept roots
-through flags or `FERNPATH`; a build tool may construct them from project
-metadata. The working directory is not an implicit dependency source when an
-explicit root list is supplied.
+Module resolution is path-based. An implementation resolves an import by
+appending its path components to each module search root in order. The first
+resulting directory containing at least one `.fern` source file is the imported
+module. Later matching roots are ignored.
+
+An implementation must document how callers supply the ordered roots and what
+defaults apply. A command-line implementation may accept roots through flags or
+`FERNPATH`; a build tool may construct them from project metadata. When
+`FERNPATH` is set, its entries replace the command-line implementation's
+default roots rather than extending them. The working directory is not an
+implicit dependency source when an explicit root list is supplied.
+
+If no root contains the requested module, compilation fails. The diagnostic
+must point to and identify the unresolved import path and list every searched
+root in search order.
+
+Each `use` adds a dependency from the importing module to the imported module.
+The dependency graph must be acyclic. A direct or indirect dependency cycle is
+a compile-time error, and its diagnostic must show the cycle as a chain of
+module paths. Each dependency module is included and its module-level bindings
+are initialized exactly once. A dependency's bindings are initialized before
+those of a module that depends on it, and all module-level bindings are
+initialized before the root module's `main` runs.
 
 Fern source imports do not name dependency versions. Build tools may use
 manifests, lockfiles, registries, vendored source, or other metadata to select
 versions and construct module search roots. Those facilities are outside the
 Fern source language and do not change module identity within a chosen root
 list.
-
-### Open module questions
-
-The specification does not yet settle public-declaration syntax, import name
-conflicts, dependency cycles, missing-module diagnostics, or whether setting
-`FERNPATH` replaces or extends the default search list.

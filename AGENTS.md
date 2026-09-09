@@ -74,8 +74,8 @@ already have names. Prefer the concrete: name the file, the function, the value.
 
 When you need a decision, ask one plain question.
 
-When asking about a language-design decision, briefly explain what Odin, Hare,
-and C do for that same decision. Distinguish specified behavior from
+When asking about a language-design decision, briefly explain what Go, Odin,
+and Hare do for that same decision. Distinguish specified behavior from
 implementation-specific behavior and verify uncertain details in primary sources.
 
 This governs replies. Files you write follow the repository's documentation

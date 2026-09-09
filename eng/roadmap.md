@@ -176,14 +176,129 @@ Expected exit status: 6. Future file: `examples/branches_and_loops.fern`.
 
 ## Parameters, calls, and return values
 
-Add parameters, calls, and return values after the remaining function rules
-are specified. Define this milestone's tasks with kroadmap once those language
-decisions are settled.
+Add fixed positional parameters, direct function calls, and zero-or-one return
+values against [Functions](../docs/spec.md#functions),
+[Calls](../docs/spec.md#calls),
+[Scope and shadowing](../docs/spec.md#scope-and-shadowing), and
+[Function return](../docs/spec.md#function-return).
+
+The scope is explicitly typed immutable parameters, module-wide function
+resolution without overloading, left-to-right argument evaluation, calls as
+expressions or statements, explicit returns, and compile-time rejection of a
+value-returning function whose end is reachable.
+
+### Example
+
+```fern
+var trace = 0;
+
+fn mark(digit: int) -> int {
+    trace = trace * 10 + digit;
+    return digit;
+}
+
+fn difference(left: int, right: int) -> int {
+    return left - right;
+}
+
+fn sum_to(value: int) -> int {
+    if value == 0 {
+        return 0;
+    }
+    return value + sum_to(value - 1);
+}
+
+fn positive(value: int) -> bool {
+    return value > 0;
+}
+
+fn remember_zero(value: int) -> void {
+    if value == 0 {
+        return;
+    }
+    trace = 255;
+}
+
+fn main() -> void {
+    difference(mark(4), mark(2));
+    const total = sum_to(3);
+    remember_zero(0);
+
+    if positive(total) {
+        exit(trace);
+    }
+    exit(255);
+}
+```
+
+Expected exit status: 42. Future file:
+`examples/parameters_calls_and_returns.fern`.
+
+### Tasks
+
+- [ ] **Parse function signatures, calls, and returns**
+
+  - Accept explicitly typed parameter lists, integer, boolean, and `void`
+    result types, direct call expressions and statements, and both valid
+    `return` forms while preserving source spans.
+  - Cover empty and trailing-comma lists, nested calls, malformed signatures,
+    malformed arguments, and malformed returns in parser tests and snapshots.
+
+- [ ] **Resolve and check function calls**
+
+  - Collect module-wide function signatures before checking bodies so forward,
+    recursive, and mutually recursive calls resolve independently of declaration
+    order without overloading.
+  - Enforce the shared module-level namespace, lexical shadowing at call sites,
+    exact arity, immutable parameter bindings, and the specified argument type
+    rules.
+  - Diagnose non-function call targets, calls used as constant expressions,
+    and `void` calls used as values.
+
+- [ ] **Check returns and function reachability**
+
+  - Enforce the return form and value type required by each function's declared
+    result, including contextual typing of untyped constants.
+  - Reject a value-returning function whose end is reachable, accounting for
+    branches, nested blocks, unconditional loops, and targeted `break`
+    statements while continuing to check unreachable source.
+
+- [ ] **Represent and verify functions in Fern IR**
+
+  - Represent every function once with its signature, parameters, body, calls,
+    and return terminators, replacing the entry-only IR shape without creating
+    a parallel lowering path.
+  - Verify call targets, argument and result types, parameter locals, return
+    terminators, and control-flow reachability in IR tests and snapshots.
+
+- [ ] **Compile and execute calls and returns**
+
+  - Emit native functions, parameters, left-to-right calls, and `void` and value
+    returns, preserving module-level binding access and recursive execution.
+  - Cover nested calls, mutation-observable argument order, discarded results,
+    forward calls, recursion, and return paths in native integration tests.
+  - Add the milestone example and validate the integrated milestone.
+
+### Completion gates
+
+- Forward, recursive, and mutually recursive calls resolve independent of
+  declaration order; duplicate module-level names and shadowed or otherwise
+  non-function call targets produce source diagnostics.
+- Arguments execute completely from left to right and obey exact arity and the
+  annotated-initializer type rules; assigning to a parameter is rejected.
+- Calls compose inside expressions, `void` and value calls work as statements,
+  and discarded return values do not change execution.
+- Every valid return reaches its caller with the declared type; invalid return
+  forms, mismatched values, `void` values, and reachable value-function ends are
+  rejected during compilation.
+- Fern IR rejects invalid calls, signatures, returns, and cross-function
+  control flow.
+- The example compiles and exits 42.
 
 ---
 
 ## Modules and imports
 
-Add module directories and `use` declarations after the open module questions in
-[the specification](../docs/spec.md#open-module-questions) are settled. Define
-this milestone's tasks with kroadmap once those language decisions are settled.
+Add module directories, public declarations, and `use` declarations as defined
+by [the specification](../docs/spec.md#modules-and-imports). Define this
+milestone's tasks with kroadmap before implementation begins.

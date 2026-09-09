@@ -1,0 +1,34 @@
+---
+source: src/frontend.rs
+expression: project(&parse(source).unwrap())
+---
+fn mark name=3..7 result=Value(TypeAnnotation { ty: Int, span: 36..39 }) span=0..57
+  parameter digit name=8..13 annotation=TypeAnnotation { ty: Int, span: 15..18 }
+  parameter flag name=20..24 annotation=TypeAnnotation { ty: Bool, span: 26..30 }
+  return span=42..55
+    reference digit span=49..54
+fn nothing name=61..68 result=Void span=58..90
+  return span=81..88
+fn main name=94..98 result=Void span=91..230
+  call mark target=111..115 left_paren=115..116 right_paren=124..125 span=111..126
+    integer 1 span=116..117
+    boolean true span=119..123
+  call nothing target=127..134 left_paren=134..135 right_paren=135..136 span=127..137
+  const value name=144..149 annotation=None span=138..195
+    binary Add operator=179..180 span=152..194
+      call mark target=152..156 left_paren=156..157 right_paren=177..178 span=152..178
+        call mark target=157..161 left_paren=161..162 right_paren=170..171 span=157..171
+          integer 2 span=162..163
+          boolean false span=165..170
+        boolean true span=173..177
+      call mark target=181..185 left_paren=185..186 right_paren=193..194 span=181..194
+        integer 3 span=186..187
+        boolean true span=189..193
+  if span=196..228
+    logical And operator=209..211 span=199..216
+      comparison Greater operator=205..206 span=199..208
+        reference value span=199..204
+        integer 0 span=207..208
+      boolean true span=212..216
+  then
+    return span=219..226

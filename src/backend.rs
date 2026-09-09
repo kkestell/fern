@@ -3,8 +3,8 @@ use crate::{
     diagnostic::{Diagnostic, DiagnosticRenderer},
     frontend::{BinaryOperator, ComparisonOperator, UnaryOperator},
     ir::{
-        BinaryForm, BlockId, ControlFlow, Instruction, LocalId, Operand, Terminator, ValueId,
-        ValueKind, VerifiedEntry,
+        BinaryForm, BlockId, ControlFlow, Function, FunctionId, Global, Instruction, Operand,
+        Place, Terminator, Value, ValueId, ValueKind, VerifiedProgram,
     },
     source::Source,
     types::Type,
@@ -25,25 +25,91 @@ fn qbe_type(ty: Type) -> char {
 struct Emitter<'a> {
     text: String,
     data: String,
+    globals: &'a [Global],
+    functions: &'a [Function],
+    main: FunctionId,
+    /// The index of the function being emitted, which distinguishes its
+    /// module-global trap message symbols from every other function's.
+    function: usize,
+    /// The return type of the signature being emitted, absent for a function
+    /// that returns nothing.
+    qbe_result: Option<char>,
     diagnostics: Option<DiagnosticRenderer<'a>>,
 }
 
-pub(crate) fn emit(verified: &VerifiedEntry, source_file: Option<&Source>) -> String {
-    let entry = verified.entry();
+/// Names the QBE symbol defining or calling function `id`. Fern source names
+/// never reach the object file, so a function named `write` or `exit` cannot
+/// collide with libc.
+fn function_symbol(main: FunctionId, id: FunctionId) -> String {
+    if id == main {
+        "main".to_owned()
+    } else {
+        format!("fn{}", id.0)
+    }
+}
+
+/// Names the QBE symbol holding `place`.
+fn place(place: Place) -> String {
+    match place {
+        Place::Local(local) => format!("%local{}", local.0),
+        Place::Global(global) => format!("$global{}", global.0),
+    }
+}
+
+pub(crate) fn emit(verified: &VerifiedProgram, source_file: Option<&Source>) -> String {
+    let program = verified.program();
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
+        globals: &program.globals,
+        functions: &program.functions,
+        main: program.main,
+        function: 0,
+        qbe_result: None,
         diagnostics: source_file.map(DiagnosticRenderer::new),
     };
-    emitter
-        .text
-        .push_str("export function w $main() {\n@start\n");
-    emit_control_flow(&mut emitter, entry, &entry.flow);
-    emitter.text.push_str("}\n");
+    for (id, global) in program.globals.iter().enumerate() {
+        writeln!(
+            emitter.data,
+            "data $global{id} = {{ {} {} }}",
+            qbe_type(global.ty),
+            global.value
+        )
+        .unwrap();
+    }
+    for (index, function) in program.functions.iter().enumerate() {
+        let id = FunctionId(index);
+        let entry = id == program.main;
+        emitter.function = index;
+        // `main` reports the process status, so it returns a word even though
+        // Fern declares it as returning nothing.
+        emitter.qbe_result = if entry {
+            Some('w')
+        } else {
+            function.result.map(qbe_type)
+        };
+        let parameters = (0..function.parameters)
+            .map(|index| format!("{} %param{index}", qbe_type(function.flow.locals[index])))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            emitter.text,
+            "{}function {}${}({parameters}) {{\n@start",
+            if entry { "export " } else { "" },
+            match emitter.qbe_result {
+                Some(result) => format!("{result} "),
+                None => String::new(),
+            },
+            function_symbol(program.main, id)
+        )
+        .unwrap();
+        emit_control_flow(&mut emitter, function, &function.flow);
+        emitter.text.push_str("}\n");
+    }
     emitter.data + &emitter.text
 }
 
-fn emit_control_flow(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, flow: &ControlFlow) {
+fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
     for (id, ty) in flow.locals.iter().enumerate() {
         let (allocation, size) = if qbe_type(*ty) == 'l' {
             ("alloc8", 8)
@@ -52,24 +118,70 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, flow: 
         };
         writeln!(emitter.text, "    %local{id} =l {allocation} {size}").unwrap();
     }
+    // The parameters are the leading locals, so the loop above allocated them.
+    for index in 0..function.parameters {
+        writeln!(
+            emitter.text,
+            "    store{} %param{index}, %local{index}",
+            qbe_type(flow.locals[index])
+        )
+        .unwrap();
+    }
     writeln!(emitter.text, "    jmp @block{}", flow.entry.0).unwrap();
 
     for (block_id, block) in flow.blocks.iter().enumerate() {
         writeln!(emitter.text, "@block{block_id}").unwrap();
         for instruction in &block.instructions {
-            match *instruction {
-                Instruction::Value(ValueId(id)) => emit_value(emitter, entry, id),
+            match instruction {
+                Instruction::Value(ValueId(id)) => emit_value(emitter, function, *id),
                 Instruction::Store {
-                    local,
+                    place: destination,
                     operand: source,
                 } => {
-                    let width = qbe_type(flow.locals[local.0]);
+                    let width = match destination {
+                        Place::Local(local) => qbe_type(flow.locals[local.0]),
+                        Place::Global(global) => qbe_type(emitter.globals[global.0].ty),
+                    };
                     writeln!(
                         emitter.text,
-                        "    store{width} {}, %local{}",
-                        operand(source),
-                        local.0
+                        "    store{width} {}, {}",
+                        operand(*source),
+                        place(*destination)
                     )
+                    .unwrap();
+                }
+                Instruction::Call {
+                    result,
+                    function: callee,
+                    arguments,
+                    ..
+                } => {
+                    let target = &emitter.functions[callee.0];
+                    let arguments = arguments
+                        .iter()
+                        .enumerate()
+                        .map(|(index, argument)| {
+                            format!(
+                                "{} {}",
+                                qbe_type(target.flow.locals[index]),
+                                operand(*argument)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let symbol = function_symbol(emitter.main, *callee);
+                    match result {
+                        Some(ValueId(id)) => writeln!(
+                            emitter.text,
+                            "    %v{id} ={} call ${symbol}({arguments})",
+                            qbe_type(
+                                target
+                                    .result
+                                    .expect("a call result requires a callee that returns one")
+                            )
+                        ),
+                        None => writeln!(emitter.text, "    call ${symbol}({arguments})"),
+                    }
                     .unwrap();
                 }
             }
@@ -106,28 +218,44 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
                 operand(status)
             )
             .unwrap();
-            writeln!(emitter.text, "    ret %block{}_status", block.0).unwrap();
+            writeln!(emitter.text, "    call $exit(w %block{}_status)", block.0).unwrap();
+            emitter.text.push_str("    hlt\n");
         }
+        Terminator::Return { value } => match value {
+            Some(value) => {
+                writeln!(emitter.text, "    ret {}", operand(value)).unwrap();
+            }
+            // Falling off the end of `main` exits zero. Every other function
+            // returning nothing has no QBE return type to give a value to.
+            None => emitter.text.push_str(if emitter.qbe_result.is_some() {
+                "    ret 0\n"
+            } else {
+                "    ret\n"
+            }),
+        },
         Terminator::Unreachable => emitter.text.push_str("    hlt\n"),
     }
 }
 
-fn emit_value(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, id: usize) {
-    let value = &entry.values[id];
+fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
+    let value = &function.values[id];
     match value.kind {
-        ValueKind::Load(LocalId(local)) => {
+        ValueKind::Load(source) => {
             let width = qbe_type(value.ty);
             writeln!(
                 emitter.text,
-                "    %v{id} ={width} load{width} %local{local}"
+                "    %v{id} ={width} load{width} {}",
+                place(source)
             )
             .unwrap();
         }
+        // A call result is defined by its call instruction.
+        ValueKind::CallResult => {}
         ValueKind::Convert {
             operand: source,
             truncating,
         } => {
-            let source_ty = operand_type(entry, source);
+            let source_ty = operand_type(function, source);
             if truncating || source_ty.all_values_fit(value.ty) {
                 emit_truncation(&mut emitter.text, id, source, source_ty, value.ty);
             } else {
@@ -137,15 +265,7 @@ fn emit_value(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, id: usize) {
                     value.ty.name()
                 );
                 let message = operation_message(value, emitter.diagnostics.as_ref(), &message);
-                emit_checked_conversion(
-                    &mut emitter.text,
-                    &mut emitter.data,
-                    id,
-                    source,
-                    source_ty,
-                    value.ty,
-                    message,
-                );
+                emit_checked_conversion(emitter, id, source, source_ty, value.ty, message);
             }
         }
         ValueKind::Unary { operator, operand } => {
@@ -156,12 +276,12 @@ fn emit_value(emitter: &mut Emitter<'_>, entry: &crate::ir::Entry, id: usize) {
             form,
             left,
             right,
-        } => emit_binary_operation(emitter, id, value, operator, form, (left, right), entry),
+        } => emit_binary_operation(emitter, id, value, operator, form, (left, right), function),
         ValueKind::Comparison {
             operator,
             left,
             right,
-        } => emit_comparison(&mut emitter.text, id, operator, left, right, entry),
+        } => emit_comparison(&mut emitter.text, id, operator, left, right, function),
         ValueKind::LogicalNot { operand: source } => {
             writeln!(emitter.text, "    %v{id} =w ceqw {}, 0", operand(source)).unwrap();
         }
@@ -174,9 +294,9 @@ fn emit_comparison(
     operator: ComparisonOperator,
     left: Operand,
     right: Operand,
-    entry: &crate::ir::Entry,
+    function: &Function,
 ) {
-    let ty = operand_type(entry, left);
+    let ty = operand_type(function, left);
     let comparison = match operator {
         ComparisonOperator::Equal => format!("ceq{}", qbe_type(ty)),
         ComparisonOperator::NotEqual => format!("cne{}", qbe_type(ty)),
@@ -205,7 +325,7 @@ fn comparison_operation(relation: &str, signed: bool, ty: Type) -> String {
 fn emit_unary_operation(
     emitter: &mut Emitter<'_>,
     id: usize,
-    value: &crate::ir::Value,
+    value: &Value,
     operator: UnaryOperator,
     source: Operand,
 ) {
@@ -223,6 +343,7 @@ fn emit_unary_operation(
             emit_conditional_trap(
                 &mut emitter.text,
                 &mut emitter.data,
+                emitter.function,
                 id,
                 "overflow",
                 &format!("%operation{id}_minimum"),
@@ -251,11 +372,11 @@ fn emit_unary_operation(
 fn emit_binary_operation(
     emitter: &mut Emitter<'_>,
     id: usize,
-    value: &crate::ir::Value,
+    value: &Value,
     operator: BinaryOperator,
     form: BinaryForm,
     operands: (Operand, Operand),
-    entry: &crate::ir::Entry,
+    function: &Function,
 ) {
     let (left, right) = operands;
     let spelling = match form {
@@ -293,7 +414,7 @@ fn emit_binary_operation(
             operator,
             &spelling,
             (left, right),
-            entry,
+            function,
         ),
         BinaryOperator::And | BinaryOperator::Xor | BinaryOperator::Or => {
             let instruction = match operator {
@@ -334,7 +455,7 @@ fn emit_binary_raw(
 fn emit_checked_arithmetic(
     emitter: &mut Emitter<'_>,
     id: usize,
-    value: &crate::ir::Value,
+    value: &Value,
     operator: BinaryOperator,
     spelling: &str,
     left: Operand,
@@ -360,6 +481,7 @@ fn emit_checked_arithmetic(
     emit_conditional_trap(
         &mut emitter.text,
         &mut emitter.data,
+        emitter.function,
         id,
         "overflow",
         &format!("%operation{id}_overflow"),
@@ -594,7 +716,7 @@ fn emit_long_multiply_overflow(
 fn emit_division(
     emitter: &mut Emitter<'_>,
     id: usize,
-    value: &crate::ir::Value,
+    value: &Value,
     operator: BinaryOperator,
     spelling: &str,
     left: Operand,
@@ -612,6 +734,7 @@ fn emit_division(
     emit_conditional_trap(
         &mut emitter.text,
         &mut emitter.data,
+        emitter.function,
         id,
         "zero",
         &format!("%operation{id}_zero"),
@@ -641,6 +764,7 @@ fn emit_division(
         emit_conditional_trap(
             &mut emitter.text,
             &mut emitter.data,
+            emitter.function,
             id,
             "overflow",
             &format!("%operation{id}_overflow"),
@@ -665,15 +789,15 @@ fn emit_division(
 fn emit_shift(
     emitter: &mut Emitter<'_>,
     id: usize,
-    value: &crate::ir::Value,
+    value: &Value,
     operator: BinaryOperator,
     spelling: &str,
     operands: (Operand, Operand),
-    entry: &crate::ir::Entry,
+    function: &Function,
 ) {
     let (left, right) = operands;
     let ty = value.ty;
-    let count_ty = operand_type(entry, right);
+    let count_ty = operand_type(function, right);
     let count_width = qbe_type(count_ty);
     let left = operand(left);
     let right = operand(right);
@@ -691,6 +815,7 @@ fn emit_shift(
         emit_conditional_trap(
             &mut emitter.text,
             &mut emitter.data,
+            emitter.function,
             id,
             "negative",
             &format!("%operation{id}_negative"),
@@ -761,7 +886,7 @@ fn emit_normalized(text: &mut String, id: usize, source: &str, ty: Type) {
 }
 
 fn operation_message(
-    value: &crate::ir::Value,
+    value: &Value,
     diagnostic_renderer: Option<&DiagnosticRenderer<'_>>,
     message: &str,
 ) -> String {
@@ -774,6 +899,7 @@ fn operation_message(
 fn emit_conditional_trap(
     text: &mut String,
     data: &mut String,
+    function: usize,
     id: usize,
     cause: &str,
     condition: &str,
@@ -781,7 +907,9 @@ fn emit_conditional_trap(
 ) {
     let failed = format!("operation{id}_{cause}_failed");
     let ready = format!("operation{id}_{cause}_ready");
-    let symbol = format!("fern_operation{id}_{cause}_message");
+    // Value IDs are function-local, so the module-global message symbol needs
+    // the function to stay unique.
+    let symbol = format!("fern_function{function}_operation{id}_{cause}_message");
     writeln!(text, "    jnz {condition}, @{failed}, @{ready}").unwrap();
     writeln!(text, "@{failed}").unwrap();
     emit_message_data(data, &symbol, &message);
@@ -791,7 +919,7 @@ fn emit_conditional_trap(
         message.len(),
     )
     .unwrap();
-    text.push_str("    call $abort()\n    ret 1\n");
+    text.push_str("    call $abort()\n    hlt\n");
     writeln!(text, "@{ready}").unwrap();
 }
 
@@ -822,22 +950,22 @@ fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
     data.push_str("b 0 }\n");
 }
 
-fn operand_type(entry: &crate::ir::Entry, operand: Operand) -> Type {
+fn operand_type(function: &Function, operand: Operand) -> Type {
     match operand {
         Operand::Integer { ty, .. } => ty,
-        Operand::Value(ValueId(id)) => entry.values[id].ty,
+        Operand::Value(ValueId(id)) => function.values[id].ty,
     }
 }
 
 fn emit_checked_conversion(
-    text: &mut String,
-    data: &mut String,
+    emitter: &mut Emitter<'_>,
     id: usize,
     source: Operand,
     source_ty: Type,
     destination: Type,
     message: String,
 ) {
+    let text = &mut emitter.text;
     let source = operand(source);
     let source_minimum = source_ty.min();
     let source_maximum = i128::from(source_ty.max());
@@ -879,8 +1007,16 @@ fn emit_checked_conversion(
         (false, true) => format!("%conversion{id}_too_small"),
         (false, false) => unreachable!("checked conversion requires a possible failure"),
     };
-    emit_conditional_trap(text, data, id, "conversion", &condition, message);
-    emit_truncation_operand(text, id, &source, source_ty, destination);
+    emit_conditional_trap(
+        &mut emitter.text,
+        &mut emitter.data,
+        emitter.function,
+        id,
+        "conversion",
+        &condition,
+        message,
+    );
+    emit_truncation_operand(&mut emitter.text, id, &source, source_ty, destination);
 }
 
 fn emit_truncation(
@@ -942,11 +1078,11 @@ fn emit_truncation_operand(
 }
 
 pub(crate) fn build(
-    entry: &VerifiedEntry,
+    program: &VerifiedProgram,
     source: &Source,
     output: &Path,
 ) -> Result<(), CompileError> {
-    build_text(&emit(entry, Some(source)), output)
+    build_text(&emit(program, Some(source)), output)
 }
 
 fn build_text(text: &str, output: &Path) -> Result<(), CompileError> {
@@ -1002,7 +1138,7 @@ fn run(command: &mut Command) -> Result<(), CompileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Entry, Value};
+    use crate::ir::Program;
     use std::path::PathBuf;
 
     fn integer(value: i32) -> Operand {
@@ -1023,31 +1159,53 @@ mod tests {
         }
     }
 
-    fn entry(values: Vec<Value>, exit: Operand) -> Entry {
-        Entry {
-            flow: ControlFlow {
-                entry: BlockId(0),
-                locals: vec![],
-                blocks: vec![crate::ir::Block {
-                    instructions: (0..values.len())
-                        .map(|id| Instruction::Value(ValueId(id)))
-                        .collect(),
-                    terminator: Terminator::Exit { status: exit },
-                }],
-            },
-            values,
+    fn program(values: Vec<Value>, exit: Operand) -> Program {
+        Program {
+            globals: vec![],
+            main: FunctionId(0),
+            functions: vec![Function {
+                parameters: 0,
+                result: None,
+                flow: ControlFlow {
+                    entry: BlockId(0),
+                    locals: vec![],
+                    blocks: vec![crate::ir::Block {
+                        instructions: (0..values.len())
+                            .map(|id| Instruction::Value(ValueId(id)))
+                            .collect(),
+                        terminator: Terminator::Exit { status: exit },
+                    }],
+                },
+                values,
+            }],
         }
+    }
+
+    fn lowered(text: &str) -> VerifiedProgram {
+        let syntax = crate::frontend::parse(text).unwrap();
+        crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+            .verify()
+            .unwrap()
     }
 
     // Observe every emitted value at its full QBE width before the exit mask.
     // Keeping the comparisons in the native program also prevents unused
     // wide values from disappearing without their representation being tested.
-    fn assert_native_values(verified: &VerifiedEntry, expected: &[i128]) {
-        assert_eq!(verified.entry().values.len(), expected.len());
+    fn assert_native_values(verified: &VerifiedProgram, expected: &[i128]) {
+        let values = &verified.program().functions[verified.program().main.0].values;
+        assert_eq!(values.len(), expected.len());
         let mut text = emit(verified, None);
-        text.truncate(text.find("    %block0_status =").unwrap());
+        // These programs define `main` alone, which ends either in an explicit
+        // `exit` or in the `ret 0` of a body that reaches its end.
+        let start = text.find("export function").expect("main is exported");
+        let end = start
+            + text[start..]
+                .find("    %block0_status =")
+                .or_else(|| text[start..].rfind("    ret 0\n"))
+                .expect("main ends in an exit or a void return");
+        text.truncate(end);
         text.push_str("    %ok0 =w copy 1\n");
-        for (id, (value, expected)) in verified.entry().values.iter().zip(expected).enumerate() {
+        for (id, (value, expected)) in values.iter().zip(expected).enumerate() {
             let width = qbe_type(value.ty);
             writeln!(text, "    %check{id} =w ceq{width} %v{id}, {expected}").unwrap();
             writeln!(text, "    %ok{} =w and %ok{id}, %check{id}", id + 1).unwrap();
@@ -1061,13 +1219,10 @@ mod tests {
 
     fn assert_native_failure(body: &str, expected: &str) -> String {
         let text = format!("fn main() -> void {{ {body} }}");
-        let syntax = crate::frontend::parse(&text).unwrap();
-        let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
-            .verify()
-            .unwrap();
+        let program = lowered(&text);
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("program");
-        build_text(&emit(&entry, None), &output).unwrap();
+        build_text(&emit(&program, None), &output).unwrap();
         let result = Command::new(output).output().unwrap();
         assert!(!result.status.success(), "{text}");
         let stderr = String::from_utf8(result.stderr).unwrap();
@@ -1099,15 +1254,12 @@ mod tests {
             writeln!(text, "const value{id} = left + right;").unwrap();
         }
         text.push_str("}\n");
-        let syntax = crate::frontend::parse(&text).unwrap();
-        let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
-            .verify()
-            .unwrap();
+        let program = lowered(&text);
         let source = Source {
             path: PathBuf::from("many_traps.fern"),
             text,
         };
-        let qbe = emit(&entry, Some(&source));
+        let qbe = emit(&program, Some(&source));
         assert!(qbe.len() < 5_000_000, "QBE was {} bytes", qbe.len());
         assert!(qbe.contains("b \"Error"));
     }
@@ -1167,7 +1319,7 @@ mod tests {
                 }
             }
         }
-        assert_native_values(&entry(values, integer(0)).verify().unwrap(), &expected);
+        assert_native_values(&program(values, integer(0)).verify().unwrap(), &expected);
     }
 
     fn truncated(value: i128, destination: Type) -> i128 {
@@ -1212,7 +1364,7 @@ mod tests {
                 }
             }
         }
-        assert_native_values(&entry(values, integer(0)).verify().unwrap(), &expected);
+        assert_native_values(&program(values, integer(0)).verify().unwrap(), &expected);
     }
 
     #[test]
@@ -1248,10 +1400,7 @@ mod tests {
                 }}",
                 name = name,
             );
-            let syntax = crate::frontend::parse(&text).unwrap();
-            let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
-                .verify()
-                .unwrap();
+            let program = lowered(&text);
             let mut expected = vec![];
             for result in [23, 17, 60, 6, 2, 23, 17, 60] {
                 expected.extend([20, 3, result]);
@@ -1293,7 +1442,7 @@ mod tests {
                 3,
                 truncated(maximum * 3, ty),
             ]);
-            assert_native_values(&entry, &expected);
+            assert_native_values(&program, &expected);
         }
     }
 
@@ -1378,11 +1527,11 @@ mod tests {
             }",
         )
         .unwrap();
-        let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        let program = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
             .verify()
             .unwrap();
         assert_native_values(
-            &entry,
+            &program,
             &[
                 128,
                 1,
@@ -1448,13 +1597,10 @@ mod tests {
                         source.name(),
                         destination.name(),
                     );
-                    let syntax = crate::frontend::parse(&text).unwrap();
-                    let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
-                        .verify()
-                        .unwrap();
+                    let program = lowered(&text);
                     let dir = tempfile::tempdir().unwrap();
                     let output = dir.path().join("program");
-                    build_text(&emit(&entry, None), &output).unwrap();
+                    build_text(&emit(&program, None), &output).unwrap();
                     let result = Command::new(output).output().unwrap();
                     assert!(!result.status.success(), "{text}");
                     assert!(
@@ -1477,10 +1623,10 @@ mod tests {
             "fn main() -> void { var x: u8 = 42; var y = int(x); exit(y); }",
         )
         .unwrap();
-        let entry = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
+        let program = crate::ir::lower(crate::semantic::check(&syntax).unwrap())
             .verify()
             .unwrap();
-        let text = emit(&entry, None);
+        let text = emit(&program, None);
         assert!(!text.contains("$abort"));
         assert!(!text.contains("$write"));
         assert!(!text.contains("data $"));
@@ -1529,7 +1675,7 @@ mod tests {
     #[test]
     fn negative_values_survive_chained_widening_and_exit() {
         for number in [-128, -1] {
-            let entry = entry(
+            let program = program(
                 vec![
                     Value {
                         span: None,
@@ -1579,7 +1725,7 @@ mod tests {
             );
             let dir = tempfile::tempdir().unwrap();
             let output = dir.path().join("program");
-            let verified = entry.verify().unwrap();
+            let verified = program.verify().unwrap();
             build_text(&emit(&verified, None), &output).unwrap();
             assert_eq!(
                 Command::new(output).status().unwrap().code(),
@@ -1590,10 +1736,40 @@ mod tests {
     }
 
     #[test]
+    fn traps_at_one_value_id_in_two_functions_link_separately() {
+        let program = lowered(
+            "fn divide(left: int, right: int) -> int { return left / right; }
+             fn modulo(left: int, right: int) -> int { return left % right; }
+             fn main() -> void { exit(divide(84, 2) - modulo(84, 42)); }",
+        );
+        let qbe = emit(&program, None);
+        let symbols: Vec<&str> = qbe
+            .lines()
+            .filter(|line| line.starts_with("data $fern_"))
+            .map(|line| line.split(' ').nth(1).expect("a named data definition"))
+            .collect();
+        // Both callees trap on the same value ID, so only the function keeps
+        // their message symbols apart.
+        for symbol in [
+            "$fern_function0_operation2_zero_message",
+            "$fern_function1_operation2_zero_message",
+        ] {
+            assert!(symbols.contains(&symbol), "{symbols:?}");
+        }
+        let unique: std::collections::BTreeSet<&&str> = symbols.iter().collect();
+        assert_eq!(unique.len(), symbols.len(), "{symbols:?}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("program");
+        build_text(&qbe, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+    }
+
+    #[test]
     fn negative_exit_values_are_masked_before_returning() {
         for (value, expected) in [(-1, 255), (i32::MIN, 0)] {
             for through_copy in [false, true] {
-                let entry = entry(
+                let program = program(
                     if through_copy {
                         vec![copy(integer(value)), copy(Operand::Value(ValueId(0)))]
                     } else {
@@ -1607,14 +1783,14 @@ mod tests {
                 )
                 .verify()
                 .unwrap();
-                let qbe = emit(&entry, None);
+                let qbe = emit(&program, None);
                 let expected_operand = if through_copy {
                     "%v1".to_owned()
                 } else {
                     value.to_string()
                 };
                 let expected_mask = format!(
-                    "%block0_status =w and {expected_operand}, 255\n    ret %block0_status"
+                    "%block0_status =w and {expected_operand}, 255\n    call $exit(w %block0_status)"
                 );
                 assert!(qbe.contains(&expected_mask));
                 if through_copy {
@@ -1625,7 +1801,7 @@ mod tests {
                 }
                 let dir = tempfile::tempdir().unwrap();
                 let output = dir.path().join("program");
-                build_text(&emit(&entry, None), &output).unwrap();
+                build_text(&emit(&program, None), &output).unwrap();
                 assert_eq!(
                     Command::new(output).status().unwrap().code(),
                     Some(expected)

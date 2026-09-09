@@ -22,7 +22,9 @@ an inferred count,
 [module-level declarations](examples/module_level_declarations.fern) for
 file-scope initialization and mutation, and
 [branches and loops](examples/branches_and_loops.fern) for boolean expressions,
-conditionals, and loop control.
+conditionals, and loop control. See
+[parameters, calls, and returns](examples/parameters_calls_and_returns.fern) for
+typed parameters, nested and recursive calls, and value and `void` returns.
 
 ## Build and run
 

@@ -2,7 +2,7 @@
 source: src/frontend.rs
 expression: project(&parse(source).unwrap())
 ---
-fn main name=3..7 span=0..108
+fn main name=3..7 result=Void span=0..108
   const exit_code name=26..35 annotation=None span=20..43
     integer 0x2A span=38..42
   var copy name=48..52 annotation=Some(TypeAnnotation { ty: Int, span: 54..57 }) span=44..70
@@ -11,6 +11,6 @@ fn main name=3..7 span=0..108
     reference copy span=76..80
   const after name=90..95 annotation=None span=84..106
     reference missing span=98..105
-fn helper name=112..118 span=109..144
+fn helper name=112..118 result=Void span=109..144
   exit span=131..142
     integer 000 span=136..139

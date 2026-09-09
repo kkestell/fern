@@ -236,7 +236,7 @@ Expected exit status: 42. Future file:
 
 ### Tasks
 
-- [ ] **Parse function signatures, calls, and returns**
+- [x] **Parse function signatures, calls, and returns**
 
   - Accept explicitly typed parameter lists, integer, boolean, and `void`
     result types, direct call expressions and statements, and both valid
@@ -244,7 +244,7 @@ Expected exit status: 42. Future file:
   - Cover empty and trailing-comma lists, nested calls, malformed signatures,
     malformed arguments, and malformed returns in parser tests and snapshots.
 
-- [ ] **Resolve and check function calls**
+- [x] **Resolve and check function calls**
 
   - Collect module-wide function signatures before checking bodies so forward,
     recursive, and mutually recursive calls resolve independently of declaration
@@ -255,7 +255,7 @@ Expected exit status: 42. Future file:
   - Diagnose non-function call targets, calls used as constant expressions,
     and `void` calls used as values.
 
-- [ ] **Check returns and function reachability**
+- [x] **Check returns and function reachability**
 
   - Enforce the return form and value type required by each function's declared
     result, including contextual typing of untyped constants.
@@ -263,7 +263,7 @@ Expected exit status: 42. Future file:
     branches, nested blocks, unconditional loops, and targeted `break`
     statements while continuing to check unreachable source.
 
-- [ ] **Represent and verify functions in Fern IR**
+- [x] **Represent and verify functions in Fern IR**
 
   - Represent every function once with its signature, parameters, body, calls,
     and return terminators, replacing the entry-only IR shape without creating
@@ -271,7 +271,7 @@ Expected exit status: 42. Future file:
   - Verify call targets, argument and result types, parameter locals, return
     terminators, and control-flow reachability in IR tests and snapshots.
 
-- [ ] **Compile and execute calls and returns**
+- [x] **Compile and execute calls and returns**
 
   - Emit native functions, parameters, left-to-right calls, and `void` and value
     returns, preserving module-level binding access and recursive execution.

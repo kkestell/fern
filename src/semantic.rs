@@ -1,9 +1,9 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::{
-        BinaryOperator, ComparisonOperator, Expression, ExpressionKind, ForHeader, Function,
-        LogicalOperator, Statement, StatementKind, Syntax, TopLevelItem, TypeAnnotation,
-        UnaryOperator, integer_parts,
+        BinaryOperator, Call, ComparisonOperator, Expression, ExpressionKind, ForHeader, Function,
+        FunctionResult, LogicalOperator, Statement, StatementKind, Syntax, TopLevelItem,
+        TypeAnnotation, UnaryOperator, integer_parts,
     },
     types::Type,
 };
@@ -63,6 +63,9 @@ pub(crate) enum ExpressionValue {
         operator_span: std::ops::Range<usize>,
         operand: Idx<Expression>,
     },
+    Call {
+        function: Idx<Function>,
+    },
 }
 
 #[derive(Debug)]
@@ -78,8 +81,14 @@ struct CheckedBinaryOperand {
     expression: CheckedExpression,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FunctionSignature {
+    pub parameters: Vec<Idx<Binding>>,
+    pub result: Option<Type>,
+}
+
 #[derive(Debug)]
-pub(crate) struct CheckedEntry<'a> {
+pub(crate) struct CheckedProgram<'a> {
     pub syntax: &'a Syntax,
     pub main: Idx<Function>,
     pub module_bindings: Vec<Idx<Statement>>,
@@ -87,12 +96,16 @@ pub(crate) struct CheckedEntry<'a> {
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
     pub bindings: Arena<Binding>,
     pub assignments: ArenaMap<Idx<Statement>, Idx<Binding>>,
+    pub function_names: HashMap<Spur, Idx<Function>>,
+    pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
+    pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
 }
 
-pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
+pub(crate) fn check(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
     let mut main = None;
     let mut module_names = HashSet::new();
     let mut module_declarations = HashMap::new();
+    let mut function_names = HashMap::new();
     let mut module_statements = Vec::new();
     for item in &syntax.items {
         match *item {
@@ -111,9 +124,36 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
                         format!("duplicate module-level name `{name}`"),
                     ));
                 }
+                let mut parameter_names = HashSet::new();
+                for parameter in &function.parameters {
+                    if !parameter_names.insert(parameter.name) {
+                        return Err(Diagnostic::new(
+                            parameter.name_span.clone(),
+                            format!(
+                                "duplicate parameter name `{}`",
+                                syntax.names.resolve(&parameter.name)
+                            ),
+                        ));
+                    }
+                }
+                if name == "main" {
+                    if let Some(parameter) = function.parameters.first() {
+                        return Err(Diagnostic::new(
+                            parameter.name_span.clone(),
+                            "`main` must not have parameters",
+                        ));
+                    }
+                    if let FunctionResult::Value(annotation) = &function.result {
+                        return Err(Diagnostic::new(
+                            annotation.span.clone(),
+                            "`main` must return `void`",
+                        ));
+                    }
+                }
                 if name == "main" {
                     main = Some(id);
                 }
+                function_names.insert(function.name, id);
             }
             TopLevelItem::Binding(id) => {
                 let StatementKind::Binding {
@@ -137,7 +177,7 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
         }
     }
     let main = main.ok_or_else(|| Diagnostic::new(0..0, "missing `main` function"))?;
-    let mut checked = CheckedEntry {
+    let mut checked = CheckedProgram {
         syntax,
         main,
         module_bindings: Vec::new(),
@@ -145,6 +185,9 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
         declarations: ArenaMap::default(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
+        function_names,
+        functions: ArenaMap::default(),
+        calls: ArenaMap::default(),
     };
 
     let mut module_scope = HashMap::new();
@@ -165,6 +208,31 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
         });
         checked.declarations.insert(statement, binding);
         module_scope.insert(*name, binding);
+    }
+
+    for item in &syntax.items {
+        let TopLevelItem::Function(function) = *item else {
+            continue;
+        };
+        let function_syntax = &syntax.functions[function];
+        let parameters = function_syntax
+            .parameters
+            .iter()
+            .map(|parameter| {
+                checked.bindings.alloc(Binding {
+                    ty: parameter.annotation.ty,
+                    mutable: false,
+                    constant: None,
+                })
+            })
+            .collect();
+        let result = match &function_syntax.result {
+            FunctionResult::Void => None,
+            FunctionResult::Value(annotation) => Some(annotation.ty),
+        };
+        checked
+            .functions
+            .insert(function, FunctionSignature { parameters, result });
     }
 
     let mut dependencies = HashMap::new();
@@ -226,17 +294,109 @@ pub(crate) fn check(syntax: &Syntax) -> Result<CheckedEntry<'_>, Diagnostic> {
     }
     checked.module_bindings = order;
 
-    let mut scopes = vec![module_scope];
     for item in &syntax.items {
         if let TopLevelItem::Function(function) = *item {
-            checked.check_body(
-                &syntax.functions[function].body,
-                &mut scopes,
-                &mut Vec::new(),
-            )?;
+            let parameter_bindings = checked.functions[function].parameters.clone();
+            let parameter_scope = syntax.functions[function]
+                .parameters
+                .iter()
+                .zip(parameter_bindings)
+                .map(|(parameter, binding)| (parameter.name, binding))
+                .collect();
+            let mut scopes = vec![module_scope.clone(), parameter_scope];
+            let result = checked.functions[function].result;
+            let body = &syntax.functions[function].body;
+            checked.check_body(body, result, &mut scopes, &mut Vec::new())?;
+            if result.is_some() && !body_terminates(syntax, body) {
+                let function = &syntax.functions[function];
+                return Err(Diagnostic::new(
+                    function.name_span.clone(),
+                    format!(
+                        "function `{}` can reach the end of its body without returning a value",
+                        syntax.names.resolve(&function.name)
+                    ),
+                ));
+            }
         }
     }
     Ok(checked)
+}
+
+/// Reports whether every path through `body` ends in a `return` or `exit`, using
+/// the structural rule under Function return in the specification.
+fn body_terminates(syntax: &Syntax, body: &[Idx<Statement>]) -> bool {
+    body.iter()
+        .any(|&statement| statement_terminates(syntax, statement))
+}
+
+fn statement_terminates(syntax: &Syntax, statement: Idx<Statement>) -> bool {
+    match &syntax.statements[statement].kind {
+        StatementKind::Return { .. } | StatementKind::Exit { .. } => true,
+        StatementKind::Block { body } => body_terminates(syntax, body),
+        StatementKind::If {
+            then_body,
+            else_branch,
+            ..
+        } => {
+            else_branch.is_some_and(|else_branch| statement_terminates(syntax, else_branch))
+                && body_terminates(syntax, then_body)
+        }
+        StatementKind::For {
+            label,
+            header,
+            body,
+        } => {
+            matches!(header, ForHeader::Infinite)
+                && !body_breaks(syntax, body, label.as_ref().map(|label| label.name), false)
+        }
+        _ => false,
+    }
+}
+
+/// Reports whether a reachable `break` in `body` targets the loop identified by
+/// `label`. `nested` marks a body that lies inside a loop enclosed by that one,
+/// where an unlabeled `break` targets the inner loop instead.
+fn body_breaks(
+    syntax: &Syntax,
+    body: &[Idx<Statement>],
+    label: Option<Spur>,
+    nested: bool,
+) -> bool {
+    for &statement in body {
+        if statement_breaks(syntax, statement, label, nested) {
+            return true;
+        }
+        if statement_terminates(syntax, statement) {
+            return false;
+        }
+    }
+    false
+}
+
+fn statement_breaks(
+    syntax: &Syntax,
+    statement: Idx<Statement>,
+    label: Option<Spur>,
+    nested: bool,
+) -> bool {
+    match &syntax.statements[statement].kind {
+        StatementKind::Break { label: target } => match target {
+            Some(target) => label == Some(target.name),
+            None => !nested,
+        },
+        StatementKind::Block { body } => body_breaks(syntax, body, label, nested),
+        StatementKind::If {
+            then_body,
+            else_branch,
+            ..
+        } => {
+            body_breaks(syntax, then_body, label, nested)
+                || else_branch
+                    .is_some_and(|else_branch| statement_breaks(syntax, else_branch, label, nested))
+        }
+        StatementKind::For { body, .. } => body_breaks(syntax, body, label, true),
+        _ => false,
+    }
 }
 
 #[derive(Clone)]
@@ -326,19 +486,25 @@ fn collect_references(
             collect_references(syntax, *left, references);
             collect_references(syntax, *right, references);
         }
+        ExpressionKind::Call(call) => {
+            for &argument in &call.arguments {
+                collect_references(syntax, argument, references);
+            }
+        }
     }
 }
 
-impl CheckedEntry<'_> {
+impl CheckedProgram<'_> {
     fn check_body(
         &mut self,
         body: &[Idx<Statement>],
+        result: Option<Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
         scopes.push(HashMap::new());
         for &statement in body {
-            self.check_statement(statement, scopes, loops)?;
+            self.check_statement(statement, result, scopes, loops)?;
         }
         scopes.pop();
         Ok(())
@@ -347,6 +513,7 @@ impl CheckedEntry<'_> {
     fn check_statement(
         &mut self,
         statement: Idx<Statement>,
+        result: Option<Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
@@ -419,7 +586,7 @@ impl CheckedEntry<'_> {
                 self.expressions.insert(*value, right.expression);
                 self.assignments.insert(statement, binding);
             }
-            StatementKind::Block { body } => self.check_body(body, scopes, loops)?,
+            StatementKind::Block { body } => self.check_body(body, result, scopes, loops)?,
             StatementKind::Exit { argument } => {
                 let expression = self.check_expression(*argument, scopes, Some(Type::Int))?;
                 self.expressions.insert(*argument, expression);
@@ -430,9 +597,9 @@ impl CheckedEntry<'_> {
                 else_branch,
             } => {
                 self.check_condition(*condition, scopes)?;
-                self.check_body(then_body, scopes, loops)?;
+                self.check_body(then_body, result, scopes, loops)?;
                 if let Some(else_branch) = else_branch {
-                    self.check_statement(*else_branch, scopes, loops)?;
+                    self.check_statement(*else_branch, result, scopes, loops)?;
                 }
             }
             StatementKind::For {
@@ -464,14 +631,14 @@ impl CheckedEntry<'_> {
                         post,
                     } => {
                         scopes.push(HashMap::new());
-                        self.check_statement(*initializer, scopes, loops)?;
+                        self.check_statement(*initializer, result, scopes, loops)?;
                         self.check_condition(*condition, scopes)?;
-                        self.check_statement(*post, scopes, loops)?;
+                        self.check_statement(*post, result, scopes, loops)?;
                         true
                     }
                 };
                 loops.push(label_name);
-                self.check_body(body, scopes, loops)?;
+                self.check_body(body, result, scopes, loops)?;
                 loops.pop();
                 if has_header_scope {
                     scopes.pop();
@@ -505,6 +672,29 @@ impl CheckedEntry<'_> {
                     ));
                 }
             }
+            StatementKind::Call { call } => {
+                let (function, _) = self.check_call(call, scopes, false)?;
+                self.calls.insert(statement, function);
+            }
+            StatementKind::Return { value } => match (result, value) {
+                (None, None) => {}
+                (None, Some(value)) => {
+                    return Err(Diagnostic::new(
+                        self.syntax.expressions[*value].span.clone(),
+                        "cannot return a value from a `void` function",
+                    ));
+                }
+                (Some(result), None) => {
+                    return Err(Diagnostic::new(
+                        self.syntax.statements[statement].span.clone(),
+                        format!("`return` must supply a value of type `{}`", result.name()),
+                    ));
+                }
+                (Some(result), Some(value)) => {
+                    let expression = self.check_expression(*value, scopes, Some(result))?;
+                    self.expressions.insert(*value, expression);
+                }
+            },
         }
         Ok(())
     }
@@ -537,6 +727,79 @@ impl CheckedEntry<'_> {
         let expression = self.check_expression(condition, scopes, Some(Type::Bool))?;
         self.expressions.insert(condition, expression);
         Ok(())
+    }
+
+    fn check_call(
+        &mut self,
+        call: &Call,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+        value_context: bool,
+    ) -> Result<(Idx<Function>, Option<Type>), Diagnostic> {
+        let function = self.resolve_call(call, scopes)?;
+        let signature = self.functions[function].clone();
+        if call.arguments.len() != signature.parameters.len() {
+            return Err(Diagnostic::new(
+                call.target_span.clone(),
+                format!(
+                    "function `{}` expects {} argument{}, found {}",
+                    self.syntax.names.resolve(&call.target),
+                    signature.parameters.len(),
+                    if signature.parameters.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    call.arguments.len(),
+                ),
+            ));
+        }
+        for (&argument, &parameter) in call.arguments.iter().zip(&signature.parameters) {
+            let expression =
+                self.check_expression(argument, scopes, Some(self.bindings[parameter].ty))?;
+            self.expressions.insert(argument, expression);
+        }
+        if value_context && signature.result.is_none() {
+            return Err(Diagnostic::new(
+                call.target_span.clone(),
+                format!(
+                    "void function `{}` cannot be used as a value",
+                    self.syntax.names.resolve(&call.target)
+                ),
+            ));
+        }
+        Ok((function, signature.result))
+    }
+
+    fn resolve_call(
+        &self,
+        call: &Call,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<Idx<Function>, Diagnostic> {
+        if scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(&call.target))
+        {
+            return Err(Diagnostic::new(
+                call.target_span.clone(),
+                format!(
+                    "cannot call non-function binding `{}`",
+                    self.syntax.names.resolve(&call.target)
+                ),
+            ));
+        }
+        self.function_names
+            .get(&call.target)
+            .copied()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    call.target_span.clone(),
+                    format!(
+                        "unknown function `{}`",
+                        self.syntax.names.resolve(&call.target)
+                    ),
+                )
+            })
     }
 
     fn resolve(
@@ -920,6 +1183,15 @@ impl CheckedEntry<'_> {
                     untyped: false,
                     value,
                     constant,
+                }
+            }
+            ExpressionKind::Call(call) => {
+                let (function, result) = self.check_call(call, scopes, true)?;
+                CheckedExpression {
+                    ty: result.expect("value-context call has a value result"),
+                    untyped: false,
+                    value: ExpressionValue::Call { function },
+                    constant: None,
                 }
             }
         };
@@ -1449,7 +1721,8 @@ mod tests {
                 | ExpressionValue::Binary { .. }
                 | ExpressionValue::Comparison { .. }
                 | ExpressionValue::Logical { .. }
-                | ExpressionValue::LogicalNot { .. } => None,
+                | ExpressionValue::LogicalNot { .. }
+                | ExpressionValue::Call { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -1523,6 +1796,324 @@ mod tests {
         let text = format!("fn main() -> void {{ {body} }}");
         let syntax = parse(&text).unwrap();
         check(&syntax).unwrap();
+    }
+
+    fn rejects_source(text: &str, offending: &str, message: &str) {
+        let syntax = parse(text).unwrap();
+        let error = check(&syntax).unwrap_err();
+        let start = text.rfind(offending).unwrap();
+        assert_eq!(error.span, start..start + offending.len(), "{text}");
+        assert_eq!(error.message, message, "{text}");
+    }
+
+    fn accepts_source(text: &str) {
+        let syntax = parse(text).unwrap();
+        check(&syntax).unwrap();
+    }
+
+    #[test]
+    fn returns_check_against_the_declared_result() {
+        let text = "fn nothing() -> void { return; }
+                    fn early(flag: bool) -> void {
+                        if flag {
+                            return;
+                        }
+                        exit(0);
+                    }
+                    fn falls_through() -> void {}
+                    fn narrow() -> u8 { return 200; }
+                    fn wide() -> i64 { return 1 + 2; }
+                    fn ready() -> bool { return 1 < 2; }
+                    fn branching(flag: bool) -> int {
+                        if flag {
+                            return 1;
+                        } else {
+                            return 2;
+                        }
+                    }
+                    fn main() -> void {}";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+        let returned = syntax
+            .statements
+            .iter()
+            .filter_map(|(_, statement)| match &statement.kind {
+                StatementKind::Return { value: Some(value) } => Some((
+                    &text[syntax.expressions[*value].span.clone()],
+                    checked.expressions[*value].ty,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned,
+            [
+                ("200", Type::U8),
+                ("1 + 2", Type::I64),
+                ("1 < 2", Type::Bool),
+                ("1", Type::Int),
+                ("2", Type::Int),
+            ]
+        );
+
+        rejects_source(
+            "fn main() -> void {} fn nothing() -> void { return 1; }",
+            "1",
+            "cannot return a value from a `void` function",
+        );
+        rejects_source(
+            "fn main() -> void {} fn total() -> int { return; }",
+            "return;",
+            "`return` must supply a value of type `int`",
+        );
+        rejects_source(
+            "fn main() -> void {} fn total() -> int { return true; }",
+            "true",
+            "cannot implicitly convert `bool` to `int`",
+        );
+        rejects_source(
+            "fn main() -> void {} fn narrow() -> u8 { return 256; }",
+            "256",
+            "integer literal out of range for `u8`",
+        );
+
+        // Statements after a `return` are still checked.
+        rejects(
+            "return; exit(missing);",
+            "missing",
+            "unknown binding `missing`",
+        );
+    }
+
+    #[test]
+    fn value_returning_functions_must_not_reach_the_end_of_their_body() {
+        for body in [
+            "if flag { return 1; } else { return 2; }",
+            "if flag { return 1; } else if flag { return 2; } else { return 3; }",
+            "{ return 1; }",
+            "exit(0);",
+            "for { }",
+            "for { for { break; } }",
+            "for :outer { for :inner { break :inner; } }",
+            "for { return 1; break; }",
+            "if flag { return 1; } else { for { } }",
+        ] {
+            accepts_source(&format!(
+                "fn main() -> void {{}} fn total(flag: bool) -> int {{ {body} }}"
+            ));
+        }
+
+        for body in [
+            "",
+            "if flag { return 1; }",
+            "if flag { return 1; } else if flag { return 2; }",
+            "for flag { return 1; }",
+            "for var i = 0; i < 1; i = i + 1 { return 1; }",
+            "for { break; }",
+            "for { if flag { break; } }",
+            "for :outer { for { break :outer; } }",
+            "for { { break; } }",
+        ] {
+            let text = format!("fn main() -> void {{}} fn total(flag: bool) -> int {{ {body} }}");
+            rejects_source(
+                &text,
+                "total",
+                "function `total` can reach the end of its body without returning a value",
+            );
+        }
+    }
+
+    #[test]
+    fn function_signatures_are_collected_before_call_checking() {
+        let text = "fn caller(value: int, flag: bool,) -> int {
+                        callee(value, flag);
+                        const nested: int = callee(callee(value, flag), flag);
+                        return nested;
+                     }
+                     fn callee(value: int, flag: bool) -> int { return value; }
+                     fn recursive(value: int) -> void { recursive(value); }
+                     fn mutual_left(value: int) -> int { mutual_right(value); return value; }
+                     fn mutual_right(value: int) -> void { mutual_left(value); }
+                     fn main() -> void {
+                         caller(1, true);
+                         callee(2, false);
+                         recursive(3);
+                         mutual_left(4);
+                     }";
+        let syntax = parse(text).unwrap();
+        let checked = check(&syntax).unwrap();
+
+        assert_eq!(checked.function_names.len(), 6);
+        assert_eq!(checked.functions.iter().count(), 6);
+        assert_eq!(checked.calls.iter().count(), 8);
+        assert!(
+            checked
+                .expressions
+                .iter()
+                .any(|(_, expression)| matches!(expression.value, ExpressionValue::Call { .. }))
+        );
+        for (_, signature) in checked.functions.iter() {
+            assert!(
+                signature
+                    .parameters
+                    .iter()
+                    .all(|parameter| !checked.bindings[*parameter].mutable)
+            );
+        }
+    }
+
+    #[test]
+    fn call_arguments_use_parameter_types_and_source_order() {
+        let syntax = parse(
+            "fn typed(value: u8, flag: bool) -> void {
+                 const copy: u8 = value;
+                 const ready: bool = flag;
+             }
+             fn main() -> void {
+                 typed(1, true);
+                 typed(1 + 2, false);
+             }",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| (binding.ty, binding.mutable))
+                .collect::<Vec<_>>(),
+            [
+                (Type::U8, false),
+                (Type::Bool, false),
+                (Type::U8, false),
+                (Type::Bool, false),
+            ]
+        );
+
+        rejects_source(
+            "fn typed(value: u8, flag: bool) -> void {} fn main() -> void { typed(256, missing); }",
+            "256",
+            "integer literal out of range for `u8`",
+        );
+    }
+
+    #[test]
+    fn calls_respect_shadowing_context_and_result_kind() {
+        rejects_source(
+            "fn target() -> void {} fn main() -> void { var target = 0; target(); }",
+            "target",
+            "cannot call non-function binding `target`",
+        );
+        rejects_source(
+            "fn target(target: int) -> void { target(); } fn main() -> void {}",
+            "target",
+            "cannot call non-function binding `target`",
+        );
+        rejects_source(
+            "fn target() -> void {} fn main() -> void { const value = target(); }",
+            "target",
+            "void function `target` cannot be used as a value",
+        );
+        rejects_source(
+            "fn target(value: int) -> int { return value; } fn main() -> void { target(); }",
+            "target",
+            "function `target` expects 1 argument, found 0",
+        );
+        rejects_source(
+            "fn main() -> void { missing(); }",
+            "missing",
+            "unknown function `missing`",
+        );
+        rejects_source(
+            "fn target(first: int, second: bool) -> void {} fn main() -> void { target(1); }",
+            "target",
+            "function `target` expects 2 arguments, found 1",
+        );
+        rejects_source(
+            "fn target(value: int) -> void {} fn main() -> void { target(true); }",
+            "true",
+            "cannot implicitly convert `bool` to `int`",
+        );
+        rejects_source(
+            "fn target() -> void {} fn main(value: int) -> void {}",
+            "value",
+            "`main` must not have parameters",
+        );
+        rejects_source(
+            "fn target() -> void {} fn main() -> int {}",
+            "int",
+            "`main` must return `void`",
+        );
+        rejects_source(
+            "fn target() -> void {} fn main() -> void { const value = target; }",
+            "target",
+            "unknown binding `target`",
+        );
+    }
+
+    #[test]
+    fn parameters_are_shadowed_by_local_bindings_and_restored_after_their_scope() {
+        let syntax = parse(
+            "fn typed(value: u8) -> u8 {
+                 { var value: bool = true; }
+                 const copy: u8 = value;
+                 return copy;
+             }
+             fn main() -> void {}",
+        )
+        .unwrap();
+        let checked = check(&syntax).unwrap();
+        let typed = syntax
+            .functions
+            .iter()
+            .find(|(_, function)| !function.parameters.is_empty())
+            .map(|(id, _)| id)
+            .unwrap();
+        let parameter = checked.functions[typed].parameters[0];
+        assert_eq!(
+            checked
+                .bindings
+                .iter()
+                .map(|(_, binding)| (binding.ty, binding.mutable))
+                .collect::<Vec<_>>(),
+            [(Type::U8, false), (Type::Bool, true), (Type::U8, false)]
+        );
+        let initializer = match &syntax.statements[syntax.functions[typed].body[1]].kind {
+            StatementKind::Binding { initializer, .. } => *initializer,
+            _ => unreachable!("the shadowing scope ends before the copy"),
+        };
+        assert_eq!(
+            checked.expressions[initializer].value,
+            ExpressionValue::Reference(parameter)
+        );
+    }
+
+    #[test]
+    fn parameters_are_immutable_and_duplicate_names_are_rejected() {
+        rejects_source(
+            "fn target(value: int, value: bool) -> void {} fn main() -> void {}",
+            "value",
+            "duplicate parameter name `value`",
+        );
+        rejects_source(
+            "fn target(value: int) -> void { value = 1; } fn main() -> void {}",
+            "value",
+            "cannot assign to immutable binding `value`",
+        );
+        rejects_source(
+            "fn target(value: int) -> void { value += 1; } fn main() -> void {}",
+            "value",
+            "cannot assign to immutable binding `value`",
+        );
+    }
+
+    #[test]
+    fn calls_are_not_constant_expressions() {
+        rejects_source(
+            "fn value() -> int { return 1; } const result = value(); fn main() -> void {}",
+            "value()",
+            "module-level initializer must be a constant expression",
+        );
     }
 
     #[test]

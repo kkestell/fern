@@ -1,0 +1,39 @@
+var trace = 0;
+
+fn mark(digit: int) -> int {
+    trace = trace * 10 + digit;
+    return digit;
+}
+
+fn difference(left: int, right: int) -> int {
+    return left - right;
+}
+
+fn sum_to(value: int) -> int {
+    if value == 0 {
+        return 0;
+    }
+    return value + sum_to(value - 1);
+}
+
+fn positive(value: int) -> bool {
+    return value > 0;
+}
+
+fn remember_zero(value: int) -> void {
+    if value == 0 {
+        return;
+    }
+    trace = 255;
+}
+
+fn main() -> void {
+    difference(mark(4), mark(2));
+    const total = sum_to(3);
+    remember_zero(0);
+
+    if positive(total) {
+        exit(trace);
+    }
+    exit(255);
+}

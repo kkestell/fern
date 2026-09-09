@@ -45,13 +45,12 @@ This skill produces an implementation plan. It never implements the plan.
 
 ### Explore and size
 
-5. Inspect the smallest useful part of the repository.
+5. Inspect the relevant parts of the repository.
    - Find the attachment points, adjacent patterns, affected public boundaries,
      and tests.
    - Use targeted searches and file ranges. Do not dump whole directories or
      reread guidance already present in the session.
-   - Check architectural fit directly. Do not produce a separate PHAME,
-     pre-mortem, scoring, or steelman report.
+   - Check architectural fit directly.
 6. Write one plan for the selected roadmap task.
    - Use the task's roadmap-defined scope to identify concrete changes and
      focused checks.
@@ -63,6 +62,8 @@ This skill produces an implementation plan. It never implements the plan.
      boundary.
    - Preserve existing supported behavior. Add temporary safeguards only where
      needed for correctness.
+   - The plan should be detailed enough that a lesser model can complete it
+     without requiring advanced reasoning or problem solving.
 
 ### Write
 

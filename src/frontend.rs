@@ -27,6 +27,8 @@ enum Token {
     Break,
     #[token("continue")]
     Continue,
+    #[token("return")]
+    Return,
     #[token("true")]
     True,
     #[token("false")]
@@ -160,9 +162,24 @@ fn block_comment(lexer: &mut logos::Lexer<'_, Token>) -> Result<logos::Skip, ()>
 pub(crate) struct Function {
     pub name: Spur,
     pub name_span: Range<usize>,
+    pub parameters: Vec<Parameter>,
+    pub result: FunctionResult,
     #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
     pub body: Vec<Idx<Statement>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Parameter {
+    pub name: Spur,
+    pub name_span: Range<usize>,
+    pub annotation: TypeAnnotation,
+}
+
+#[derive(Debug)]
+pub(crate) enum FunctionResult {
+    Void,
+    Value(TypeAnnotation),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -204,6 +221,12 @@ pub(crate) enum StatementKind {
     Exit {
         argument: Idx<Expression>,
     },
+    Call {
+        call: Call,
+    },
+    Return {
+        value: Option<Idx<Expression>>,
+    },
     If {
         condition: Idx<Expression>,
         then_body: Vec<Idx<Statement>>,
@@ -226,6 +249,16 @@ pub(crate) enum StatementKind {
 pub(crate) struct Label {
     pub name: Spur,
     pub name_span: Range<usize>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Call {
+    pub target: Spur,
+    pub target_span: Range<usize>,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
+    pub left_paren_span: Range<usize>,
+    pub right_paren_span: Range<usize>,
+    pub arguments: Vec<Idx<Expression>>,
 }
 
 #[derive(Debug)]
@@ -359,6 +392,7 @@ pub(crate) enum ExpressionKind {
         truncating: bool,
         operand: Idx<Expression>,
     },
+    Call(Call),
 }
 
 #[derive(Debug, Default)]
@@ -386,6 +420,9 @@ fn reserved(name: &str) -> bool {
             | "for"
             | "break"
             | "continue"
+            | "return"
+            | "pub"
+            | "use"
     ) || Type::named(name).is_some()
 }
 
@@ -525,20 +562,49 @@ impl Parser<'_> {
     fn function(&mut self) -> Result<Idx<Function>, Diagnostic> {
         let start = self.expect(Token::Fn, "expected `fn`")?.start;
         let (name, name_span) = self.name("expected a function name")?;
-        self.expect(Token::LeftParen, "expected `(`")?;
-        self.expect(
-            Token::RightParen,
-            "expected `)`; parameters are not supported",
-        )?;
+        let parameters = self.parameters()?;
         self.expect(Token::Arrow, "expected `->`")?;
-        self.expect(Token::Void, "expected `void`")?;
+        let result = if self.current == Some(Token::Void) {
+            self.advance()?;
+            FunctionResult::Void
+        } else {
+            FunctionResult::Value(self.type_annotation()?)
+        };
         let (body, end) = self.body()?;
         Ok(self.syntax.functions.alloc(Function {
             name,
             name_span,
+            parameters,
+            result,
             span: start..end,
             body,
         }))
+    }
+
+    fn parameters(&mut self) -> Result<Vec<Parameter>, Diagnostic> {
+        self.expect(Token::LeftParen, "expected `(`")?;
+        let mut parameters = Vec::new();
+        if self.current != Some(Token::RightParen) {
+            loop {
+                let (name, name_span) = self.name("expected a parameter name")?;
+                self.expect(Token::Colon, "expected `:` after parameter name")?;
+                let annotation = self.type_annotation()?;
+                parameters.push(Parameter {
+                    name,
+                    name_span,
+                    annotation,
+                });
+                if self.current != Some(Token::Comma) {
+                    break;
+                }
+                self.advance()?;
+                if self.current == Some(Token::RightParen) {
+                    break;
+                }
+            }
+        }
+        self.expect(Token::RightParen, "expected `)` after parameter list")?;
+        Ok(parameters)
     }
 
     fn top_level_binding(&mut self) -> Result<Idx<Statement>, Diagnostic> {
@@ -582,6 +648,7 @@ impl Parser<'_> {
         }
         let kind = match self.current {
             Some(Token::Const) | Some(Token::Var) => self.binding()?,
+            Some(Token::Name) if self.starts_call() => StatementKind::Call { call: self.call()? },
             Some(Token::Name) => self.assignment()?,
             Some(Token::Exit) => {
                 self.advance()?;
@@ -611,9 +678,16 @@ impl Parser<'_> {
                     label: self.optional_label("expected a label after `:`")?,
                 }
             }
+            Some(Token::Return) => {
+                self.advance()?;
+                let value = (self.current != Some(Token::Semicolon))
+                    .then(|| self.expression())
+                    .transpose()?;
+                StatementKind::Return { value }
+            }
             _ => {
                 return Err(self.error(
-                    "expected a declaration, assignment, block, `if`, `for`, loop control, or `exit`",
+                    "expected a declaration, assignment, call, block, `if`, `for`, loop control, `return`, or `exit`",
                 ));
             }
         };
@@ -798,6 +872,47 @@ impl Parser<'_> {
                 | Token::WrappingMinusEquals
                 | Token::WrappingStarEquals))
         )
+    }
+
+    fn starts_call(&self) -> bool {
+        self.current == Some(Token::Name)
+            && matches!(self.lexer.clone().next(), Some(Ok(Token::LeftParen)))
+    }
+
+    fn call(&mut self) -> Result<Call, Diagnostic> {
+        let (target, target_span) = self.name("expected a call target")?;
+        self.call_parts(target, target_span)
+    }
+
+    fn call_parts(&mut self, target: Spur, target_span: Range<usize>) -> Result<Call, Diagnostic> {
+        self.enter_nesting()?;
+        let left_paren_span = self.expect(Token::LeftParen, "expected `(` after call target")?;
+        let mut arguments = Vec::new();
+        if self.current != Some(Token::RightParen) {
+            loop {
+                arguments.push(self.expression()?);
+                match self.current {
+                    Some(Token::Comma) => {
+                        self.advance()?;
+                        if self.current == Some(Token::RightParen) {
+                            break;
+                        }
+                    }
+                    Some(Token::RightParen) => break,
+                    _ => return Err(self.error("expected `,` or `)` after call argument")),
+                }
+            }
+        }
+        let right_paren_span =
+            self.expect(Token::RightParen, "expected `)` after call arguments")?;
+        self.nesting -= 1;
+        Ok(Call {
+            target,
+            target_span,
+            left_paren_span,
+            right_paren_span,
+            arguments,
+        })
     }
 
     fn binding(&mut self) -> Result<StatementKind, Diagnostic> {
@@ -1019,7 +1134,22 @@ impl Parser<'_> {
                 depth: self.syntax.expressions[expression].depth + 1,
             }));
         } else {
-            let (name, _) = self.name("expected an expression")?;
+            let (name, target_span) = self.name("expected an expression")?;
+            if self.current == Some(Token::LeftParen) {
+                let call = self.call_parts(name, target_span)?;
+                let end = call.right_paren_span.end;
+                return Ok(self.syntax.expressions.alloc(Expression {
+                    depth: call
+                        .arguments
+                        .iter()
+                        .map(|argument| self.syntax.expressions[*argument].depth)
+                        .max()
+                        .unwrap_or(0)
+                        + 1,
+                    span: span.start..end,
+                    kind: ExpressionKind::Call(call),
+                }));
+            }
             ExpressionKind::Reference(name)
         };
         Ok(self.syntax.expressions.alloc(Expression {
@@ -1043,12 +1173,23 @@ mod tests {
                     let function = &syntax.functions[*id];
                     writeln!(
                         output,
-                        "fn {} name={:?} span={:?}",
+                        "fn {} name={:?} result={:?} span={:?}",
                         syntax.names.resolve(&function.name),
                         function.name_span,
+                        function.result,
                         function.span
                     )
                     .unwrap();
+                    for parameter in &function.parameters {
+                        writeln!(
+                            output,
+                            "  parameter {} name={:?} annotation={:?}",
+                            syntax.names.resolve(&parameter.name),
+                            parameter.name_span,
+                            parameter.annotation
+                        )
+                        .unwrap();
+                    }
                     project_body(syntax, &function.body, 1, &mut output);
                 }
                 TopLevelItem::Binding(id) => {
@@ -1118,6 +1259,29 @@ mod tests {
                 StatementKind::Exit { argument } => {
                     write!(output, "{indent}exit").unwrap();
                     *argument
+                }
+                StatementKind::Call { call } => {
+                    writeln!(
+                        output,
+                        "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}",
+                        syntax.names.resolve(&call.target),
+                        call.target_span,
+                        call.left_paren_span,
+                        call.right_paren_span,
+                        statement.span
+                    )
+                    .unwrap();
+                    for &argument in &call.arguments {
+                        project_expression(syntax, argument, depth + 1, output);
+                    }
+                    continue;
+                }
+                StatementKind::Return { value } => {
+                    writeln!(output, "{indent}return span={:?}", statement.span).unwrap();
+                    if let Some(value) = value {
+                        project_expression(syntax, *value, depth + 1, output);
+                    }
+                    continue;
                 }
                 StatementKind::If {
                     condition,
@@ -1313,6 +1477,21 @@ mod tests {
                 .unwrap();
                 project_expression(syntax, *operand, depth + 1, output);
             }
+            ExpressionKind::Call(call) => {
+                writeln!(
+                    output,
+                    "{indent}call {} target={:?} left_paren={:?} right_paren={:?} span={:?}",
+                    syntax.names.resolve(&call.target),
+                    call.target_span,
+                    call.left_paren_span,
+                    call.right_paren_span,
+                    expression.span
+                )
+                .unwrap();
+                for &argument in &call.arguments {
+                    project_expression(syntax, argument, depth + 1, output);
+                }
+            }
         }
     }
 
@@ -1326,6 +1505,64 @@ mod tests {
     fn interleaved_top_level_bindings_snapshot() {
         let source = "const start: int = 40; fn main() -> void { var local = start; exit(local); } var counter = start + 2; fn helper() -> void {} const last = counter;";
         insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn function_signatures_calls_and_returns_snapshot() {
+        let source = "fn mark(digit: int, flag: bool,) -> int { return digit; } fn nothing() -> void { return; } fn main() -> void { mark(1, true,); nothing(); const value = mark(mark(2, false), true) + mark(3, true); if value > 0 && true { return; } }";
+        insta::assert_snapshot!(project(&parse(source).unwrap()));
+    }
+
+    #[test]
+    fn malformed_function_signatures_calls_and_returns_report_the_offending_token() {
+        for (marked, message) in [
+            (
+                "fn f(«,» value: int) -> void {}",
+                "expected a parameter name",
+            ),
+            (
+                "fn f(value «int») -> void {}",
+                "expected `:` after parameter name",
+            ),
+            ("fn f(value: «)» -> void {}", "expected a type"),
+            ("fn f(value: «void» ) -> void {}", "expected a type"),
+            (
+                "fn f(value: int «other»: bool) -> void {}",
+                "expected `)` after parameter list",
+            ),
+            (
+                "fn f(value: int «->» void {})",
+                "expected `)` after parameter list",
+            ),
+            ("fn f(value: int) -> «{»", "expected a type"),
+            (
+                "fn f(value: int) -> int { return «+»; }",
+                "expected an expression",
+            ),
+            ("fn f() -> void { target(«,»); }", "expected an expression"),
+            (
+                "fn f() -> void { target(1 «2»); }",
+                "expected `,` or `)` after call argument",
+            ),
+            (
+                "fn f() -> void { target(1«;» }",
+                "expected `,` or `)` after call argument",
+            ),
+            ("fn f() -> void { target(1) «}»", "expected `;`"),
+            ("fn f() -> void { return 1 «}»", "expected `;`"),
+        ] {
+            let prefix = "/* 🌿 */ ";
+            let start = marked.find('«').unwrap();
+            let end = marked.find('»').unwrap() - '«'.len_utf8();
+            let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, message, "{marked}");
+            assert_eq!(
+                error.span,
+                prefix.len() + start..prefix.len() + end,
+                "{marked}"
+            );
+        }
     }
 
     #[test]
@@ -1729,6 +1966,7 @@ mod tests {
         for name in [
             "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
             "u16", "u32", "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
+            "return", "pub", "use",
         ] {
             for (prefix, suffix) in [
                 ("fn ", "() -> void {}"),
@@ -1743,7 +1981,8 @@ mod tests {
 
         for name in [
             "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32",
-            "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
+            "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue", "return",
+            "pub", "use",
         ] {
             for (prefix, suffix) in [
                 ("fn main() -> void { const x = ", "; }"),

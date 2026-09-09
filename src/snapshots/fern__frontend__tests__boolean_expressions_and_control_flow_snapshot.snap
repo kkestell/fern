@@ -2,7 +2,7 @@
 source: src/frontend.rs
 expression: project(&parse(source).unwrap())
 ---
-fn main name=3..7 span=0..356
+fn main name=3..7 result=Void span=0..356
   var ready name=24..29 annotation=Some(TypeAnnotation { ty: Bool, span: 31..35 }) span=20..43
     boolean true span=38..42
   const stopped name=50..57 annotation=None span=44..66

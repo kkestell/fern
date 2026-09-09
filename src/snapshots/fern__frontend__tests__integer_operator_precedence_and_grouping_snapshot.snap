@@ -2,7 +2,7 @@
 source: src/frontend.rs
 expression: project(&parse(source).unwrap())
 ---
-fn main name=3..7 span=0..281
+fn main name=3..7 result=Void span=0..281
   const high name=26..30 annotation=None span=20..66
     binary And operator=62..63 span=33..65
       binary ShiftRight operator=57..59 span=33..61

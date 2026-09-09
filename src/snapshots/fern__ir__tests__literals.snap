@@ -1,36 +1,45 @@
 ---
 source: src/ir.rs
-expression: entry.entry()
+expression: program.program()
 ---
-Entry {
-    values: [],
-    flow: ControlFlow {
-        entry: BlockId(
-            0,
-        ),
-        locals: [
-            Int,
-        ],
-        blocks: [
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            0,
-                        ),
-                        operand: Integer {
-                            value: 7,
-                            ty: Int,
+Program {
+    globals: [],
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 7,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Return {
+                            value: None,
                         },
                     },
                 ],
-                terminator: Exit {
-                    status: Integer {
-                        value: 0,
-                        ty: Int,
-                    },
-                },
             },
-        ],
-    },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
 }

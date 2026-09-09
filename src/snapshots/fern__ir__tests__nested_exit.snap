@@ -1,61 +1,77 @@
 ---
 source: src/ir.rs
-expression: entry.entry()
+expression: program.program()
 ---
-Entry {
-    values: [
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    0,
-                ),
-            ),
-        },
-    ],
-    flow: ControlFlow {
-        entry: BlockId(
-            0,
-        ),
-        locals: [
-            Int,
-        ],
-        blocks: [
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            0,
-                        ),
-                        operand: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
-                    },
-                    Store {
-                        local: LocalId(
-                            0,
-                        ),
-                        operand: Integer {
-                            value: 42,
-                            ty: Int,
-                        },
-                    },
-                    Value(
-                        ValueId(
-                            0,
-                        ),
-                    ),
-                ],
-                terminator: Exit {
-                    status: Value(
-                        ValueId(
-                            0,
+Program {
+    globals: [],
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
                         ),
                     ),
                 },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 1,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 42,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                        },
+                    },
+                ],
             },
-        ],
-    },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
 }

@@ -2,7 +2,7 @@
 source: src/frontend.rs
 expression: project(&parse(&source).unwrap())
 ---
-fn main name=14..18 span=11..660
+fn main name=14..18 result=Void span=11..660
   var value name=35..40 annotation=Some(TypeAnnotation { ty: I8, span: 42..44 }) span=31..52
     integer 0x2A span=47..51
   block span=53..91

@@ -168,8 +168,8 @@ fn source_failures_preserve_output() {
         ("fn main() -> void { x 1; }", "expected `=`"),
         ("fn main() -> void { x = 1 }", "expected `;`"),
         ("fn main() -> void { { }", "expected `}`"),
-        ("fn main(x) -> void {}", "parameters are not supported"),
-        ("fn main() -> int {}", "expected `void`"),
+        ("fn main(x) -> void {}", "expected `:` after parameter name"),
+        ("fn main() -> int {}", "`main` must return `void`"),
         (
             "fn main() -> void {} trailing",
             "expected a top-level declaration",
@@ -293,6 +293,151 @@ fn branches_and_loops_execute() {
             Some(expected)
         );
     }
+}
+
+#[test]
+fn parameters_calls_and_returns_execute() {
+    for source in [
+        include_str!("../examples/parameters_calls_and_returns.fern"),
+        // A call nested in an argument and in an expression.
+        "fn twice(value: int) -> int {
+             return value * 2;
+         }
+         fn main() -> void {
+             exit(twice(twice(10)) + 2);
+         }",
+        // Arguments run left to right, whatever they mutate.
+        "var trace = 0;
+         fn mark(digit: int) -> int {
+             trace = trace * 10 + digit;
+             return digit;
+         }
+         fn pair(left: int, right: int) -> int {
+             return left + right;
+         }
+         fn main() -> void {
+             pair(mark(4), mark(2));
+             exit(trace);
+         }",
+        // A discarded result does not change execution.
+        "var trace = 0;
+         fn bump() -> int {
+             trace += 42;
+             return 7;
+         }
+         fn main() -> void {
+             bump();
+             exit(trace);
+         }",
+        // A call to a function declared after `main`.
+        "fn main() -> void {
+             exit(answer());
+         }
+         fn answer() -> int {
+             return 42;
+         }",
+        // Direct recursion.
+        "fn sum_to(value: int) -> int {
+             if value == 0 {
+                 return 0;
+             }
+             return value + sum_to(value - 1);
+         }
+         fn main() -> void {
+             exit(sum_to(6) + 21);
+         }",
+        // Mutual recursion, with a `bool` result used as a condition.
+        "fn even(value: int) -> bool {
+             if value == 0 {
+                 return true;
+             }
+             return odd(value - 1);
+         }
+         fn odd(value: int) -> bool {
+             if value == 0 {
+                 return false;
+             }
+             return even(value - 1);
+         }
+         fn main() -> void {
+             if even(10) && odd(7) {
+                 exit(42);
+             }
+             exit(1);
+         }",
+        // A call whose argument short-circuits, used as an operand of a binary
+        // operation, a comparison, and a compound assignment.
+        "fn pick(flag: bool) -> int {
+             if flag {
+                 return 1;
+             }
+             return 2;
+         }
+         fn main() -> void {
+             var yes = true;
+             var no = false;
+             var total = 40;
+             total += pick(yes && no);
+             if total == 40 + pick(yes && no) {
+                 exit(total + pick(no || yes) - 1);
+             }
+             exit(1);
+         }",
+        // An early `return` from a function returning nothing.
+        "var trace = 42;
+         fn keep(flag: bool) -> void {
+             if flag {
+                 return;
+             }
+             trace = 1;
+         }
+         fn main() -> void {
+             keep(true);
+             exit(trace);
+         }",
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(42),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn exit_inside_a_called_function_does_not_return_to_its_caller() {
+    let (_dir, input, output) = fixture(
+        "var trace = 42;
+         fn quit(status: int) -> void {
+             exit(status);
+             trace = 1;
+         }
+         fn main() -> void {
+             quit(trace);
+             exit(1);
+         }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn runtime_failures_inside_a_called_function_report_their_source_location() {
+    let source = "fn divide(left: int, right: int) -> int {\n    return left / right;\n}\n\nfn main() -> void {\n    exit(divide(1, 0));\n}\n";
+    let (dir, _, output) = fixture(source);
+    let input = dir.path().join("callee.fern");
+    fs::write(&input, source).unwrap();
+    fern::compile(&input, &output).unwrap();
+    let result = Command::new(output).output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        stderr.contains("integer `/` has a zero divisor"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("callee.fern:2:"), "{stderr}");
 }
 
 #[test]

@@ -1,380 +1,362 @@
 ---
 source: src/ir.rs
-expression: entry.entry()
+expression: program.program()
 ---
-Entry {
-    values: [
-        Value {
-            span: None,
-            ty: Bool,
-            kind: Load(
-                LocalId(
-                    1,
-                ),
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    0,
-                ),
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    3,
-                ),
-            ),
-        },
-        Value {
-            span: Some(
-                127..129,
-            ),
-            ty: Bool,
-            kind: Comparison {
-                operator: NotEqual,
-                left: Value(
-                    ValueId(
-                        2,
+Program {
+    globals: [],
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Bool,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
                     ),
-                ),
-                right: Integer {
-                    value: 0,
+                },
+                Value {
+                    span: None,
                     ty: Int,
-                },
-            },
-        },
-        Value {
-            span: None,
-            ty: Bool,
-            kind: Load(
-                LocalId(
-                    2,
-                ),
-            ),
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    0,
-                ),
-            ),
-        },
-        Value {
-            span: Some(
-                138..139,
-            ),
-            ty: Int,
-            kind: Binary {
-                operator: Divide,
-                form: Infix,
-                left: Integer {
-                    value: 10,
-                    ty: Int,
-                },
-                right: Value(
-                    ValueId(
-                        5,
-                    ),
-                ),
-            },
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    5,
-                ),
-            ),
-        },
-        Value {
-            span: Some(
-                148..149,
-            ),
-            ty: Bool,
-            kind: Comparison {
-                operator: Greater,
-                left: Value(
-                    ValueId(
-                        7,
-                    ),
-                ),
-                right: Integer {
-                    value: 1,
-                    ty: Int,
-                },
-            },
-        },
-        Value {
-            span: None,
-            ty: Bool,
-            kind: Load(
-                LocalId(
-                    4,
-                ),
-            ),
-        },
-    ],
-    flow: ControlFlow {
-        entry: BlockId(
-            0,
-        ),
-        locals: [
-            Int,
-            Bool,
-            Bool,
-            Int,
-            Bool,
-            Int,
-        ],
-        blocks: [
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            0,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
                         ),
-                        operand: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
-                    },
-                    Store {
-                        local: LocalId(
-                            1,
-                        ),
-                        operand: Integer {
-                            value: 1,
-                            ty: Bool,
-                        },
-                    },
-                    Value(
-                        ValueId(
-                            0,
-                        ),
-                    ),
-                ],
-                terminator: Branch {
-                    condition: Value(
-                        ValueId(
-                            0,
-                        ),
-                    ),
-                    then_target: BlockId(
-                        1,
-                    ),
-                    else_target: BlockId(
-                        2,
                     ),
                 },
-            },
-            Block {
-                instructions: [
-                    Value(
-                        ValueId(
-                            1,
-                        ),
+                Value {
+                    span: Some(
+                        127..129,
                     ),
-                    Store {
-                        local: LocalId(
-                            3,
-                        ),
-                        operand: Value(
+                    ty: Bool,
+                    kind: Comparison {
+                        operator: NotEqual,
+                        left: Value(
                             ValueId(
                                 1,
                             ),
                         ),
+                        right: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
                     },
-                    Value(
-                        ValueId(
-                            2,
+                },
+                Value {
+                    span: None,
+                    ty: Bool,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
                         ),
                     ),
-                    Value(
-                        ValueId(
-                            3,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
                         ),
                     ),
-                    Store {
-                        local: LocalId(
-                            2,
-                        ),
-                        operand: Value(
+                },
+                Value {
+                    span: Some(
+                        138..139,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Divide,
+                        form: Infix,
+                        left: Integer {
+                            value: 10,
+                            ty: Int,
+                        },
+                        right: Value(
                             ValueId(
+                                4,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: Some(
+                        148..149,
+                    ),
+                    ty: Bool,
+                    kind: Comparison {
+                        operator: Greater,
+                        left: Value(
+                            ValueId(
+                                5,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Bool,
+                    kind: Load(
+                        Local(
+                            LocalId(
                                 3,
                             ),
                         ),
-                    },
-                ],
-                terminator: Jump {
-                    target: BlockId(
-                        3,
                     ),
                 },
-            },
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            2,
-                        ),
-                        operand: Integer {
-                            value: 0,
-                            ty: Bool,
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                    Bool,
+                    Bool,
+                    Bool,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 1,
+                                    ty: Bool,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
                         },
                     },
-                ],
-                terminator: Jump {
-                    target: BlockId(
-                        3,
-                    ),
-                },
-            },
-            Block {
-                instructions: [
-                    Value(
-                        ValueId(
-                            4,
-                        ),
-                    ),
-                ],
-                terminator: Branch {
-                    condition: Value(
-                        ValueId(
-                            4,
-                        ),
-                    ),
-                    then_target: BlockId(
-                        4,
-                    ),
-                    else_target: BlockId(
-                        5,
-                    ),
-                },
-            },
-            Block {
-                instructions: [
-                    Value(
-                        ValueId(
-                            5,
-                        ),
-                    ),
-                    Value(
-                        ValueId(
-                            6,
-                        ),
-                    ),
-                    Store {
-                        local: LocalId(
-                            5,
-                        ),
-                        operand: Value(
-                            ValueId(
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Bool,
+                                },
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                4,
+                            ),
+                            else_target: BlockId(
+                                5,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        6,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
                                 6,
                             ),
-                        ),
+                        },
                     },
-                    Value(
-                        ValueId(
-                            7,
-                        ),
-                    ),
-                    Value(
-                        ValueId(
-                            8,
-                        ),
-                    ),
-                    Store {
-                        local: LocalId(
-                            4,
-                        ),
-                        operand: Value(
-                            ValueId(
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Bool,
+                                },
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                6,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                7,
+                            ),
+                            else_target: BlockId(
                                 8,
                             ),
-                        ),
+                        },
                     },
-                ],
-                terminator: Jump {
-                    target: BlockId(
-                        6,
-                    ),
-                },
-            },
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            4,
-                        ),
-                        operand: Integer {
-                            value: 0,
-                            ty: Bool,
+                    Block {
+                        instructions: [],
+                        terminator: Exit {
+                            status: Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                9,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Exit {
+                            status: Integer {
+                                value: 0,
+                                ty: Int,
+                            },
                         },
                     },
                 ],
-                terminator: Jump {
-                    target: BlockId(
-                        6,
-                    ),
-                },
             },
-            Block {
-                instructions: [
-                    Value(
-                        ValueId(
-                            9,
-                        ),
-                    ),
-                ],
-                terminator: Branch {
-                    condition: Value(
-                        ValueId(
-                            9,
-                        ),
-                    ),
-                    then_target: BlockId(
-                        7,
-                    ),
-                    else_target: BlockId(
-                        8,
-                    ),
-                },
-            },
-            Block {
-                instructions: [],
-                terminator: Exit {
-                    status: Integer {
-                        value: 1,
-                        ty: Int,
-                    },
-                },
-            },
-            Block {
-                instructions: [],
-                terminator: Jump {
-                    target: BlockId(
-                        9,
-                    ),
-                },
-            },
-            Block {
-                instructions: [],
-                terminator: Exit {
-                    status: Integer {
-                        value: 0,
-                        ty: Int,
-                    },
-                },
-            },
-        ],
-    },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
 }

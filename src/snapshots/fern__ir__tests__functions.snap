@@ -1,0 +1,865 @@
+---
+source: src/ir.rs
+expression: program.program()
+---
+Program {
+    globals: [
+        Global {
+            ty: Int,
+            value: 0,
+        },
+    ],
+    functions: [
+        Function {
+            parameters: 1,
+            result: Some(
+                Int,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        89..90,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Multiply,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 10,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        94..95,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        3,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 2,
+            result: Some(
+                Int,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        238..239,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Subtract,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: Some(
+                Int,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        333..335,
+                    ),
+                    ty: Bool,
+                    kind: Comparison {
+                        operator: Equal,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        435..436,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Subtract,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                3,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: Some(
+                        420..421,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                5,
+                            ),
+                        ),
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Return {
+                            value: Some(
+                                Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        5,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    2,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            4,
+                                        ),
+                                    ),
+                                ],
+                                span: 422..439,
+                            },
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        6,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: Some(
+                Bool,
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        534..535,
+                    ),
+                    ty: Bool,
+                    kind: Comparison {
+                        operator: Greater,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        633..635,
+                    ),
+                    ty: Bool,
+                    kind: Comparison {
+                        operator: Equal,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 0,
+                            ty: Int,
+                        },
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Return {
+                            value: None,
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 255,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Return {
+                            value: None,
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Bool,
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Int,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    0,
+                                ),
+                                arguments: [
+                                    Integer {
+                                        value: 4,
+                                        ty: Int,
+                                    },
+                                ],
+                                span: 795..802,
+                            },
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    0,
+                                ),
+                                arguments: [
+                                    Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                ],
+                                span: 804..811,
+                            },
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    1,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            0,
+                                        ),
+                                    ),
+                                    Value(
+                                        ValueId(
+                                            1,
+                                        ),
+                                    ),
+                                ],
+                                span: 784..794,
+                            },
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        3,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    2,
+                                ),
+                                arguments: [
+                                    Integer {
+                                        value: 3,
+                                        ty: Int,
+                                    },
+                                ],
+                                span: 845..854,
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        3,
+                                    ),
+                                ),
+                            },
+                            Call {
+                                result: None,
+                                function: FunctionId(
+                                    4,
+                                ),
+                                arguments: [
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ],
+                                span: 873..886,
+                            },
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        5,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    3,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            4,
+                                        ),
+                                    ),
+                                ],
+                                span: 912..927,
+                            },
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Exit {
+                            status: Integer {
+                                value: 255,
+                                ty: Int,
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+    main: FunctionId(
+        5,
+    ),
+}

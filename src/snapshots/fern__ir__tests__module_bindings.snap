@@ -1,119 +1,134 @@
 ---
 source: src/ir.rs
-expression: entry.entry()
+expression: program.program()
 ---
-Entry {
-    values: [
-        Value {
-            span: None,
+Program {
+    globals: [
+        Global {
             ty: Int,
-            kind: Load(
-                LocalId(
-                    0,
-                ),
-            ),
-        },
-        Value {
-            span: Some(
-                209..210,
-            ),
-            ty: Int,
-            kind: Binary {
-                operator: Add,
-                form: Infix,
-                left: Value(
-                    ValueId(
-                        0,
-                    ),
-                ),
-                right: Integer {
-                    value: 2,
-                    ty: Int,
-                },
-            },
-        },
-        Value {
-            span: None,
-            ty: Int,
-            kind: Load(
-                LocalId(
-                    0,
-                ),
-            ),
+            value: 40,
         },
     ],
-    flow: ControlFlow {
-        entry: BlockId(
-            0,
-        ),
-        locals: [
-            Int,
-            U8,
-        ],
-        blocks: [
-            Block {
-                instructions: [
-                    Store {
-                        local: LocalId(
-                            0,
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
                         ),
-                        operand: Integer {
-                            value: 40,
+                    ),
+                },
+                Value {
+                    span: Some(
+                        209..210,
+                    ),
+                    ty: Int,
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 2,
                             ty: Int,
                         },
                     },
-                    Store {
-                        local: LocalId(
-                            1,
-                        ),
-                        operand: Integer {
-                            value: 1,
-                            ty: U8,
-                        },
-                    },
-                    Store {
-                        local: LocalId(
-                            1,
-                        ),
-                        operand: Integer {
-                            value: 2,
-                            ty: U8,
-                        },
-                    },
-                    Value(
-                        ValueId(
-                            0,
-                        ),
-                    ),
-                    Value(
-                        ValueId(
-                            1,
-                        ),
-                    ),
-                    Store {
-                        local: LocalId(
-                            0,
-                        ),
-                        operand: Value(
-                            ValueId(
-                                1,
+                },
+                Value {
+                    span: None,
+                    ty: Int,
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
                             ),
-                        ),
-                    },
-                    Value(
-                        ValueId(
-                            2,
-                        ),
-                    ),
-                ],
-                terminator: Exit {
-                    status: Value(
-                        ValueId(
-                            2,
                         ),
                     ),
                 },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    U8,
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 1,
+                                    ty: U8,
+                                },
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 2,
+                                    ty: U8,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Store {
+                                place: Global(
+                                    GlobalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                        },
+                    },
+                ],
             },
-        ],
-    },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
 }

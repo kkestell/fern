@@ -55,10 +55,10 @@ var x = 10; // int
 
 ### Keywords
 
-`fn`, `void`, `var`, `const`, `pub`, `use`, `if`, `else`, `for`, `break`,
-`continue`, `return`, `exit`, `true`, and `false` are reserved. The ten integer
-type names listed under Integer types and `bool` are also reserved. Reserved
-words cannot be identifiers.
+`fn`, `void`, `var`, `const`, `pub`, `use`, `if`, `else`, `for`, `in`,
+`break`, `continue`, `return`, `exit`, `len`, `true`, and `false` are reserved.
+The ten integer type names listed under Integer types and `bool` are also
+reserved. Reserved words cannot be identifiers.
 
 ### Integer literals
 
@@ -166,7 +166,7 @@ same type, while an untyped constant must be representable by the annotated
 type. Other integer conversions must be explicit. Without an annotation, the
 binding takes the initializer's type, with untyped integer constants defaulting
 to `int`. A binding reference has the binding's type. Initialization copies the
-integer value; later assignment to the source binding does not change the copy.
+value; later assignment to the source binding does not change the copy.
 
 ### Module-level declarations
 
@@ -422,8 +422,9 @@ var d = i8.truncate(200); // -56
 
 #### Precedence, associativity, and evaluation order
 
-Unary operators have the highest precedence. Binary operators have five
-precedence levels, from highest to lowest:
+Indexing, calls, conversions, and `len` bind more tightly than any operator.
+Among the operators, unary operators have the highest precedence. Binary
+operators have five precedence levels, from highest to lowest:
 
 1. `* / % *% << >> &`
 2. `+ - +% -% | ^`
@@ -443,7 +444,8 @@ bind less tightly than every comparison, so `a < b && c < d || e` is
 
 The left operand of a binary expression is evaluated before the right operand.
 Each operand is fully evaluated, including any runtime failure, before evaluation
-of the next operand begins. `&&` and `||` do not always evaluate their right
+of the next operand begins. `grid[r][c]` indexes the row first, and `-a[0]`
+negates the element. `&&` and `||` do not always evaluate their right
 operand; see [Logical operators](#logical-operators).
 
 #### Operand types
@@ -517,11 +519,14 @@ computing a different result.
 
 ### Indexing and lengths
 
-Arrays, slices, and strings are specified ahead of their implementation; the
-[roadmap](../eng/roadmap.md) records implementation status.
+Slices and strings are specified ahead of their implementation; the
+[roadmap](../eng/roadmap.md) records implementation status. [Arrays](#arrays)
+specifies array types, their values, and their operations.
 
 The length of any array, slice, or string has type `int`. Indices and slice
-bounds have type `int`.
+bounds have type `int`. An index must have type `int` or be an untyped constant
+representable by `int`; an index of any other integer type requires an explicit
+conversion.
 
 An index is valid if `0 <= i < len`. Accessing an out-of-range index traps.
 Because indices are signed, an expression such as `i - 1` when `i == 0` produces
@@ -630,11 +635,20 @@ expressions, and its result is then an untyped boolean constant. A comparison
 with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
+[Array comparison](#array-comparison) specifies `==` and `!=` on arrays.
+
 ### Assignment
 
 `x = e;` stores the value of `e` in the mutable binding `x`. It requires
 `e` to have the type of `x`, or to be an untyped constant that fits. Assignment
 is a statement and ends with a semicolon.
+
+An assignment target is a mutable binding or an element of one. `a[i] = e;`
+stores into the element of `a` at index `i`, where `a` is a `var` array or an
+element of one. An element of a `const` binding cannot be assigned. Every index
+of the target is evaluated left to right, then `e`: in `grid[r][c] = e;` the
+order is `r`, `c`, `e`. A compound assignment to an element evaluates the
+target's indices once.
 
 Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
 `+%= -%= *%=` are equivalent to the corresponding binary operation
@@ -665,6 +679,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Situation | Behavior |
 |-----------|----------|
 | Constant does not fit target type | Compile error |
+| Constant index out of range | Compile error |
 | Constant expression would trap | Compile error |
 | `+ - *` overflow | Trap |
 | `/` or `%` by zero | Trap |
@@ -740,6 +755,175 @@ Short-circuiting does not exempt an unevaluated constant operand from the
 compile-time checks that apply to constant expressions. `false && 1 / 0 == 0` is
 rejected.
 
+## Arrays
+
+### Array types
+
+```text
+[N]T
+```
+
+An array holds a fixed number of elements of a single element type, stored in
+order. `N` is the length and `T` is the element type, so `[3]int` holds three
+`int` values. The length is part of the type: `[3]int`, `[4]int`, and `[3]i64`
+are three distinct types.
+
+The length must be a constant expression of type `int`, or an untyped constant
+representable by `int`, and must be at least 1. There are no zero-length arrays.
+
+An array type is a value type. It may be the type of a binding, a parameter, or
+a function result. Its element type may be any value type, including another
+array type: `[2][3]int` holds two arrays of three `int` each. `void` is not a
+value type and cannot be an element type.
+
+An array is a value rather than a reference. Initialization, assignment,
+argument passing, and return each copy every element. Modifying one array
+afterward does not modify the other.
+
+```fern
+fn main() -> void {
+    var a: [3]int = [1, 2, 3];
+    var b = a;
+    b[0] = 99;
+    exit(a[0]); // reports 1
+}
+```
+
+### Array literals
+
+```text
+[e1, e2, e3]
+[e1, e2, last...]
+```
+
+An array literal is a bracketed list of elements with an optional trailing
+comma. It carries no type prefix and takes its type from context, as an untyped
+constant does. It is valid wherever an annotated binding, a call argument, or a
+`return` expression has an array type. When no context supplies a type, the
+element type and the length come from the elements themselves.
+
+Each element must have the array's element type or be an untyped constant
+representable by it. In a literal with no context, every element must have one
+common type, and a literal of only untyped constants uses their default type.
+
+The number of elements must equal the length. A literal with too few or too many
+elements is a compile-time error.
+
+```fern
+var primes: [3]int = [2, 3, 5];
+var inferred = [2, 3, 5]; // [3]int
+var bytes: [2]u8 = [0, 255];
+var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+var short: [3]int = [1, 2]; // error: two elements for [3]int
+```
+
+The type `[_]T` takes its length from the initializer. It is permitted only in a
+declaration whose initializer is an array literal, never as a parameter or
+result type.
+
+```fern
+var sized: [_]int = [2, 3, 5]; // [3]int
+```
+
+An array literal is a constant expression when every element is a constant
+expression, which is what allows a module-level declaration to hold an array.
+
+#### Fill
+
+`...` after the last element repeats that element across the array's remaining
+elements. The length must come from context, so `...` is a compile-time error in
+a literal that would take its length from its own elements. At least one element
+must precede `...`, and the elements before it must not exceed the length; when
+they already fill the array, the fill repeats nothing.
+
+```fern
+var counts: [1024]i32 = [0...];
+var seeded: [8]int = [1, 2, 3, 0...]; // 1, 2, 3, then five zeros
+var board: [2][3]u8 = [[1...]...];
+var bad = [0...]; // error: no length
+var worse: [_]int = [0...]; // error: no length
+```
+
+### Indexing
+
+`a[i]` is the element of the array `a` at index `i` and is an expression of the
+element type. Indexing requires an operand of array type. [Indexing and lengths](#indexing-and-lengths) gives the type of `i` and
+the range of valid indices; an out-of-range index traps. Because an array's
+length is part of its type, an out-of-range constant index is rejected at
+compile time instead.
+
+`a[i]` is never a constant expression, even when `a` and `i` are both constant.
+
+An element of a `var` array may be assigned; [Assignment](#assignment) gives the
+statement form and its evaluation order. An element of a `const` array cannot be
+assigned.
+
+```fern
+fn main() -> void {
+    const a: [3]int = [10, 20, 30];
+    var i = 2;
+    exit(a[i]); // reports 30
+}
+```
+
+```fern
+fn main() -> void {
+    const a: [3]int = [10, 20, 30];
+    exit(a[3]); // error: 3 is out of range for [3]int
+}
+```
+
+### Length
+
+```text
+len(a)
+```
+
+`len` is a reserved word and uses call syntax without being a call, as an
+integer conversion does. Its operand is an expression of array type, a trailing
+comma after that operand is permitted, and the result has type `int`.
+
+`len(a)` yields the length recorded in the operand's type. The operand is still
+evaluated, so a trap inside it, such as an out-of-range index, still occurs.
+Because the length comes from the type rather than the value, `len(a)` is a
+constant expression whenever its operand contains no call, including when the
+operand refers to a `var` binding.
+
+```fern
+fn main() -> void {
+    const a: [3]int = [10, 20, 30];
+    exit(len(a)); // reports 3
+}
+```
+
+### Array comparison
+
+`==` and `!=` compare two arrays of identical type. `==` yields `true` when
+every pair of corresponding elements is equal, and `!=` is its negation. Arrays
+of different lengths or different element types are different types and cannot
+be compared. `<`, `<=`, `>`, and `>=` are not defined on arrays.
+
+An implementation may compare the elements in any order. Element comparison
+cannot trap, so the order is not observable.
+
+A comparison of two arrays is a constant expression when both operands are
+constant expressions, and its result is then an untyped boolean constant.
+
+Arithmetic, bitwise, and logical operators are not defined on arrays. There is
+no elementwise arithmetic.
+
+```fern
+fn main() -> void {
+    var a: [3]int = [1, 2, 3];
+    const b: [3]int = [1, 2, 3];
+    a[2] = 9;
+    if a == b {
+        exit(1);
+    }
+    exit(0); // reports 0
+}
+```
+
 ## Statements and Execution
 
 A function body and each nested brace-delimited block execute statements in
@@ -785,6 +969,8 @@ fn main() -> void {
 for { ... }
 for c { ... }
 for init; c; post { ... }
+for v in a { ... }
+for v, i in a { ... }
 ```
 
 `for` is the only loop keyword. The body is a brace-delimited block, is
@@ -817,7 +1003,30 @@ fn main() -> void {
 }
 ```
 
-Iteration over arrays, slices, and strings is not yet specified.
+`for v in a { ... }` executes the body once for each element of the array `a`,
+in index order, with `v` bound to a copy of the element. `for v, i in a { ... }`
+also binds `i`, of type `int`, to that element's index. `in` is a reserved word,
+and the two names must differ.
+
+`a` is evaluated once, before the first iteration, and the loop walks that
+value. Assigning to an element of the array inside the body does not change the
+remaining iterations.
+
+`v` and `i` are immutable bindings whose scope is the loop body, bound afresh on
+each iteration. The body may shadow them, and neither is visible after the loop.
+
+```fern
+fn main() -> void {
+    const a: [4]int = [1, 2, 3, 4];
+    var total = 0;
+    for v in a {
+        total = total + v;
+    }
+    exit(total); // reports 10
+}
+```
+
+Iteration over slices and strings is not yet specified.
 
 ### Loop control and labels
 
@@ -839,6 +1048,8 @@ condition or clauses:
 for :name { ... }
 for :name c { ... }
 for :name init; c; post { ... }
+for :name v in a { ... }
+for :name v, i in a { ... }
 ```
 
 Unlabeled `break` and `continue` act on the innermost enclosing loop.

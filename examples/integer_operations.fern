@@ -1,0 +1,18 @@
+fn main() -> void {
+    const exact: u8 = (250 + 10) / 2;
+    const wrapped: u8 = u8(250) +% u8(10);
+
+    const bits: u8 = (u8(0x0F) & ^u8(0x0A)) | u8(0x20);
+    const shifted = bits << 1;
+    const overshifted = bits >> 8;
+
+    const negative: i8 = -7;
+    const quotient = negative / 3;
+    const remainder = negative % 3;
+
+    // A variable count makes this a runtime shift.
+    var count = 1;
+    const runtime_shift: u8 = u8(21) << count;
+
+    exit(int(runtime_shift));
+}

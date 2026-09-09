@@ -1,0 +1,21 @@
+fn main() -> void {
+    const signed8: i8 = 42;
+    const signed16: i16 = 42;
+    const signed32: i32 = 42;
+    const signed64: i64 = 42;
+
+    const unsigned8: u8 = 42;
+    const unsigned16: u16 = 42;
+    const unsigned32: u32 = 42;
+    const unsigned64: u64 = 42;
+
+    const native_signed: int = 42;
+    const native_unsigned: uint = 42;
+
+    const widened = u64(unsigned8);
+    const narrowed = u8(widened);
+    const truncated = u8.truncate(298);
+    const signed_bits = i8.truncate(255);
+
+    exit(int(narrowed));
+}

@@ -1,0 +1,16 @@
+var result = initial;
+const initial: int = 40;
+const increment = 2;
+
+fn main() -> void {
+    const saved = result;
+    result = result + increment;
+
+    {
+        // The initializer reads the enclosing binding before shadowing it.
+        var result = result;
+        result = saved;
+    }
+
+    exit(result);
+}

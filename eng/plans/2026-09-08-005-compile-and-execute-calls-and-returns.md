@@ -8,7 +8,7 @@
 - `docs/spec.md#process-exit` — `exit` terminates the program and does not
   return, from any function
 - `eng/roadmap.md` "Parameters, calls, and return values" — task scope, the
-  milestone example, and the completion gates
+  milestone program, and the completion gates
 - `src/ir.rs:140-165` — `Global`, `Function` (parameters are the first
   `flow.locals`), and `Program`
 - `src/backend.rs:25-157` — `Emitter`, `emit`, `emit_control_flow`,
@@ -19,8 +19,8 @@
 Emit native code for every IR function — signature, parameters, calls, and
 returns — replacing the `Instruction::Call` guard in `emit_control_flow`. The
 IR already lowers and verifies functions, so this slice only emits them. It
-completes the milestone: add `examples/parameters_calls_and_returns.fern`, run
-broad validation, and review the integrated milestone.
+completes the milestone: add the parameters, calls, and returns completion
+fixture, run broad validation, and review the integrated milestone.
 
 ## Implementation
 
@@ -79,13 +79,13 @@ broad validation, and review the integrated milestone.
   Make `emit_control_flow` infallible, have `emit` return `String`, and drop the
   `?` in `build`.
 
-- `examples/parameters_calls_and_returns.fern` — the roadmap example verbatim.
-  Add it to the example list in `README.md`.
+- `tests/fixtures/programs/parameters_calls_and_returns.fern` — the roadmap
+  completion program verbatim.
 
 ## Tests
 
 - `tests/compiler.rs` — a `parameters_calls_and_returns_execute` test in the
-  style of `branches_and_loops_execute`, running the example (exit 42) plus
+  style of `branches_and_loops_execute`, running the fixture (exit 42) plus
   focused sources covering: a nested call as an argument; two argument calls
   that mutate a module `var` proving left-to-right order; a discarded value
   result; a forward call to a function declared after `main`; direct and mutual

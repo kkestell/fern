@@ -1639,7 +1639,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_the_milestone_example() {
+    fn lowers_the_milestone_program() {
         let program = lowered(
             "var trace = 0;
 

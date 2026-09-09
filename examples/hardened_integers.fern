@@ -1,5 +1,0 @@
-fn main() -> void {
-    var count = 1;
-    var value: u8 = 21;
-    exit(int(value << count));
-}

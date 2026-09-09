@@ -8,7 +8,7 @@
 - `docs/spec.md#module-level-declarations` — module bindings are initialized
   before `main` runs and are visible to every function
 - `eng/roadmap.md#parameters-calls-and-return-values` — task boundary and the
-  milestone example
+  milestone program
 - `src/ir.rs` — the entry-only `Entry`/`VerifiedEntry` shape, `FlowBuilder`, and
   operand lowering
 - `src/semantic.rs` — `CheckedProgram::functions`, `calls`, and `main`
@@ -79,7 +79,7 @@ filling it.
 - `src/ir.rs` — regenerate every `fern__ir__tests__*.snap` fixture for the
   program shape.
 
-- `src/ir.rs` — snapshot the milestone example's shape: a module `var` mutated
+- `src/ir.rs` — snapshot the milestone program's shape: a module `var` mutated
   through a called function, a value call used inside an expression, a `void`
   call statement, a discarded result, and direct recursion.
 

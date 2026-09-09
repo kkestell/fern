@@ -1,0 +1,24 @@
+fn add(left: int, right: int) -> int {
+    return left + right;
+}
+
+fn sum_to(value: int) -> int {
+    if value == 0 {
+        return 0;
+    }
+    return value + sum_to(value - 1);
+}
+
+fn check_zero(value: int) -> void {
+    if value == 0 {
+        return;
+    }
+    exit(255);
+}
+
+fn main() -> void {
+    const nested = add(add(5, 5), 11);
+    const recursive = sum_to(6);
+    check_zero(0);
+    exit(add(nested, recursive));
+}

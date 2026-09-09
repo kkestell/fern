@@ -41,8 +41,8 @@ fn main() -> void {
 }
 ```
 
-Expected exit status: 42. Future file:
-`examples/module_level_declarations.fern`.
+Expected exit status: 42. Completion fixture:
+`tests/fixtures/programs/module_level_declarations.fern`.
 
 ### Tasks
 
@@ -67,7 +67,7 @@ Expected exit status: 42. Future file:
   - Initialize module-level bindings before `main` runs and preserve their
     values and mutations through IR verification, snapshots, and native
     execution.
-  - Add the milestone example and validate the integrated milestone.
+  - Add the milestone completion fixture and validate the integrated milestone.
 
 ### Completion gates
 
@@ -117,7 +117,8 @@ fn main() -> void {
 }
 ```
 
-Expected exit status: 6. Future file: `examples/branches_and_loops.fern`.
+Expected exit status: 6. Completion fixture:
+`tests/fixtures/programs/branches_and_loops.fern`.
 
 ### Tasks
 
@@ -156,7 +157,7 @@ Expected exit status: 6. Future file: `examples/branches_and_loops.fern`.
 
   - Emit native control flow for the verified IR, including short-circuit
     evaluation, loop backedges, and labeled `break` and `continue` targets.
-  - Add the milestone example and validate the integrated milestone.
+  - Add the milestone completion fixture and validate the integrated milestone.
 
 ### Completion gates
 
@@ -231,8 +232,8 @@ fn main() -> void {
 }
 ```
 
-Expected exit status: 42. Future file:
-`examples/parameters_calls_and_returns.fern`.
+Expected exit status: 42. Completion fixture:
+`tests/fixtures/programs/parameters_calls_and_returns.fern`.
 
 ### Tasks
 
@@ -277,7 +278,7 @@ Expected exit status: 42. Future file:
     returns, preserving module-level binding access and recursive execution.
   - Cover nested calls, mutation-observable argument order, discarded results,
     forward calls, recursion, and return paths in native integration tests.
-  - Add the milestone example and validate the integrated milestone.
+  - Add the milestone completion fixture and validate the integrated milestone.
 
 ### Completion gates
 

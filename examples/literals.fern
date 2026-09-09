@@ -1,0 +1,11 @@
+fn main() -> void {
+    const decimal = 42;
+    const hexadecimal = 0x2A;
+    const binary = 0b101010;
+    const octal = 0o52;
+
+    // Leading zeroes do not change a decimal literal's base.
+    const leading_zeroes = 00042;
+
+    exit(decimal);
+}

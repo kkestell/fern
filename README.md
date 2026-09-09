@@ -6,25 +6,20 @@ Fern is a low-level programming language. The
 The specification includes language features ahead of the compiler. See the
 roadmap's completed milestones for the currently supported subset.
 
-See [the empty entry](examples/empty.fern),
-[integer literals](examples/integer_literals.fern) for bases, annotations,
-comments, and a trailing call comma, and
-[shadowing](examples/shadowing.fern) for binding copies and initializer
-visibility. See [assignment and scopes](examples/assignment_and_scopes.fern) for
-reassignment, saved copies, and nested shadowing, and
-[integer types](examples/integer_types.fern) for typed literals and explicit
-conversions. See [integer conversions](examples/integer_conversions.fern) for
-checked and truncating forms, and
-[integer expressions](examples/integer_expressions.fern) for arithmetic,
-bitwise, and shift operators. See
-[hardened integers](examples/hardened_integers.fern) for a runtime shift with
-an inferred count,
-[module-level declarations](examples/module_level_declarations.fern) for
-file-scope initialization and mutation, and
-[branches and loops](examples/branches_and_loops.fern) for boolean expressions,
-conditionals, and loop control. See
-[parameters, calls, and returns](examples/parameters_calls_and_returns.fern) for
-typed parameters, nested and recursive calls, and value and `void` returns.
+The examples form a tour of the currently supported language, grouped by topic:
+
+- [Literals](examples/literals.fern) covers the supported integer literal forms.
+- [Bindings and scopes](examples/bindings_and_scopes.fern) covers module and
+  local bindings, assignment, nested scopes, and shadowing.
+- [Integer types and conversions](examples/integer_types_and_conversions.fern)
+  covers fixed-width and native integer types, checked conversions, and
+  truncation.
+- [Integer operations](examples/integer_operations.fern) covers arithmetic,
+  wrapping arithmetic, bitwise operations, and shifts.
+- [Control flow](examples/control_flow.fern) covers booleans, conditionals, the
+  three `for` forms, and loop control.
+- [Functions](examples/functions.fern) covers parameters, nested and recursive
+  calls, and value and `void` returns.
 
 ## Build and run
 
@@ -34,8 +29,8 @@ providing `cc`. On macOS, install the Xcode command-line tools with
 
 ```sh
 cargo build
-cargo run -- examples/empty.fern -o target/empty
-target/empty
+cargo run -- examples/literals.fern -o target/literals
+target/literals
 echo $?
 ```
 

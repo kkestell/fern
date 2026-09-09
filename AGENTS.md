@@ -38,9 +38,10 @@ missing. The architecture document is not required to begin planning.
 - `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
 - `src/snapshots/` — checked-in frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
-- `tests/` — compiler and CLI integration tests.
-- `examples/` — Fern programs demonstrating supported syntax and semantics;
-  build and run instructions are documented in `README.md`.
+- `tests/` — compiler and CLI integration tests; reusable program fixtures live
+  under `tests/fixtures/programs/`.
+- `examples/` — an ordered, topic-based tour of supported Fern syntax and
+  semantics; build and run instructions are documented in `README.md`.
 
 ## Development Commands
 
@@ -48,8 +49,8 @@ missing. The architecture document is not required to begin planning.
 - `cargo clippy --all-targets -- -D warnings` — lint the compiler and tests.
 - `cargo test` — run unit, snapshot, and native integration tests.
 - `cargo build` — build the compiler.
-- `cargo run -- examples/empty.fern -o target/empty && target/empty` — compile
-  and execute the empty example.
+- `cargo run -- examples/literals.fern -o target/literals && target/literals` —
+  compile and execute the first example.
 
 Native tests require the tools documented in [README.md](README.md).
 
@@ -142,12 +143,17 @@ must exist before planning begins.
 The roadmap is a list of named milestones in implementation order, with task
 checkboxes recording progress. Preserve completed tasks and milestone details.
 
-Each milestone must have a complete Fern example in the roadmap when its scope
+Each milestone must have a complete Fern program in the roadmap when its scope
 is planned. Demonstrate its new capabilities, include the expected result, and
-name its future `examples/` file. When the milestone is implemented, create
-that file. `kroadmap` maintains the roadmap's example snippets and links. For
-milestones awaiting language decisions, write the example when those decisions
-are settled.
+name its future completion fixture under `tests/fixtures/programs/`. When the
+milestone is implemented, create that fixture. `kroadmap` maintains the
+roadmap's program snippets and links. For milestones awaiting language
+decisions, write the program when those decisions are settled.
+
+Public programs under `examples/` are documentation organized by language
+topic. Do not use them as semantic regression fixtures. Behavioral coverage
+belongs in focused test sources or `tests/fixtures/programs/`; tests may check
+that the public examples remain valid as documentation.
 
 Preserve unrelated working-tree changes. Never commit unless the user asks for a
 commit explicitly.

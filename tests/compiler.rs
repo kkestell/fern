@@ -35,7 +35,6 @@ fn failure(result: Output, expected: &str) {
 #[test]
 fn native_programs_exit_zero() {
     for source in [
-        include_str!("../examples/empty.fern"),
         EMPTY,
         "fn main() -> void { const x = 42; var y = x; }",
         "fn helper() -> void { const value = 1; } fn main() -> void {}",
@@ -45,6 +44,28 @@ fn native_programs_exit_zero() {
         fern::compile(&input, &output).unwrap();
         assert_eq!(Command::new(&output).status().unwrap().code(), Some(0));
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn documented_examples_compile() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut inputs = fs::read_dir(examples)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "fern")
+        })
+        .collect::<Vec<_>>();
+    inputs.sort();
+
+    assert!(!inputs.is_empty());
+    let outputs = tempdir().unwrap();
+    for input in inputs {
+        let output = outputs.path().join(input.file_stem().unwrap());
+        fern::compile(&input, &output)
+            .unwrap_or_else(|error| panic!("{}: {error}", input.display()));
     }
 }
 
@@ -216,10 +237,10 @@ fn oversized_integer_diagnostics_are_bounded() {
 }
 
 #[test]
-fn integer_operator_examples_execute_and_replace_output() {
+fn integer_operator_fixtures_execute_and_replace_output() {
     for source in [
-        include_str!("../examples/integer_expressions.fern"),
-        include_str!("../examples/wrapping_operators.fern"),
+        include_str!("fixtures/programs/integer_expressions.fern"),
+        include_str!("fixtures/programs/wrapping_operators.fern"),
     ] {
         let (_dir, input, output) = fixture(source);
         fs::write(&output, "keep me").unwrap();
@@ -231,7 +252,7 @@ fn integer_operator_examples_execute_and_replace_output() {
 #[test]
 fn module_level_bindings_initialize_shadow_and_mutate() {
     for source in [
-        include_str!("../examples/module_level_declarations.fern"),
+        include_str!("fixtures/programs/module_level_declarations.fern"),
         "var counter = 40;
          fn main() -> void {
              { var counter: u8 = 1; counter = 2; }
@@ -248,7 +269,7 @@ fn module_level_bindings_initialize_shadow_and_mutate() {
 #[test]
 fn branches_and_loops_execute() {
     for (source, expected) in [
-        (include_str!("../examples/branches_and_loops.fern"), 6),
+        (include_str!("fixtures/programs/branches_and_loops.fern"), 6),
         (
             "fn main() -> void {
                 var total = 0;
@@ -298,7 +319,7 @@ fn branches_and_loops_execute() {
 #[test]
 fn parameters_calls_and_returns_execute() {
     for source in [
-        include_str!("../examples/parameters_calls_and_returns.fern"),
+        include_str!("fixtures/programs/parameters_calls_and_returns.fern"),
         // A call nested in an argument and in an expression.
         "fn twice(value: int) -> int {
              return value * 2;
@@ -763,10 +784,13 @@ fn unwritable_output_directory_fails() {
 fn integer_programs_execute() {
     let mut fixtures = vec![
         (
-            include_str!("../examples/integer_literals.fern").to_owned(),
+            include_str!("fixtures/programs/integer_literals.fern").to_owned(),
             42,
         ),
-        (include_str!("../examples/shadowing.fern").to_owned(), 42),
+        (
+            include_str!("fixtures/programs/shadowing.fern").to_owned(),
+            42,
+        ),
         ("fn main() -> void { exit(42); exit(7); }".to_owned(), 42),
         (
             "fn main() -> void { const x = 42; exit(x); var x = 7; exit(x); }".to_owned(),
@@ -830,7 +854,8 @@ fn assignments_and_nested_scopes_execute() {
             "{body}"
         );
     }
-    let (_dir, input, output) = fixture(include_str!("../examples/assignment_and_scopes.fern"));
+    let (_dir, input, output) =
+        fixture(include_str!("fixtures/programs/assignment_and_scopes.fern"));
     fern::compile(&input, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
 }
@@ -838,7 +863,7 @@ fn assignments_and_nested_scopes_execute() {
 #[test]
 fn integer_type_programs_execute() {
     let mut fixtures = vec![(
-        include_str!("../examples/integer_types.fern").to_owned(),
+        include_str!("fixtures/programs/integer_types.fern").to_owned(),
         42,
     )];
     for (body, expected) in [
@@ -893,7 +918,7 @@ fn integer_type_programs_execute() {
 
 #[test]
 fn explicit_integer_conversions_execute_and_trap() {
-    let (_dir, input, output) = fixture(include_str!("../examples/integer_conversions.fern"));
+    let (_dir, input, output) = fixture(include_str!("fixtures/programs/integer_conversions.fern"));
     fern::compile(&input, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
 

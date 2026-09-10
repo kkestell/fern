@@ -55,8 +55,9 @@ var x = 10; // int
 
 ### Keywords
 
-`fn`, `void`, `var`, `const`, `pub`, `use`, `if`, `else`, `for`, `in`,
-`break`, `continue`, `return`, `exit`, `len`, `true`, and `false` are reserved.
+`fn`, `void`, `var`, `const`, `type`, `struct`, `pub`, `use`, `if`, `else`,
+`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `true`, and `false`
+are reserved.
 The ten integer type names listed under Integer types and `bool` are also
 reserved. Reserved words cannot be identifiers.
 
@@ -156,33 +157,38 @@ expression, even when every argument is constant.
 ```text
 var name = e;
 const name = e;
-var name: T = e;
-const name: T = e;
+var name: T [= e];
+const name: T [= e];
 ```
 
-A declaration introduces a binding initialized to the value of `e`. A type
-annotation determines the binding's type. A typed initializer must have that
-same type, while an untyped constant must be representable by the annotated
-type. Other integer conversions must be explicit. Without an annotation, the
-binding takes the initializer's type, with untyped integer constants defaulting
-to `int`. A binding reference has the binding's type. Initialization copies the
-value; later assignment to the source binding does not change the copy.
+A declaration introduces a binding. When an initializer is present, it is
+initialized to the value of `e`. A type annotation determines the binding's
+type. A typed initializer must have that same type, while an untyped constant
+must be representable by the annotated type. Other integer conversions must be
+explicit. Without an annotation, the binding takes the initializer's type, with
+untyped integer constants defaulting to `int`. A declaration without an
+initializer must have a type annotation and receives that type's zero value.
+Zero values are `0` for integer types, `false` for `bool`, and recursive zero
+values for arrays and structs. A binding reference has the binding's type.
+Initialization copies the value; later assignment to the source binding does
+not change the copy.
 
 ### Module-level declarations
 
-A source file contains `use` declarations followed by function declarations and
+A source file contains `use` declarations followed by type, function, and
 module-level `var` and `const` declarations, in any order. Statements appear
 only in function bodies.
 
-A module-level declaration uses the declaration syntax above, and its
-initializer must be a constant expression. Module-level bindings are initialized
-before `main` runs.
+A module-level declaration uses the declaration syntax above. A present
+initializer must be a constant expression. A declaration without an initializer
+receives its type's zero value. Module-level bindings are initialized before
+`main` runs.
 
 A module-level binding is visible throughout its module, including in other
 files and in declarations that appear before it. No two module-level
-declarations, including functions, in the same module may use the same name. A
-module-level initializer that refers to the binding it initializes, directly or
-through other module-level bindings, is a compile-time error.
+declarations, including types and functions, in the same module may use the
+same name. A module-level initializer that refers to the binding it initializes,
+directly or through other module-level bindings, is a compile-time error.
 
 ```fern
 var counter = base;
@@ -255,6 +261,72 @@ fn main() -> void {
     exit(saved); // reports 7
 }
 ```
+
+### Type declarations
+
+```text
+type Name T;
+type Name struct {
+    field: T,
+}
+```
+
+A type declaration is module-level only. `type Name T;` creates a new nominal
+type whose underlying type is `T`. The new type is distinct from `T` and every
+other type, so assignments and arguments do not implicitly cross the boundary.
+It retains the underlying type's representation, range, zero value, operators,
+and other value semantics. Explicit conversions are required to move between
+the named type and its underlying type.
+
+The struct form creates a named struct type. A struct must contain at least one
+field. Fields are declared as `name: T`, separated by commas; a trailing comma
+is permitted. Field names must be unique. Struct fields have no separate
+visibility modifier: fields of a public struct are accessible wherever the
+struct type is accessible.
+
+Type declarations whose right-hand side is a struct end at the closing `}` and
+do not have a semicolon. Other type declarations end with `;`. Anonymous struct
+types are not part of the language.
+
+Structs are value types. Initialization, assignment, argument passing, and
+return copy every field recursively. A field is selected with `value.field`.
+Selecting a field of a `var` struct produces an assignable target; selecting a
+field of a `const` struct does not.
+
+```fern
+type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var p = Point { x = 3, y = 4 };
+    p.x = 5;
+    const q = p;
+    exit(q.x); // reports 5
+}
+```
+
+### Struct literals
+
+```text
+Name { field = e, ... }
+Name { ... }
+```
+
+A struct literal names each initialized field with `=`. Field initializers are
+evaluated in source order. Each field may appear at most once. Without `...`,
+every field must be listed exactly once. With `...`, omitted fields receive
+their recursive zero values; `...` may appear alone. A field initializer must
+have the field's type, or be an untyped constant representable by it.
+
+Struct literals whose fields are all constant expressions are constant
+expressions.
+
+The equality operators `==` and `!=` compare structs structurally, recursively
+comparing corresponding fields. A struct is comparable when every field is
+comparable. These operators are not defined for structs with non-comparable
+fields. Ordering operators are not defined on structs.
 
 ## Integer Semantics
 
@@ -422,7 +494,8 @@ var d = i8.truncate(200); // -56
 
 #### Precedence, associativity, and evaluation order
 
-Indexing, calls, conversions, and `len` bind more tightly than any operator.
+Field selection, indexing, calls, conversions, and `len` bind more tightly than
+any operator.
 Among the operators, unary operators have the highest precedence. Binary
 operators have five precedence levels, from highest to lowest:
 
@@ -643,12 +716,13 @@ when its result is always true or always false.
 `e` to have the type of `x`, or to be an untyped constant that fits. Assignment
 is a statement and ends with a semicolon.
 
-An assignment target is a mutable binding or an element of one. `a[i] = e;`
-stores into the element of `a` at index `i`, where `a` is a `var` array or an
-element of one. An element of a `const` binding cannot be assigned. Every index
-of the target is evaluated left to right, then `e`: in `grid[r][c] = e;` the
-order is `r`, `c`, `e`. A compound assignment to an element evaluates the
-target's indices once.
+An assignment target is a mutable binding, an element of one, or a field of a
+mutable struct. `a[i] = e;` stores into the element of `a` at index `i`, where
+`a` is a `var` array or an element of one. `p.x = e;` stores into field `x` of
+`p`. An element or field of a `const` binding cannot be assigned. Every index
+and field-selection expression in the target is evaluated left to right, then
+`e`: in `grid[r][c] = e;` the order is `r`, `c`, `e`. A compound assignment to
+an element or field evaluates the target once.
 
 Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
 `+%= -%= *%=` are equivalent to the corresponding binary operation
@@ -775,6 +849,9 @@ An array type is a value type. It may be the type of a binding, a parameter, or
 a function result. Its element type may be any value type, including another
 array type: `[2][3]int` holds two arrays of three `int` each. `void` is not a
 value type and cannot be an element type.
+
+The zero value of an array has every element set to that element type's zero
+value.
 
 An array is a value rather than a reference. Initialization, assignment,
 argument passing, and return each copy every element. Modifying one array
@@ -1141,12 +1218,17 @@ need not have a special directory name. Entry-point selection is defined under
 
 ### Public declarations
 
-`pub` may precede a module-level function, `var`, or `const` declaration. It
-makes that declaration accessible to other modules. A declaration without
+`pub` may precede a module-level type, function, `var`, or `const` declaration.
+It makes that declaration accessible to other modules. A declaration without
 `pub` is private to its module. `pub` is not permitted on a local declaration
 or a `use` declaration.
 
 ```fern
+pub type Point struct {
+    x: int,
+    y: int,
+}
+
 pub fn print() -> void {
 }
 
@@ -1161,7 +1243,7 @@ a public `const`. A private declaration cannot be accessed from another module.
 ### Use declarations
 
 Imports are file-local `use` declarations terminated by `;`. Every `use` in a
-file must appear before the file's first function, `var`, or `const`
+file must appear before the file's first type, function, `var`, or `const`
 declaration.
 
 A whole-module import names a module by its full import path and introduces the

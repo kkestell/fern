@@ -46,10 +46,10 @@ pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
     let program = module::load(root, &roots).map_err(module::LoadError::into_compile_error)?;
     let (sources, syntax) = (program.sources, program.syntax);
     reject_input_output_alias(&sources, output)?;
-    let checked = semantic::check(&syntax, &program.modules, &program.imports)
+    let checked = semantic::namespaces::check(&syntax, &program.modules, &program.imports)
         .map_err(|e| CompileError::new(e.render(&sources)))?;
-    let entry = ir::lower(checked).verify()?;
-    backend::build(&entry, &sources, output)
+    let entry = ir::lower::lower(checked).verify()?;
+    backend::toolchain::build(&entry, &sources, output)
 }
 
 fn reject_input_output_alias(

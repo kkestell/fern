@@ -158,6 +158,80 @@ impl From<Scalar> for Type {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnaryOperator {
+    Negate,
+    WrappingNegate,
+    Complement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComparisonOperator {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
+
+impl ComparisonOperator {
+    /// Equality is defined on every value type; the ordering comparisons are
+    /// defined only on integers.
+    pub(crate) fn is_equality(self) -> bool {
+        matches!(self, Self::Equal | Self::NotEqual)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogicalOperator {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BinaryOperator {
+    Multiply,
+    Divide,
+    Remainder,
+    WrappingMultiply,
+    Add,
+    Subtract,
+    WrappingAdd,
+    WrappingSubtract,
+    ShiftLeft,
+    ShiftRight,
+    And,
+    Xor,
+    Or,
+}
+
+impl BinaryOperator {
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            Self::Multiply => "*",
+            Self::Divide => "/",
+            Self::Remainder => "%",
+            Self::WrappingMultiply => "*%",
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::WrappingAdd => "+%",
+            Self::WrappingSubtract => "-%",
+            Self::ShiftLeft => "<<",
+            Self::ShiftRight => ">>",
+            Self::And => "&",
+            Self::Xor => "^",
+            Self::Or => "|",
+        }
+    }
+
+    /// A shift takes its count independently of its left operand's type, so
+    /// every phase treats the two shifts apart from the other operators.
+    pub(crate) fn is_shift(self) -> bool {
+        matches!(self, Self::ShiftLeft | Self::ShiftRight)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Scalar, Type};

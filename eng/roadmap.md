@@ -77,3 +77,30 @@ alternate backends before a milestone needs them.
   - [x] Check indexing, length, comparison, and iteration
   - [x] Represent arrays in Fern IR
   - [x] Compile and execute array programs
+
+---
+
+## Compiler phase decomposition
+
+Split the frontend, semantic, IR, and backend phases into responsibility-based
+submodules with ownership explicit at each call site. Fern behavior,
+diagnostics, snapshots, emitted QBE, and native results remain unchanged.
+
+### Example
+
+The completion fixture is
+[`tests/fixtures/programs/arrays.fern`](../tests/fixtures/programs/arrays.fern).
+It continues to exit with status 46.
+
+### Tasks
+
+- [x] Decompose compiler phase modules
+
+### Completion gates
+
+- Cross-phase calls name the responsible submodule directly, with one
+  implementation path for each behavior.
+- Unit tests and snapshots reside with their owning phase submodules, with
+  snapshot contents unchanged.
+- Existing diagnostics, emitted QBE, and native compiler and CLI results remain
+  unchanged, including the array completion fixture.

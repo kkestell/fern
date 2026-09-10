@@ -1,0 +1,565 @@
+use super::*;
+
+#[test]
+fn for_in_binds_an_element_and_an_optional_index() {
+    for (source, value, index) in [
+        (
+            "fn main() -> void { var a: [2]u8 = [0...]; for v in a { exit(int(v)); } }",
+            value_type(Scalar::U8),
+            None,
+        ),
+        (
+            "fn main() -> void { var g: [2][3]int = [[1...]...]; for row, i in g { exit(i); } }",
+            array_type(3, value_type(Scalar::Int)),
+            Some(value_type(Scalar::Int)),
+        ),
+    ] {
+        let syntax = parse(source).unwrap();
+        let checked = check_root(&syntax).unwrap();
+        let (_, bindings) = checked.iterations.iter().next().unwrap();
+        assert_eq!(checked.bindings[bindings.value].ty, value, "{source}");
+        assert!(!checked.bindings[bindings.value].mutable, "{source}");
+        assert_eq!(
+            bindings
+                .index
+                .map(|binding| checked.bindings[binding].ty.clone()),
+            index,
+            "{source}"
+        );
+    }
+    accepts_source(
+        "fn main() -> void { var g: [2][3]int = [[1...]...];
+             for row in g { for v in row { exit(v); } } }",
+    );
+    // The body may shadow the bindings, and neither outlives the loop.
+    accepts_source(
+        "fn main() -> void { var a: [2]int = [1, 2]; for v in a { const v = 9; exit(v); } }",
+    );
+    rejects_root(
+        "fn main() -> void { var a: [2]int = [1, 2]; for v in a {} exit(«v»); }",
+        "unknown binding `v`",
+    );
+    rejects_root(
+        "fn main() -> void { var a: [2]int = [1, 2]; for v in a { «v» = 9; } }",
+        "cannot assign to immutable binding `v`",
+    );
+    rejects_root(
+        "fn main() -> void { var a: [2]int = [1, 2]; for v, «v» in a {} }",
+        "a `for` loop's value and index bindings must have different names",
+    );
+    rejects_root(
+        "fn main() -> void { var x = 1; for v in «x» {} }",
+        "`for … in` requires an array, found `int`",
+    );
+}
+
+#[test]
+fn assignment_errors_use_target_or_value_spans_even_after_nested_exit() {
+    for (body, offending, message) in [
+        (
+            "const x = 1; x = 2;",
+            "x",
+            "cannot assign to immutable binding `x`",
+        ),
+        (
+            "var x = 1; const x = 2; x = 3;",
+            "x",
+            "cannot assign to immutable binding `x`",
+        ),
+        (
+            "var x = 1; { const x = 2; x = 3; }",
+            "x",
+            "cannot assign to immutable binding `x`",
+        ),
+        (
+            "const x = 1; { var x = 2; x = 3; } x = 4;",
+            "x",
+            "cannot assign to immutable binding `x`",
+        ),
+        ("x = 2;", "x", "unknown binding `x`"),
+        ("{ var x = 1; } x = 2;", "x", "unknown binding `x`"),
+        ("{ const x = 1; } exit(x);", "x", "unknown binding `x`"),
+        ("{ var x = x; }", "x", "unknown binding `x`"),
+        (
+            "var x = 1; { x = missing; }",
+            "missing",
+            "unknown binding `missing`",
+        ),
+        (
+            "var x: u8 = 1; { x = 256; }",
+            "256",
+            "integer literal out of range for `u8`",
+        ),
+    ] {
+        rejects(body, offending, message);
+        rejects(&format!("{{ exit(0); }} {body}"), offending, message);
+        rejects(&format!("{{ exit(0); {body} }}"), offending, message);
+    }
+    for body in [
+        "const x = 1; var x = x; x = 2;",
+        "const x = 1; { var x = x; x = 2; }",
+        "var x = 1; { const x = x; } x = 2;",
+    ] {
+        let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
+        check_root(&syntax).unwrap();
+    }
+}
+
+#[test]
+fn returns_check_against_the_declared_result() {
+    let text = "fn nothing() -> void { return; }
+                    fn early(flag: bool) -> void {
+                        if flag {
+                            return;
+                        }
+                        exit(0);
+                    }
+                    fn falls_through() -> void {}
+                    fn narrow() -> u8 { return 200; }
+                    fn wide() -> i64 { return 1 + 2; }
+                    fn ready() -> bool { return 1 < 2; }
+                    fn branching(flag: bool) -> int {
+                        if flag {
+                            return 1;
+                        } else {
+                            return 2;
+                        }
+                    }
+                    fn main() -> void {}";
+    let syntax = parse(text).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let returned = syntax
+        .statements
+        .iter()
+        .filter_map(|(_, statement)| match &statement.kind {
+            StatementKind::Return { value: Some(value) } => Some((
+                &text[syntax.expressions[*value].span.clone()],
+                checked.expressions[*value].ty.clone(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        returned,
+        [
+            ("200", value_type(Scalar::U8)),
+            ("1 + 2", value_type(Scalar::I64)),
+            ("1 < 2", value_type(Scalar::Bool)),
+            ("1", value_type(Scalar::Int)),
+            ("2", value_type(Scalar::Int)),
+        ]
+    );
+
+    rejects_source(
+        "fn main() -> void {} fn nothing() -> void { return 1; }",
+        "1",
+        "cannot return a value from a `void` function",
+    );
+    rejects_source(
+        "fn main() -> void {} fn total() -> int { return; }",
+        "return;",
+        "`return` must supply a value of type `int`",
+    );
+    rejects_source(
+        "fn main() -> void {} fn total() -> int { return true; }",
+        "true",
+        "cannot implicitly convert `bool` to `int`",
+    );
+    rejects_source(
+        "fn main() -> void {} fn narrow() -> u8 { return 256; }",
+        "256",
+        "integer literal out of range for `u8`",
+    );
+
+    // Statements after a `return` are still checked.
+    rejects(
+        "return; exit(missing);",
+        "missing",
+        "unknown binding `missing`",
+    );
+}
+
+#[test]
+fn value_returning_functions_must_not_reach_the_end_of_their_body() {
+    for body in [
+        "if flag { return 1; } else { return 2; }",
+        "if flag { return 1; } else if flag { return 2; } else { return 3; }",
+        "{ return 1; }",
+        "exit(0);",
+        "for { }",
+        "for { for { break; } }",
+        "for :outer { for :inner { break :inner; } }",
+        "for { return 1; break; }",
+        "if flag { return 1; } else { for { } }",
+    ] {
+        accepts_source(&format!(
+            "fn main() -> void {{}} fn total(flag: bool) -> int {{ {body} }}"
+        ));
+    }
+
+    for body in [
+        "",
+        "if flag { return 1; }",
+        "if flag { return 1; } else if flag { return 2; }",
+        "for flag { return 1; }",
+        "for var i = 0; i < 1; i = i + 1 { return 1; }",
+        "for { break; }",
+        "for { if flag { break; } }",
+        "for :outer { for { break :outer; } }",
+        "for { { break; } }",
+    ] {
+        let text = format!("fn main() -> void {{}} fn total(flag: bool) -> int {{ {body} }}");
+        rejects_source(
+            &text,
+            "total",
+            "function `total` can reach the end of its body without returning a value",
+        );
+    }
+}
+
+#[test]
+fn function_signatures_are_collected_before_call_checking() {
+    let text = "fn caller(value: int, flag: bool,) -> int {
+                        callee(value, flag);
+                        const nested: int = callee(callee(value, flag), flag);
+                        return nested;
+                     }
+                     fn callee(value: int, flag: bool) -> int { return value; }
+                     fn recursive(value: int) -> void { recursive(value); }
+                     fn mutual_left(value: int) -> int { mutual_right(value); return value; }
+                     fn mutual_right(value: int) -> void { mutual_left(value); }
+                     fn main() -> void {
+                         caller(1, true);
+                         callee(2, false);
+                         recursive(3);
+                         mutual_left(4);
+                     }";
+    let syntax = parse(text).unwrap();
+    let checked = check_root(&syntax).unwrap();
+
+    assert_eq!(checked.function_names.len(), 6);
+    assert_eq!(checked.functions.iter().count(), 6);
+    assert_eq!(checked.calls.iter().count(), 8);
+    assert!(
+        checked
+            .expressions
+            .iter()
+            .any(|(_, expression)| matches!(expression.value, ExpressionValue::Call { .. }))
+    );
+    for (_, signature) in checked.functions.iter() {
+        assert!(
+            signature
+                .parameters
+                .iter()
+                .all(|parameter| !checked.bindings[*parameter].mutable)
+        );
+    }
+}
+
+#[test]
+fn call_arguments_use_parameter_types_and_source_order() {
+    let syntax = parse(
+        "fn typed(value: u8, flag: bool) -> void {
+                 const copy: u8 = value;
+                 const ready: bool = flag;
+             }
+             fn main() -> void {
+                 typed(1, true);
+                 typed(1 + 2, false);
+             }",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    assert_eq!(
+        checked
+            .bindings
+            .iter()
+            .map(|(_, binding)| (binding.ty.clone(), binding.mutable))
+            .collect::<Vec<_>>(),
+        [
+            (value_type(Scalar::U8), false),
+            (value_type(Scalar::Bool), false),
+            (value_type(Scalar::U8), false),
+            (value_type(Scalar::Bool), false),
+        ]
+    );
+
+    rejects_source(
+        "fn typed(value: u8, flag: bool) -> void {} fn main() -> void { typed(256, missing); }",
+        "256",
+        "integer literal out of range for `u8`",
+    );
+}
+
+#[test]
+fn calls_respect_shadowing_context_and_result_kind() {
+    rejects_source(
+        "fn target() -> void {} fn main() -> void { var target = 0; target(); }",
+        "target",
+        "cannot call non-function binding `target`",
+    );
+    rejects_source(
+        "fn target(target: int) -> void { target(); } fn main() -> void {}",
+        "target",
+        "cannot call non-function binding `target`",
+    );
+    rejects_source(
+        "fn target() -> void {} fn main() -> void { const value = target(); }",
+        "target",
+        "void function `target` cannot be used as a value",
+    );
+    rejects_source(
+        "fn target(value: int) -> int { return value; } fn main() -> void { target(); }",
+        "target",
+        "function `target` expects 1 argument, found 0",
+    );
+    rejects_source(
+        "fn main() -> void { missing(); }",
+        "missing",
+        "unknown function `missing`",
+    );
+    rejects_source(
+        "fn target(first: int, second: bool) -> void {} fn main() -> void { target(1); }",
+        "target",
+        "function `target` expects 2 arguments, found 1",
+    );
+    rejects_source(
+        "fn target(value: int) -> void {} fn main() -> void { target(true); }",
+        "true",
+        "cannot implicitly convert `bool` to `int`",
+    );
+    rejects_source(
+        "fn target() -> void {} fn main(value: int) -> void {}",
+        "value",
+        "`main` must not have parameters",
+    );
+    rejects_source(
+        "fn target() -> void {} fn main() -> int {}",
+        "int",
+        "`main` must return `void`",
+    );
+    rejects_source(
+        "fn target() -> void {} fn main() -> void { const value = target; }",
+        "target",
+        "unknown binding `target`",
+    );
+}
+
+#[test]
+fn parameters_are_shadowed_by_local_bindings_and_restored_after_their_scope() {
+    let syntax = parse(
+        "fn typed(value: u8) -> u8 {
+                 { var value: bool = true; }
+                 const copy: u8 = value;
+                 return copy;
+             }
+             fn main() -> void {}",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let typed = syntax
+        .functions
+        .iter()
+        .find(|(_, function)| !function.parameters.is_empty())
+        .map(|(id, _)| id)
+        .unwrap();
+    let parameter = checked.functions[typed].parameters[0];
+    assert_eq!(
+        checked
+            .bindings
+            .iter()
+            .map(|(_, binding)| (binding.ty.clone(), binding.mutable))
+            .collect::<Vec<_>>(),
+        [
+            (value_type(Scalar::U8), false),
+            (value_type(Scalar::Bool), true),
+            (value_type(Scalar::U8), false),
+        ]
+    );
+    let initializer = match &syntax.statements[syntax.functions[typed].body[1]].kind {
+        StatementKind::Binding { initializer, .. } => *initializer,
+        _ => unreachable!("the shadowing scope ends before the copy"),
+    };
+    assert_eq!(
+        checked.expressions[initializer].value,
+        ExpressionValue::Reference(parameter)
+    );
+}
+
+#[test]
+fn parameters_are_immutable_and_duplicate_names_are_rejected() {
+    rejects_source(
+        "fn target(value: int, value: bool) -> void {} fn main() -> void {}",
+        "value",
+        "duplicate parameter name `value`",
+    );
+    rejects_source(
+        "fn target(value: int) -> void { value = 1; } fn main() -> void {}",
+        "value",
+        "cannot assign to immutable binding `value`",
+    );
+    rejects_source(
+        "fn target(value: int) -> void { value += 1; } fn main() -> void {}",
+        "value",
+        "cannot assign to immutable binding `value`",
+    );
+}
+
+#[test]
+fn calls_are_not_constant_expressions() {
+    // Signatures resolve after module-level initializers, so a call is
+    // reported where it is written rather than where the initializer ends.
+    for (source, marked) in [
+        (
+            "fn value() -> int { return 1; } const result = value(); fn main() -> void {}",
+            "value()",
+        ),
+        (
+            "fn value() -> int { return 1; } const result = 1 + value(); fn main() -> void {}",
+            "value()",
+        ),
+    ] {
+        rejects_source(
+            source,
+            marked,
+            "module-level initializer must be a constant expression",
+        );
+    }
+}
+
+#[test]
+fn structured_control_flow_checks_conditions_and_nested_scopes() {
+    for body in ["if 1 {}", "for 1 {}"] {
+        rejects(body, "1", "cannot implicitly convert `int` to `bool`");
+    }
+
+    accepts(
+        "var outer = 0;
+             if true { var branch = outer; }
+             else if false { var branch = outer; }
+             else { var branch = outer; }
+             for {}
+             for false {}
+             for var i = outer; i < 3; i += 1 {
+                 var i = i;
+                 if i == 2 { continue; }
+             }
+             for outer = 0; outer < 1; outer = outer + 1 {}
+             exit(outer);",
+    );
+
+    for body in [
+        "if true { var hidden = 1; } exit(hidden);",
+        "if true {} else { var hidden = 1; } exit(hidden);",
+        "for { var hidden = 1; break; } exit(hidden);",
+        "for var hidden = 0; hidden < 1; hidden += 1 {} exit(hidden);",
+    ] {
+        rejects(body, "hidden", "unknown binding `hidden`");
+    }
+
+    rejects(
+        "for const iterator = 0; iterator < 1; iterator = 1 {}",
+        "iterator",
+        "cannot assign to immutable binding `iterator`",
+    );
+}
+
+#[test]
+fn loop_control_resolves_enclosing_labels() {
+    accepts(
+        "var outer = 0;
+             for :outer {
+                 for :inner {
+                     continue;
+                     continue :outer;
+                     break :inner;
+                 }
+             }
+             for :same { break; }
+             for :same { break :same; }",
+    );
+
+    for (body, offending, message) in [
+        ("break;", "break", "`break` is not inside a loop"),
+        (
+            "continue :missing;",
+            "continue",
+            "`continue` is not inside a loop",
+        ),
+        (
+            "for :outer { break :missing; }",
+            "missing",
+            "unknown enclosing loop label `missing`",
+        ),
+        (
+            "for :same { for :same {} }",
+            "same",
+            "duplicate enclosing loop label `same`",
+        ),
+    ] {
+        rejects(body, offending, message);
+    }
+}
+
+#[test]
+fn compound_assignments_follow_binary_and_assignment_rules() {
+    accepts(
+        "var value: u8 = 1;
+             value += 1;
+             value +%= 255;
+             value <<= u16(2);
+             for var i: u8 = 0; i < 2; i += 1 {}",
+    );
+    for (body, offending, message) in [
+        (
+            "const value = 1; value += 1;",
+            "value",
+            "cannot assign to immutable binding `value`",
+        ),
+        (
+            "var value = true; value += true;",
+            "+=",
+            "integer `+=` requires integer operands",
+        ),
+        (
+            "var value: u8 = 1; value += u16(1);",
+            "+=",
+            "binary operands have different types `u8` and `u16`",
+        ),
+        (
+            "var value = 1; value /= 0;",
+            "/=",
+            "constant `/=` divisor is zero",
+        ),
+        (
+            "var value = 1; value <<= -1;",
+            "<<=",
+            "constant `<<=` shift count is negative",
+        ),
+    ] {
+        rejects(body, offending, message);
+    }
+}
+
+#[test]
+fn names_require_a_preceding_binding_even_after_exit() {
+    for body in [
+        "const x = x;",
+        "exit(x); const x = 1;",
+        "var y = x;",
+        "exit(0); exit(x);",
+        "const y = 1; exit(0); var x = x;",
+    ] {
+        // In the forward-reference case the later declaration has the same name.
+        let text = format!("/* 🌿 */ fn main() -> void {{ {body} }}");
+        let syntax = parse(&text).unwrap();
+        let error = check_root(&syntax).unwrap_err();
+        let start = if body.starts_with("exit(x)") {
+            text.find("exit(x)").unwrap() + 5
+        } else {
+            text.rfind('x').unwrap()
+        };
+        assert_eq!(error.span, start..start + 1);
+        assert_eq!(error.message, "unknown binding `x`");
+    }
+}

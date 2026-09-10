@@ -7,7 +7,7 @@
 use crate::{
     CompileError,
     diagnostic::Diagnostic,
-    frontend::{self, Syntax},
+    frontend::{parser, syntax::Syntax},
     source::{self, SourceMap},
 };
 use std::{
@@ -227,7 +227,7 @@ impl Loader<'_> {
             let text = source::read_text(&file).map_err(LoadError::Failed)?;
             let index = self.sources.push(file, text);
             self.imports.push(Vec::new());
-            let parsed = frontend::parse_file(&mut self.syntax, &self.sources.files()[index]);
+            let parsed = parser::parse_file(&mut self.syntax, &self.sources.files()[index]);
             if let Err(diagnostic) = parsed {
                 return Err(self.source_error(diagnostic));
             }

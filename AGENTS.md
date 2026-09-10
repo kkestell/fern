@@ -33,12 +33,15 @@ missing. The architecture document is not required to begin planning.
 ## Codebase Map
 
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
-- `src/types.rs` — the Fern type enum and its spellings, shared by every phase.
-- `src/frontend.rs`, `src/semantic.rs` — parsing and semantic checking.
+- `src/types.rs` — the Fern type and operator enums and their spellings,
+  shared by every phase.
+- `src/frontend/`, `src/semantic/` — parsing and semantic implementations,
+  tests, and snapshots.
 - `src/module.rs` — module discovery, import resolution, and the dependency
   graph.
-- `src/ir.rs`, `src/backend.rs` — Fern IR and native compilation.
-- `src/snapshots/` — checked-in frontend and IR snapshot fixtures.
+- `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
+- `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
+  frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests; reusable program fixtures live
   under `tests/fixtures/programs/`.

@@ -1,0 +1,37 @@
+const gravity: f64 = 9.80665;
+
+fn half(value: f32) -> f32 {
+    return value / 2.0;
+}
+
+fn main() -> void {
+    const point = 1.0;
+    const fraction = .5;
+    const whole = 2.;
+    const exponent = 1e3;
+    const scientific = 6.02e-23;
+
+    const single: f32 = 0.5;
+    const sum = point + fraction;
+    const difference = whole - fraction;
+    const product = whole * point;
+    const quotient = exponent / 4.0;
+    const negated = -quotient;
+
+    if half(single) != 0.25 || sum != difference {
+        exit(255);
+    }
+
+    var widened: f64 = f64(single);
+    var counted: i32 = i32(product);
+    var measured: f64 = f64(counted);
+
+    if widened != fraction || measured != whole {
+        exit(255);
+    }
+    if negated >= scientific || gravity <= point {
+        exit(255);
+    }
+
+    exit(int(quotient) - 208);
+}

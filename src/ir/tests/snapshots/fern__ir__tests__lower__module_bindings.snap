@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -9,7 +9,10 @@ Program {
                 Int,
             ),
             values: [
-                40,
+                Integer {
+                    value: 40,
+                    ty: Int,
+                },
             ],
         },
     ],
@@ -46,10 +49,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 2,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -84,10 +89,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 1,
-                                    ty: U8,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 1,
+                                        ty: U8,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Local(
@@ -95,10 +102,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 2,
-                                    ty: U8,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 2,
+                                        ty: U8,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(

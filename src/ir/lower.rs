@@ -43,19 +43,18 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
         else {
             unreachable!("module bindings are binding statements")
         };
+        let ty = checked.bindings[binding].ty.clone();
         let mut values = Vec::new();
         flatten(
             checked.expressions[*initializer]
                 .constant
                 .as_ref()
                 .expect("module-level initializers are constant expressions"),
+            ty.leaf(),
             &mut values,
         );
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
-        globals.push(Global {
-            ty: checked.bindings[binding].ty.clone(),
-            values,
-        });
+        globals.push(Global { ty, values });
     }
 
     let functions = checked
@@ -132,22 +131,38 @@ impl Index<&Idx<Binding>> for Places<'_> {
 }
 
 fn integer(value: i128, ty: Scalar) -> Operand {
-    Operand::Integer { value, ty }
+    Operand::Literal(Literal::Integer { value, ty })
 }
 
-/// The scalars a constant holds, in memory order.
-fn flatten(constant: &Constant, values: &mut Vec<i128>) {
+/// The IR literal a concrete scalar constant of type `ty` holds. Semantic
+/// checking has already given every untyped constant its context type, so an
+/// untyped rational never reaches lowering.
+fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
     match constant {
-        Constant::Integer(value) => values.push(
-            value
+        Constant::Integer(value) => Literal::Integer {
+            value: value
                 .to_i128()
                 .expect("concrete Fern value fits in the IR representation"),
-        ),
+            ty,
+        },
+        Constant::Float(value) => Literal::Floating(*value),
+        Constant::Rational(_) => {
+            unreachable!("an untyped constant is contextualized before lowering")
+        }
+        Constant::Array(_) => unreachable!("an array constant is not a scalar"),
+    }
+}
+
+/// The scalars a constant holds, in memory order. Every scalar of a value has
+/// the same type, so one leaf type types all of them.
+fn flatten(constant: &Constant, leaf: Scalar, values: &mut Vec<Literal>) {
+    match constant {
         Constant::Array(elements) => {
             for element in elements {
-                flatten(element, values);
+                flatten(element, leaf, values);
             }
         }
+        scalar => values.push(scalar_literal(scalar, leaf)),
     }
 }
 
@@ -788,11 +803,11 @@ fn store_constant(
     span: &std::ops::Range<usize>,
 ) {
     match (ty, constant) {
-        (Type::Scalar(scalar), Constant::Integer(value)) => {
-            let value = value
-                .to_i128()
-                .expect("concrete Fern value fits in the IR representation");
-            builder.store(place.clone(), integer(value, *scalar));
+        (Type::Scalar(scalar), constant) => {
+            builder.store(
+                place.clone(),
+                Operand::Literal(scalar_literal(constant, *scalar)),
+            );
         }
         (Type::Array { element, .. }, Constant::Array(elements)) => {
             for (index, value) in elements.iter().enumerate() {
@@ -941,6 +956,7 @@ fn lower_folded_effects(
         // A call and an index never fold, so a folded expression only reaches
         // them under a `len`, and the rest hold no sub-expression at all.
         ExpressionValue::Integer
+        | ExpressionValue::Floating
         | ExpressionValue::Boolean
         | ExpressionValue::Reference(_)
         | ExpressionValue::Call { .. }
@@ -965,17 +981,10 @@ fn lower_flow_operand(
     let ty: Type = scalar.into();
     if let Some(constant) = expression.constant.as_ref() {
         lower_folded_effects(checked, id, bindings, builder);
-        return integer(
-            constant
-                .integer()
-                .expect("a scalar expression folds to an integer")
-                .to_i128()
-                .expect("concrete Fern value fits in the IR representation"),
-            scalar,
-        );
+        return Operand::Literal(scalar_literal(constant, scalar));
     }
     match &expression.value {
-        ExpressionValue::Integer | ExpressionValue::Boolean => {
+        ExpressionValue::Integer | ExpressionValue::Floating | ExpressionValue::Boolean => {
             unreachable!("literal expressions are constant")
         }
         ExpressionValue::Array { .. } => unreachable!("an array literal has an array type"),

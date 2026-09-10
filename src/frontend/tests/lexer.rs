@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::lexer::MAX_INTEGER_LITERAL_DIGITS;
+use crate::frontend::lexer::{MAX_INTEGER_LITERAL_DIGITS, is_floating};
 
 #[test]
 fn comments_may_touch_integer_operators() {
@@ -28,6 +28,95 @@ fn unsuffixed_integer_spellings_survive_parsing() {
         assert_eq!(actual, digits);
         assert_eq!(&source[expression.span.clone()], digits);
     }
+}
+
+#[test]
+fn floating_spellings_survive_parsing() {
+    for spelling in [
+        "1.0", ".5", "2.", "1e3", "6.02e-23", "0.0", ".0", "9.", "1E3", ".5e+2", "1.e3", "0e0",
+        "1E+10", "00.50",
+    ] {
+        let source = format!("fn main() -> void {{ exit({spelling}); }}");
+        let syntax = parse(&source).unwrap();
+        let (_, expression) = syntax.expressions.iter().next().unwrap();
+        let ExpressionKind::Floating(actual) = &expression.kind else {
+            panic!("expected a floating-point literal for {spelling}")
+        };
+        assert_eq!(actual, spelling);
+        assert_eq!(&source[expression.span.clone()], spelling);
+    }
+}
+
+#[test]
+fn a_decimal_point_or_exponent_marker_makes_a_candidate_floating() {
+    for spelling in ["1.0", ".5", "2.", "1e3", "6.02e-23", "1E3", "0x1.8"] {
+        assert!(is_floating(spelling), "{spelling}");
+    }
+    // A plain integer spelling is not a floating-point candidate, and neither
+    // is a hexadecimal `e` digit or a suffix that merely contains one.
+    for spelling in [
+        "42",
+        "0x2A",
+        "0xabcdefABCDEF",
+        "0b101010",
+        "0o52",
+        "42size",
+        "0x1p3",
+    ] {
+        assert!(!is_floating(spelling), "{spelling}");
+    }
+}
+
+#[test]
+fn malformed_floating_literals_cover_the_whole_candidate() {
+    for spelling in [
+        // Exponents
+        "1e", "1E", "1e+", "1e-", "1.0e", ".5e", "1.0e+", "1.0E-", "1e2e3", ".5e2e",
+        // Suffixes
+        "1.0f", "1.0f32", ".5f64", "1.0p3", // Digit separators
+        "1.2_3", "1_0.5", "1.0_", // Hexadecimal, binary, and octal forms
+        "0x1.8p3", "0x.8p3", "0b1.1", "0o1.7",
+    ] {
+        let prefix = "/* é */ fn main() -> void { const x = ";
+        let source = format!("{prefix}{spelling}; }}");
+        let error = parse(&source).unwrap_err();
+        assert_eq!(
+            error.span,
+            prefix.len()..prefix.len() + spelling.len(),
+            "{spelling}"
+        );
+        assert_eq!(
+            error.message, "malformed floating-point literal",
+            "{spelling}"
+        );
+    }
+}
+
+#[test]
+fn a_fill_marker_keeps_its_element_an_integer() {
+    // `0.` is a floating-point literal, so the fill marker's first `.` must
+    // not join the element before it.
+    // A `.` before another `.` is never a decimal point, so a trailing-dot
+    // element needs a space before the marker.
+    for (element, expected) in [("0", "0"), ("0.0", "0.0"), ("2. ", "2.")] {
+        let source = format!("fn main() -> void {{ var a: [3]int = [{element}...]; }}");
+        let syntax = parse(&source).unwrap();
+        let (elements, fill) = syntax
+            .expressions
+            .iter()
+            .find_map(|(_, expression)| match &expression.kind {
+                ExpressionKind::ArrayLiteral { elements, fill } => Some((elements, fill)),
+                _ => None,
+            })
+            .expect("the initializer is an array literal");
+        assert!(fill.is_some(), "{element}");
+        let spelling = match &syntax.expressions[elements[0]].kind {
+            ExpressionKind::Integer(spelling) | ExpressionKind::Floating(spelling) => spelling,
+            other => panic!("expected a numeric literal for {element}, got {other:?}"),
+        };
+        assert_eq!(spelling, expected, "{element}");
+    }
+    parse("fn main() -> void { var a: [3][2]int = [[0...]...]; }").unwrap();
 }
 
 #[test]
@@ -104,8 +193,8 @@ fn malformed_integers_cover_the_whole_candidate() {
 fn reserved_names_agree_in_all_name_positions() {
     for name in [
         "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
-        "u16", "u32", "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
-        "return", "in", "len", "pub", "use",
+        "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break",
+        "continue", "return", "in", "len", "pub", "use",
     ] {
         for (prefix, suffix) in [
             ("fn ", "() -> void {}"),
@@ -120,8 +209,8 @@ fn reserved_names_agree_in_all_name_positions() {
 
     for name in [
         "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-        "int", "uint", "bool", "if", "else", "for", "break", "continue", "return", "in", "len",
-        "pub", "use",
+        "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break", "continue", "return",
+        "in", "len", "pub", "use",
     ] {
         for (prefix, suffix) in [
             ("fn main() -> void { const x = ", "; }"),
@@ -133,9 +222,7 @@ fn reserved_names_agree_in_all_name_positions() {
         }
     }
 
-    for name in [
-        "alloc", "free", "f32", "f64", "rune", "str", "uintptr", "size",
-    ] {
+    for name in ["alloc", "free", "rune", "str", "uintptr", "size"] {
         parse(&format!("fn {name}() -> void {{}}"))
             .unwrap_or_else(|error| panic!("{name} should not be reserved: {error:?}"));
     }

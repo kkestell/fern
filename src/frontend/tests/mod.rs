@@ -364,6 +364,12 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
             expression.span
         )
         .unwrap(),
+        ExpressionKind::Floating(spelling) => writeln!(
+            output,
+            "{indent}floating {spelling} span={:?}",
+            expression.span
+        )
+        .unwrap(),
         ExpressionKind::Boolean(value) => {
             writeln!(output, "{indent}boolean {value} span={:?}", expression.span).unwrap()
         }

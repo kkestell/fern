@@ -59,6 +59,7 @@ impl CheckedProgram<'_> {
         let expression = &self.syntax.expressions[id];
         match &expression.kind {
             ExpressionKind::Integer(spelling) => Ok(integer_literal(spelling)),
+            ExpressionKind::Floating(spelling) => floating_literal(spelling, &expression.span),
             ExpressionKind::Boolean(value) => Ok(CheckedExpression {
                 ty: Scalar::Bool.into(),
                 untyped: true,
@@ -344,20 +345,30 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let error = |message| Diagnostic::new(operator_span.clone(), message);
-        let Some(operand_type) = integer_operand(&checked_operand) else {
-            return Err(error(
-                "integer unary operator requires an integer operand".to_string(),
-            ));
+        let negation = operator == UnaryOperator::Negate;
+        let integer_only = || "integer unary operator requires an integer operand".to_string();
+        let Some(operand_type) = numeric_operand(&checked_operand) else {
+            return Err(error(if negation {
+                "unary `-` requires a numeric operand".to_string()
+            } else {
+                integer_only()
+            }));
         };
-        if operator == UnaryOperator::Negate && !checked_operand.untyped && !operand_type.signed() {
-            return Err(error(format!(
-                "unary `-` is not permitted on `{operand_type}`"
-            )));
-        }
-        if operator == UnaryOperator::WrappingNegate && checked_operand.untyped {
-            return Err(error(
-                "wrapping negation requires a typed operand".to_string(),
-            ));
+        if operand_type.is_floating() {
+            if !negation {
+                return Err(error(integer_only()));
+            }
+        } else {
+            if negation && !checked_operand.untyped && !operand_type.signed() {
+                return Err(error(format!(
+                    "unary `-` is not permitted on `{operand_type}`"
+                )));
+            }
+            if operator == UnaryOperator::WrappingNegate && checked_operand.untyped {
+                return Err(error(
+                    "wrapping negation requires a typed operand".to_string(),
+                ));
+            }
         }
         let constant = evaluate_unary(
             operator,
@@ -373,7 +384,7 @@ impl CheckedProgram<'_> {
                 operator_span: operator_span.clone(),
                 operand,
             },
-            constant: constant.map(Constant::Integer),
+            constant,
         };
         self.record_operand(operand, checked_operand, result.constant.is_some());
         Ok(result)
@@ -389,7 +400,7 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_left = self.infer_expression(left, scopes)?;
         let checked_right = self.infer_expression(right, scopes)?;
-        let (checked_left, checked_right, ty, untyped, constant) = self.check_integer_binary(
+        let (checked_left, checked_right, ty, untyped, constant) = self.check_numeric_binary(
             operator,
             operator_span,
             operator.spelling(),
@@ -411,7 +422,7 @@ impl CheckedProgram<'_> {
                 left,
                 right,
             },
-            constant: constant.map(Constant::Integer),
+            constant,
         };
         let folded = result.constant.is_some();
         self.record_operand(left, checked_left.expression, folded);
@@ -476,6 +487,12 @@ impl CheckedProgram<'_> {
             (Some(left_type), Some(right_type)) => match (left.untyped, right.untyped) {
                 (false, true) => return self.concretize(right_id, right, left_type),
                 (true, false) => return self.concretize(left_id, left, right_type),
+                (true, true) if left_type.is_integer() && right_type.is_floating() => {
+                    return self.make_untyped_floating(left_id, left);
+                }
+                (true, true) if left_type.is_floating() && right_type.is_integer() => {
+                    return self.make_untyped_floating(right_id, right);
+                }
                 _ => left_type == right_type,
             },
             _ => left.ty == right.ty,
@@ -577,7 +594,13 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_operand = self.infer_expression(operand, scopes)?;
-        if integer_operand(&checked_operand).is_none() {
+        // Only integers reinterpret their bits, while every number converts.
+        let convertible = if truncating {
+            integer_operand(&checked_operand)
+        } else {
+            numeric_operand(&checked_operand)
+        };
+        if convertible.is_none() {
             return Err(Diagnostic::new(
                 span.clone(),
                 format!("cannot convert `{}` to `{destination}`", checked_operand.ty),
@@ -587,49 +610,27 @@ impl CheckedProgram<'_> {
             let operand_type = if truncating { Scalar::Int } else { destination };
             self.concretize(operand, &mut checked_operand, operand_type)?;
         }
-        let constant = self.convert_constant(&checked_operand, destination, truncating, span)?;
-        let value = if constant.is_some() {
-            ExpressionValue::Integer
-        } else {
-            ExpressionValue::Conversion {
+        let constant = convert_constant(&checked_operand, destination, truncating, span)?;
+        let value = match constant {
+            Some(Constant::Float(_)) => ExpressionValue::Floating,
+            Some(_) => ExpressionValue::Integer,
+            None => ExpressionValue::Conversion {
                 operand,
                 truncating,
-            }
+            },
         };
         self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
             ty: destination.into(),
             untyped: false,
             value,
-            constant: constant.map(Constant::Integer),
+            constant,
         })
     }
 
-    /// Converts a constant operand at check time. A non-truncating conversion
-    /// that would trap is an error rather than a trap at run time.
-    fn convert_constant(
-        &self,
-        operand: &CheckedExpression,
-        destination: Scalar,
-        truncating: bool,
-        span: &std::ops::Range<usize>,
-    ) -> Result<Option<BigInt>, Diagnostic> {
-        let Some(value) = operand.integer() else {
-            return Ok(None);
-        };
-        if truncating {
-            return Ok(Some(truncate_integer(value, destination)));
-        }
-        if !integer_fits(value, destination) {
-            return Err(Diagnostic::new(
-                span.clone(),
-                format!("constant conversion to `{destination}` would trap"),
-            ));
-        }
-        Ok(Some(value.clone()))
-    }
-
-    pub(super) fn check_integer_binary(
+    /// Gives a binary operation's operands one numeric type and folds it.
+    /// Ordinary and compound assignment reach this, so both spell one rule.
+    pub(super) fn check_numeric_binary(
         &mut self,
         operator: BinaryOperator,
         operator_span: &std::ops::Range<usize>,
@@ -642,23 +643,16 @@ impl CheckedProgram<'_> {
             CheckedBinaryOperand,
             Scalar,
             bool,
-            Option<BigInt>,
+            Option<Constant>,
         ),
         Diagnostic,
     > {
-        let (Some(mut left_type), Some(right_type)) = (
-            integer_operand(&left.expression),
-            integer_operand(&right.expression),
-        ) else {
-            return Err(Diagnostic::new(
-                operator_span.clone(),
-                format!("integer `{spelling}` requires integer operands"),
-            ));
-        };
-        let shift = matches!(
+        let (mut left_type, mut right_type) = binary_operand_types(
             operator,
-            BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
-        );
+            operator_span,
+            spelling,
+            (&left.expression, &right.expression),
+        )?;
         let wrapping = matches!(
             operator,
             BinaryOperator::WrappingAdd
@@ -671,7 +665,7 @@ impl CheckedProgram<'_> {
                 "wrapping arithmetic requires a typed operand",
             ));
         }
-        if !shift {
+        if !operator.is_shift() {
             match (left.expression.untyped, right.expression.untyped) {
                 (false, false) if left_type != right_type => {
                     return Err(Diagnostic::new(
@@ -696,6 +690,24 @@ impl CheckedProgram<'_> {
                     )?;
                     left_type = right_type;
                 }
+                // An untyped integer joins an untyped floating-point constant
+                // as the exact value it names.
+                (true, true) if left_type.is_integer() && right_type.is_floating() => {
+                    self.make_untyped_floating(
+                        left.id.expect("an untyped left operand has an expression"),
+                        &mut left.expression,
+                    )?;
+                    left_type = right_type;
+                }
+                (true, true) if left_type.is_floating() && right_type.is_integer() => {
+                    self.make_untyped_floating(
+                        right
+                            .id
+                            .expect("an untyped right operand has an expression"),
+                        &mut right.expression,
+                    )?;
+                    right_type = left_type;
+                }
                 _ => {}
             }
         } else if (left.expression.constant.is_none() || right.expression.constant.is_none())
@@ -709,7 +721,7 @@ impl CheckedProgram<'_> {
                 Scalar::Int,
             )?;
         }
-        let (ty, untyped) = if shift {
+        let (ty, untyped) = if operator.is_shift() {
             (left_type, left.expression.untyped)
         } else if left.expression.untyped {
             (right_type, right.expression.untyped)
@@ -727,6 +739,27 @@ impl CheckedProgram<'_> {
         Ok((left, right, ty, untyped, constant))
     }
 
+    /// Gives an untyped integer constant the exact floating-point value it
+    /// names, which is the one form it combines with an untyped
+    /// floating-point constant in.
+    fn make_untyped_floating(
+        &self,
+        id: Idx<Expression>,
+        checked: &mut CheckedExpression,
+    ) -> Result<(), Diagnostic> {
+        if to_untyped_floating(checked) {
+            return Ok(());
+        }
+        Err(Diagnostic::new(
+            self.syntax.expressions[id].span.clone(),
+            format!(
+                "cannot implicitly convert `{}` to `{}`",
+                checked.ty,
+                Scalar::F64
+            ),
+        ))
+    }
+
     fn concretize(
         &mut self,
         id: Idx<Expression>,
@@ -734,14 +767,13 @@ impl CheckedProgram<'_> {
         destination: Scalar,
     ) -> Result<(), Diagnostic> {
         debug_assert!(checked.untyped);
-        let ty = checked
-            .ty
-            .scalar()
-            .expect("an untyped expression has a scalar type");
-        if ty.is_integer() != destination.is_integer() {
+        if !contextualizable(checked, destination) {
             return Err(Diagnostic::new(
                 self.syntax.expressions[id].span.clone(),
-                format!("cannot implicitly convert `{ty}` to `{destination}`"),
+                format!(
+                    "cannot implicitly convert `{}` to `{destination}`",
+                    checked.ty
+                ),
             ));
         }
         let constant = concretize_value(self.syntax, id, checked, destination)?

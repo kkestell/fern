@@ -25,6 +25,11 @@ tasks in `eng/roadmap.md`. Reading either document does not require its skill.
 Generic skill wording about "product behavior" does not expand the language
 specification's scope.
 
+Document ownership governs decisions, not obvious mistakes. When any document
+is plainly wrong in a way nobody chose — an example that does not compile, a
+stale name, a typo — correct it where you find it and say so. Reach for the
+owning skill when the fix changes what the project intends.
+
 Plans in `eng/plans/` are produced by `kplan` and executed by `kwork`.
 
 The specification and roadmap are created when the project needs them. `kplan`
@@ -34,8 +39,8 @@ missing. The architecture document is not required to begin planning.
 ## Codebase Map
 
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
-- `src/types.rs` — the Fern type and operator enums and their spellings,
-  shared by every phase.
+- `src/types.rs` — the Fern type and operator enums, their spellings, and the
+  representation of a concrete floating-point value, shared by every phase.
 - `src/frontend/`, `src/semantic/` — parsing and semantic implementations,
   tests, and snapshots.
 - `src/module.rs` — module discovery, import resolution, and the dependency
@@ -82,11 +87,14 @@ Do not be clever or cryptic. Do not stack clauses onto a sentence with dashes
 and semicolons; start a new sentence. Do not invent names for things that
 already have names. Prefer the concrete: name the file, the function, the value.
 
-When you need a decision, ask one plain question.
+When you need a decision, ask one plain question. Write it as prose in your
+reply. Never ask through a multiple-choice or option-picker tool.
 
-When asking about a language-design decision, briefly explain what Go, Odin,
-and Hare do for that same decision. Distinguish specified behavior from
-implementation-specific behavior and verify uncertain details in primary sources.
+When asking about a language-design decision, first say what Go, Odin, and Hare
+do for that same decision, then recommend one answer and say why in a sentence.
+Verify each language's behavior in its primary sources before describing it, and
+say so plainly when a source does not settle it. Distinguish specified behavior
+from implementation-specific behavior.
 
 This governs replies. Files you write follow the repository's documentation
 rules.

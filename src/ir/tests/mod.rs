@@ -2,11 +2,31 @@ use crate::{
     frontend::parser,
     ir::{lower::lower, model::*, verify::VerifiedProgram},
     semantic::namespaces,
-    types::{BinaryOperator, Scalar, Type},
+    types::{BinaryOperator, Float, Scalar, Type},
 };
 
 pub(super) fn integer(value: i128, ty: Scalar) -> Operand {
-    Operand::Integer { value, ty }
+    Operand::Literal(Literal::Integer { value, ty })
+}
+
+pub(super) fn floating(value: Float) -> Operand {
+    Operand::Literal(Literal::Floating(value))
+}
+
+/// The integer literals a global of leaf type `ty` holds, in memory order.
+pub(super) fn integers(values: impl IntoIterator<Item = i128>, ty: Scalar) -> Vec<Literal> {
+    values
+        .into_iter()
+        .map(|value| Literal::Integer { value, ty })
+        .collect()
+}
+
+/// The floating-point literals a global of leaf type `f64` holds.
+pub(super) fn doubles(values: impl IntoIterator<Item = f64>) -> Vec<Literal> {
+    values
+        .into_iter()
+        .map(|value| Literal::Floating(Float::Binary64(value.to_bits())))
+        .collect()
 }
 
 pub(super) fn convert(operand: Operand, ty: Scalar) -> Value {
@@ -125,7 +145,10 @@ fn describe(place: &Place) -> String {
         Place::Global(GlobalId(id)) => format!("global{id}"),
         Place::Element { base, index, .. } => {
             let index = match index {
-                Operand::Integer { value, .. } => value.to_string(),
+                Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
+                Operand::Literal(Literal::Floating(_)) => {
+                    unreachable!("an index has type `int`")
+                }
                 Operand::Value(ValueId(id)) => format!("v{id}"),
             };
             format!("{}[{index}]", describe(base))

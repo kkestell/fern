@@ -1,0 +1,9 @@
+fn main() -> void {
+    const half: f32 = .5;
+    var value: f32 = half + half;
+
+    if f64(value) / 2.0 == 0.5 {
+        exit(42);
+    }
+    exit(255);
+}

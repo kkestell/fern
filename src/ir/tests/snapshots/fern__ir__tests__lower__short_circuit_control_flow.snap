@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -49,10 +49,12 @@ Program {
                                 1,
                             ),
                         ),
-                        right: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 0,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -91,10 +93,12 @@ Program {
                     kind: Binary {
                         operator: Divide,
                         form: Infix,
-                        left: Integer {
-                            value: 10,
-                            ty: Int,
-                        },
+                        left: Literal(
+                            Integer {
+                                value: 10,
+                                ty: Int,
+                            },
+                        ),
                         right: Value(
                             ValueId(
                                 4,
@@ -116,10 +120,12 @@ Program {
                                 5,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -163,10 +169,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Local(
@@ -174,10 +182,12 @@ Program {
                                         1,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 1,
-                                    ty: Bool,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 1,
+                                        ty: Bool,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -238,10 +248,12 @@ Program {
                                         2,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Bool,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Bool,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {
@@ -316,10 +328,12 @@ Program {
                                         3,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Bool,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Bool,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {
@@ -353,10 +367,12 @@ Program {
                     Block {
                         instructions: [],
                         terminator: Exit {
-                            status: Integer {
-                                value: 1,
-                                ty: Int,
-                            },
+                            status: Literal(
+                                Integer {
+                                    value: 1,
+                                    ty: Int,
+                                },
+                            ),
                         },
                     },
                     Block {
@@ -370,10 +386,12 @@ Program {
                     Block {
                         instructions: [],
                         terminator: Exit {
-                            status: Integer {
-                                value: 0,
-                                ty: Int,
-                            },
+                            status: Literal(
+                                Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            ),
                         },
                     },
                 ],

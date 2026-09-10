@@ -19,7 +19,18 @@ impl VerifiedProgram {
     }
 }
 
-fn verify_integer(value: i128, ty: Scalar) -> Result<Scalar, CompileError> {
+/// The scalar type a literal has, rejecting one whose value its type cannot
+/// hold. An integer literal spells a two's complement value, so a
+/// floating-point type is not one of its types.
+fn verify_literal(literal: Literal) -> Result<Scalar, CompileError> {
+    let Literal::Integer { value, ty } = literal else {
+        return Ok(literal.ty());
+    };
+    if ty.is_floating() {
+        return Err(CompileError::new(format!(
+            "internal compiler error: IR integer {value} has floating-point type {ty:?}"
+        )));
+    }
     if value < ty.min() || value > i128::from(ty.max()) {
         return Err(CompileError::new(format!(
             "internal compiler error: IR integer {value} out of range for {ty:?}"
@@ -64,14 +75,16 @@ fn valid_value(
                 && operand_type(*operand)? == Scalar::Bool.into()
         }
         ValueKind::Convert { .. } | ValueKind::Unary { .. } | ValueKind::Binary { .. } => {
-            valid_integer_operation(value, operand_type)?
+            valid_numeric_operation(value, operand_type)?
         }
     })
 }
 
-/// The value kinds defined only on integers, whose result and operands are all
-/// non-`bool` scalars.
-fn valid_integer_operation(
+/// The value kinds defined only on numbers, whose result and operands are all
+/// numeric scalars. A conversion crosses between the integer and
+/// floating-point types; every operation keeps its operands' type, and the
+/// operators defined on each of the two categories differ.
+fn valid_numeric_operation(
     value: &Value,
     operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
@@ -83,9 +96,14 @@ fn valid_integer_operation(
             truncating,
         } => {
             let source = operand(*source)?;
-            source.is_integer()
-                && ty.is_integer()
-                && (*truncating || source.all_values_fit(ty) || value.span.is_some())
+            if *truncating {
+                // Truncation reinterprets a two's complement bit pattern.
+                source.is_integer() && ty.is_integer()
+            } else {
+                source.is_numeric()
+                    && ty.is_numeric()
+                    && (source.all_values_fit(ty) || value.span.is_some())
+            }
         }
         ValueKind::Unary {
             operator,
@@ -94,8 +112,11 @@ fn valid_integer_operation(
             let source = operand(*source)?;
             value.span.is_some()
                 && source == ty
-                && source.is_integer()
-                && (*operator != UnaryOperator::Negate || source.signed())
+                && match operator {
+                    // Wrapping negation and complement read a bit pattern.
+                    UnaryOperator::WrappingNegate | UnaryOperator::Complement => ty.is_integer(),
+                    UnaryOperator::Negate => ty.is_floating() || (ty.is_integer() && ty.signed()),
+                }
         }
         ValueKind::Binary {
             operator,
@@ -106,11 +127,17 @@ fn valid_integer_operation(
             let (left, right) = (operand(*left)?, operand(*right)?);
             value.span.is_some()
                 && left == ty
-                && left.is_integer()
-                && right.is_integer()
-                && (operator.is_shift() || right == left)
+                && if ty.is_floating() {
+                    // Only the four arithmetic operators are defined on
+                    // floating-point operands, which share one format.
+                    right == ty && operator.defined_on_floating()
+                } else {
+                    // A shift takes its count independently of its left
+                    // operand's type; every other operator takes one type.
+                    ty.is_integer() && right.is_integer() && (operator.is_shift() || right == ty)
+                }
         }
-        _ => unreachable!("an integer operation is a conversion, a unary, or a binary value"),
+        _ => unreachable!("a numeric operation is a conversion, a unary, or a binary value"),
     })
 }
 
@@ -505,8 +532,15 @@ fn verify_global(global: &Global) -> Result<(), CompileError> {
             global.ty
         )));
     }
+    let leaf = global.ty.leaf();
     for &value in &global.values {
-        verify_integer(value, global.ty.leaf())?;
+        let ty = verify_literal(value)?;
+        if ty != leaf {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR global of type `{}` holds a `{ty}` value",
+                global.ty
+            )));
+        }
     }
     Ok(())
 }
@@ -654,7 +688,7 @@ fn flow_operand_type(
     position: usize,
 ) -> Result<Type, CompileError> {
     match operand {
-        Operand::Integer { value, ty } => verify_integer(value, ty).map(Type::from),
+        Operand::Literal(literal) => verify_literal(literal).map(Type::from),
         Operand::Value(ValueId(id)) => {
             let Some(definition) = definitions.get(id) else {
                 return Err(CompileError::new(format!(

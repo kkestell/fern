@@ -381,3 +381,34 @@ fn entry_checks_keep_their_spans_and_function_bodies_are_all_checked() {
     assert_eq!(error.span, start..start + "missing".len());
     assert_eq!(error.message, "unknown binding `missing`");
 }
+
+#[test]
+fn a_signature_retains_its_floating_types() {
+    let syntax = parse(
+        "fn scale(factor: f32, weights: [2]f64) -> f64 { return weights[0]; }
+         fn main() -> void {}",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let scale = syntax
+        .functions
+        .iter()
+        .find(|(_, function)| !function.parameters.is_empty())
+        .map(|(id, _)| id)
+        .unwrap();
+    assert_eq!(
+        checked.functions[scale]
+            .parameters
+            .iter()
+            .map(|&binding| checked.bindings[binding].ty.clone())
+            .collect::<Vec<_>>(),
+        [
+            value_type(Scalar::F32),
+            array_type(2, value_type(Scalar::F64)),
+        ]
+    );
+    assert_eq!(
+        checked.functions[scale].result,
+        Some(value_type(Scalar::F64))
+    );
+}

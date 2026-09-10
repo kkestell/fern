@@ -7,7 +7,7 @@ use crate::{
         namespaces::{check, check_root},
     },
     source::SourceMap,
-    types::{LogicalOperator, Scalar, Type},
+    types::{Float, LogicalOperator, Scalar, Type},
 };
 use num_bigint::BigInt;
 
@@ -32,6 +32,27 @@ fn big(value: i128) -> BigInt {
 /// The recorded constant an integer-valued expression or binding folds to.
 fn folded(value: i128) -> Option<Constant> {
     Some(Constant::Integer(big(value)))
+}
+
+/// The recorded constant an `f32` expression folds to. The expected value is
+/// spelled as a Rust literal, which rounds to binary32 the same way Fern does.
+fn binary32(value: f32) -> Option<Constant> {
+    Some(Constant::Float(Float::Binary32(value.to_bits())))
+}
+
+/// The recorded constant an `f64` expression folds to.
+fn binary64(value: f64) -> Option<Constant> {
+    Some(Constant::Float(Float::Binary64(value.to_bits())))
+}
+
+/// The recorded constant an array of `f32` values folds to.
+fn binary32_array(values: &[f32]) -> Option<Constant> {
+    Some(Constant::Array(
+        values
+            .iter()
+            .map(|&value| Constant::Float(Float::Binary32(value.to_bits())))
+            .collect(),
+    ))
 }
 
 /// The recorded constant an array of integers folds to.

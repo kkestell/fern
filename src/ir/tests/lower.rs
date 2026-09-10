@@ -13,15 +13,15 @@ fn array_globals_hold_their_elements_in_memory_order() {
         vec![
             Global {
                 ty: array(3, Scalar::Int.into()),
-                values: vec![1, 2, 3],
+                values: integers([1, 2, 3], Scalar::Int),
             },
             Global {
                 ty: array(2, array(2, Scalar::U8.into())),
-                values: vec![1, 2, 3, 4],
+                values: integers([1, 2, 3, 4], Scalar::U8),
             },
             Global {
                 ty: Scalar::Int.into(),
-                values: vec![7],
+                values: integers([7], Scalar::Int),
             },
         ]
     );
@@ -371,7 +371,7 @@ fn continue_inside_for_in_advances_to_the_next_element() {
                         if matches!(
                             main.values[*id].kind,
                             ValueKind::Binary {
-                                right: Operand::Integer { value: 1, .. },
+                                right: Operand::Literal(Literal::Integer { value: 1, .. }),
                                 ..
                             }
                         )
@@ -500,6 +500,19 @@ fn lowered_programs() {
             "var x = 1; { x = 42; { exit(x); x = 7; } x = 8; } x = 9; exit(x);",
         ),
         ("early_exit", "const x = 42; exit(x); const y = x; exit(y);"),
+        (
+            "floating_expressions",
+            "
+                var x: f64 = 40.5; var y: f64 = 2.0; var narrow: f32 = .5;
+                const add = x + y; const subtract = x - y;
+                const multiply = x * y; const divide = x / y; const negate = -x;
+                const equal = x == y; const less = x < y;
+                const rounded = f32(x); const widened = f64(narrow);
+                const whole = int(y); const from_integer = f64(whole);
+                const folded: f32 = 1.0 / 4.0;
+                exit(whole);
+            ",
+        ),
     ];
     for (name, body) in fixtures {
         let program = lowered(&format!("fn main() -> void {{ {body} }}"));
@@ -524,7 +537,7 @@ fn module_bindings_become_globals_with_constant_initial_values() {
         program.program().globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: vec![40],
+            values: integers([40], Scalar::Int),
         }]
     );
     insta::assert_debug_snapshot!("module_bindings", program.program());
@@ -739,7 +752,7 @@ fn cross_module_calls_reads_and_assignments_lower_like_local_ones() {
         program.globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: vec![0],
+            values: integers([0], Scalar::Int),
         }]
     );
 
@@ -747,16 +760,7 @@ fn cross_module_calls_reads_and_assignments_lower_like_local_ones() {
     assert_eq!(program.main, FunctionId(0));
     let main = main_of_program(program);
     assert_eq!(call_targets(main), [FunctionId(1), FunctionId(2)]);
-    assert_eq!(
-        stores(main),
-        [(
-            value.clone(),
-            Operand::Integer {
-                value: 1,
-                ty: Scalar::Int,
-            }
-        )]
-    );
+    assert_eq!(stores(main), [(value.clone(), integer(1, Scalar::Int))]);
     assert_eq!(loads(main), std::slice::from_ref(&value));
 
     // `value = value + amount` in the callee reads the same global and its
@@ -789,10 +793,7 @@ fn every_module_function_is_lowered_once_under_its_own_id() {
     assert_eq!(
         program.functions[1].flow.blocks[0].terminator,
         Terminator::Return {
-            value: Some(Operand::Integer {
-                value: 7,
-                ty: Scalar::Int,
-            })
+            value: Some(integer(7, Scalar::Int))
         }
     );
 }
@@ -820,13 +821,7 @@ fn a_dependencys_main_is_lowered_as_an_ordinary_function() {
     assert_eq!(dependency_main.result, None);
     assert_eq!(
         stores(dependency_main),
-        [(
-            Place::Global(GlobalId(0)),
-            Operand::Integer {
-                value: 255,
-                ty: Scalar::Int,
-            }
-        )]
+        [(Place::Global(GlobalId(0)), integer(255, Scalar::Int))]
     );
 }
 
@@ -857,7 +852,7 @@ fn a_binding_two_modules_use_is_one_global() {
         program.globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: vec![0],
+            values: integers([0], Scalar::Int),
         }]
     );
 
@@ -892,11 +887,11 @@ fn globals_follow_dependency_order_and_fold_imported_constants() {
         vec![
             Global {
                 ty: Scalar::Int.into(),
-                values: vec![2],
+                values: integers([2], Scalar::Int),
             },
             Global {
                 ty: Scalar::Int.into(),
-                values: vec![6],
+                values: integers([6], Scalar::Int),
             },
         ]
     );
@@ -1142,4 +1137,77 @@ fn comparisons_preserve_left_operands_across_short_circuiting_right_operands() {
     ] {
         lowered(&format!("fn main() -> void {{ {source} }}"));
     }
+}
+
+#[test]
+fn floating_constants_lower_to_the_bits_of_their_format() {
+    let program = lowered(
+        "var narrow: f32 = 0.1;
+             var wide: f64 = 0.1;
+             const zero: f32 = 0.0;
+             var signed_zero: f32 = -zero;
+             var table: [2][1]f64 = [[0.5], [-1.5]];
+             fn main() -> void { exit(len(table)); }",
+    );
+    assert_eq!(
+        program.program().globals,
+        vec![
+            Global {
+                ty: Scalar::F32.into(),
+                values: vec![Literal::Floating(Float::Binary32(0.1f32.to_bits()))],
+            },
+            Global {
+                ty: Scalar::F64.into(),
+                values: vec![Literal::Floating(Float::Binary64(0.1f64.to_bits()))],
+            },
+            // A literal rounds once to its format, so `f32` and `f64` hold
+            // different values for the same source text. Negating a typed
+            // zero keeps the sign bit an untyped constant cannot carry.
+            Global {
+                ty: Scalar::F32.into(),
+                values: vec![Literal::Floating(Float::Binary32((-0.0f32).to_bits()))],
+            },
+            Global {
+                ty: array(2, array(1, Scalar::F64.into())),
+                values: doubles([0.5, -1.5]),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_folded_floating_expression_lowers_to_one_literal_operand() {
+    let program = lowered("fn main() -> void { var value: f32 = 0.25 + 0.25; exit(0); }");
+    let main = main_of(&program);
+    assert_eq!(
+        stores(main),
+        [(
+            Place::Local(LocalId(0)),
+            floating(Float::Binary32(0.5f32.to_bits())),
+        )]
+    );
+    // The whole expression folded, so nothing computes the value at run time.
+    assert!(main.values.is_empty());
+}
+
+#[test]
+fn floating_signatures_arrays_and_globals_reach_the_common_ir_forms() {
+    let program = lowered(
+        "var scale: f64 = 2.0;
+             fn weigh(weights: [2]f64, index: int) -> f64 { return weights[index] * scale; }
+             fn main() -> void {
+                 var weights: [2]f64 = [0.5, 1.5];
+                 var total = weigh(weights, 1) + weigh(weights, 0);
+                 if total == 4.0 { exit(42); }
+                 exit(0);
+             }",
+    );
+    let weigh = &program.program().functions[0];
+    assert_eq!(weigh.result, Some(Scalar::F64.into()));
+    assert_eq!(
+        weigh.flow.locals,
+        [array(2, Scalar::F64.into()), Scalar::Int.into()]
+    );
+    assert_eq!(loads(weigh).len(), 3);
+    insta::assert_debug_snapshot!("floating_functions", program.program());
 }

@@ -1,0 +1,40 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+fn scale name=3..8 span=0..186
+  parameter factor name=9..15
+    named f32 span=17..20
+  parameter weights name=22..29
+    array span=31..37
+      length
+        integer 2 span=32..33
+      element
+        named f64 span=34..37
+  result
+    named f64 span=42..45
+  var narrow name=52..58 span=48..73
+    named f32 span=60..63
+    reference factor span=66..72
+  var matrix name=78..84 span=74..106
+    array span=86..95
+      length
+        integer 2 span=87..88
+      element
+        array span=89..95
+          length
+            integer 3 span=90..91
+          element
+            named f32 span=92..95
+    reference weights span=98..105
+  const widened name=113..120 span=107..135
+    checked conversion f64 span=123..134
+      reference factor span=127..133
+  const narrowed name=142..150 span=136..169
+    checked conversion f32 span=153..168
+      index span=157..167
+        reference weights span=157..164
+        integer 0 span=165..166
+  return span=170..184
+    checked conversion f64 span=177..183
+      integer 1 span=181..182

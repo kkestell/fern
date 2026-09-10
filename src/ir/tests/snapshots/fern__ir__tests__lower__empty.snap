@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {

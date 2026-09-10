@@ -147,7 +147,7 @@ The completion fixture will be
 
 ```fern
 fn main() -> void {
-    const half = .5;
+    const half: f32 = .5;
     var value: f32 = half + half;
 
     if f64(value) / 2.0 == 0.5 {
@@ -161,11 +161,11 @@ It exits with status 42.
 
 ### Tasks
 
-- [ ] Lex and parse floating-point literals
-- [ ] Represent floating-point types and numeric conversions across the compiler
-- [ ] Check floating-point expressions and constant expressions
-- [ ] Lower and emit floating-point values, operations, and comparisons
-- [ ] Compile and execute floating-point programs and failures
+- [x] Lex and parse floating-point literals
+- [x] Represent floating-point types and numeric conversions across the compiler
+- [x] Check floating-point expressions and constant expressions
+- [x] Lower and emit floating-point values, operations, and comparisons
+- [x] Compile and execute floating-point programs and failures
 
 ### Completion gates
 

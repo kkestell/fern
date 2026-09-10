@@ -1,4 +1,5 @@
 mod emitter;
+mod floating;
 mod integer;
 mod qbe;
 #[cfg(test)]

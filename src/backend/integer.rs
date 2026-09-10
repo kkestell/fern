@@ -1,8 +1,7 @@
 //! Integer operation, conversion, overflow, shift, and trap emission.
 
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticRenderer},
-    ir::model::{BinaryForm, Function, Operand, Value, ValueId},
+    ir::model::{BinaryForm, Function, Operand, Value},
     types::{BinaryOperator, ComparisonOperator, Scalar, Type, UnaryOperator},
 };
 
@@ -16,11 +15,10 @@ pub(super) fn emit_comparison(
     operator: ComparisonOperator,
     left: Operand,
     right: Operand,
-    function: &Function,
+    operand_ty: &Type,
 ) {
-    let operand_ty = operand_value_type(function, left);
     let Some(ty) = operand_ty.scalar() else {
-        return emit_array_comparison(text, id, operator, left, right, &operand_ty);
+        return emit_array_comparison(text, id, operator, left, right, operand_ty);
     };
     let comparison = match operator {
         ComparisonOperator::Equal => format!("ceq{}", qbe_type(ty)),
@@ -569,7 +567,7 @@ fn emit_shift(
 ) {
     let (left, right) = operands;
     let ty = scalar(&value.ty);
-    let count_ty = operand_type(function, right);
+    let count_ty = operand_scalar(function, right);
     let count_width = qbe_type(count_ty);
     let left = operand(left);
     let right = operand(right);
@@ -655,82 +653,6 @@ fn emit_shift(
 
 fn emit_normalized(text: &mut String, id: usize, source: &str, ty: Scalar) {
     emit_truncation_operand(text, id, source, ty, ty);
-}
-
-pub(super) fn operation_message(
-    span: Option<&std::ops::Range<usize>>,
-    diagnostic_renderer: Option<&DiagnosticRenderer<'_>>,
-    message: &str,
-) -> String {
-    match (span, diagnostic_renderer) {
-        (Some(span), Some(renderer)) => renderer.render(&Diagnostic::new(span.clone(), message)),
-        _ => format!("{message}\n"),
-    }
-}
-
-pub(super) fn emit_conditional_trap(
-    text: &mut String,
-    data: &mut String,
-    function: usize,
-    id: usize,
-    cause: &str,
-    condition: &str,
-    message: String,
-) {
-    let failed = format!("operation{id}_{cause}_failed");
-    let ready = format!("operation{id}_{cause}_ready");
-    // Value IDs are function-local, so the module-global message symbol needs
-    // the function to stay unique.
-    let symbol = format!("fern_function{function}_operation{id}_{cause}_message");
-    writeln!(text, "    jnz {condition}, @{failed}, @{ready}").unwrap();
-    writeln!(text, "@{failed}").unwrap();
-    emit_message_data(data, &symbol, &message);
-    writeln!(
-        text,
-        "    call $write(w 2, l ${symbol}, l {})",
-        message.len(),
-    )
-    .unwrap();
-    text.push_str("    call $abort()\n    hlt\n");
-    writeln!(text, "@{ready}").unwrap();
-}
-
-pub(super) fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
-    write!(data, "data ${symbol} = {{ ").unwrap();
-    let bytes = message.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b' '..=b'~') && !matches!(bytes[index], b'"' | b'\\') {
-            let start = index;
-            while index < bytes.len()
-                && matches!(bytes[index], b' '..=b'~')
-                && !matches!(bytes[index], b'"' | b'\\')
-            {
-                index += 1;
-            }
-            write!(
-                data,
-                "b \"{}\", ",
-                std::str::from_utf8(&bytes[start..index]).expect("printable ASCII is UTF-8")
-            )
-            .unwrap();
-        } else {
-            write!(data, "b {}, ", bytes[index]).unwrap();
-            index += 1;
-        }
-    }
-    data.push_str("b 0 }\n");
-}
-
-fn operand_value_type(function: &Function, operand: Operand) -> Type {
-    match operand {
-        Operand::Integer { ty, .. } => ty.into(),
-        Operand::Value(ValueId(id)) => function.values[id].ty.clone(),
-    }
-}
-
-pub(super) fn operand_type(function: &Function, operand: Operand) -> Scalar {
-    scalar(&operand_value_type(function, operand))
 }
 
 pub(super) fn emit_checked_conversion(

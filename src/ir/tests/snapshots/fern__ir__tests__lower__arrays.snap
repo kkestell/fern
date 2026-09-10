@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -56,10 +56,12 @@ Program {
                                 1,
                             ),
                         ),
-                        right: Integer {
-                            value: 3,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 3,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -228,10 +230,12 @@ Program {
                                 11,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -290,10 +294,12 @@ Program {
                                         1,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -318,10 +324,12 @@ Program {
                                         3,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {
@@ -398,34 +406,20 @@ Program {
                                             5,
                                         ),
                                     ),
-                                    index: Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                    ),
                                     span: 191..198,
                                 },
-                                operand: Integer {
-                                    value: 1,
-                                    ty: Int,
-                                },
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    index: Integer {
+                                operand: Literal(
+                                    Integer {
                                         value: 1,
                                         ty: Int,
                                     },
-                                    span: 191..198,
-                                },
-                                operand: Integer {
-                                    value: 2,
-                                    ty: Int,
-                                },
+                                ),
                             },
                             Store {
                                 place: Element {
@@ -434,16 +428,42 @@ Program {
                                             5,
                                         ),
                                     ),
-                                    index: Integer {
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 191..198,
+                                },
+                                operand: Literal(
+                                    Integer {
                                         value: 2,
                                         ty: Int,
                                     },
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    index: Literal(
+                                        Integer {
+                                            value: 2,
+                                            ty: Int,
+                                        },
+                                    ),
                                     span: 191..198,
                                 },
-                                operand: Integer {
-                                    value: 3,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 3,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -609,10 +629,12 @@ Program {
                                 1,
                             ),
                         ),
-                        right: Integer {
-                            value: 2,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -700,10 +722,12 @@ Program {
                                 8,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -763,16 +787,20 @@ Program {
                                             1,
                                         ),
                                     ),
-                                    index: Integer {
+                                    index: Literal(
+                                        Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 356..362,
+                                },
+                                operand: Literal(
+                                    Integer {
                                         value: 0,
                                         ty: Int,
                                     },
-                                    span: 356..362,
-                                },
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                ),
                             },
                             Store {
                                 place: Element {
@@ -781,16 +809,20 @@ Program {
                                             1,
                                         ),
                                     ),
-                                    index: Integer {
-                                        value: 1,
-                                        ty: Int,
-                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
                                     span: 356..362,
                                 },
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -815,10 +847,12 @@ Program {
                                         3,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {
@@ -1146,10 +1180,12 @@ Program {
                                 8,
                             ),
                         ),
-                        right: Integer {
-                            value: 2,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -1262,10 +1298,12 @@ Program {
                                 15,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -1347,47 +1385,28 @@ Program {
                                                 0,
                                             ),
                                         ),
-                                        index: Integer {
+                                        index: Literal(
+                                            Integer {
+                                                value: 0,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 608..630,
+                                    },
+                                    index: Literal(
+                                        Integer {
                                             value: 0,
                                             ty: Int,
                                         },
-                                        span: 608..630,
-                                    },
-                                    index: Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
+                                    ),
                                     span: 608..630,
                                 },
-                                operand: Integer {
-                                    value: 1,
-                                    ty: Int,
-                                },
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                        span: 608..630,
-                                    },
-                                    index: Integer {
+                                operand: Literal(
+                                    Integer {
                                         value: 1,
                                         ty: Int,
                                     },
-                                    span: 608..630,
-                                },
-                                operand: Integer {
-                                    value: 2,
-                                    ty: Int,
-                                },
+                                ),
                             },
                             Store {
                                 place: Element {
@@ -1397,22 +1416,90 @@ Program {
                                                 0,
                                             ),
                                         ),
-                                        index: Integer {
+                                        index: Literal(
+                                            Integer {
+                                                value: 0,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 608..630,
+                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 608..630,
+                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Literal(
+                                            Integer {
+                                                value: 0,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 608..630,
+                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 2,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 608..630,
+                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 3,
+                                        ty: Int,
+                                    },
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Literal(
+                                            Integer {
+                                                value: 1,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 608..630,
+                                    },
+                                    index: Literal(
+                                        Integer {
                                             value: 0,
                                             ty: Int,
                                         },
-                                        span: 608..630,
-                                    },
-                                    index: Integer {
-                                        value: 2,
-                                        ty: Int,
-                                    },
+                                    ),
                                     span: 608..630,
                                 },
-                                operand: Integer {
-                                    value: 3,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 4,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Element {
@@ -1422,22 +1509,28 @@ Program {
                                                 0,
                                             ),
                                         ),
-                                        index: Integer {
+                                        index: Literal(
+                                            Integer {
+                                                value: 1,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 608..630,
+                                    },
+                                    index: Literal(
+                                        Integer {
                                             value: 1,
                                             ty: Int,
                                         },
-                                        span: 608..630,
-                                    },
-                                    index: Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
+                                    ),
                                     span: 608..630,
                                 },
-                                operand: Integer {
-                                    value: 4,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 5,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Element {
@@ -1447,47 +1540,28 @@ Program {
                                                 0,
                                             ),
                                         ),
-                                        index: Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                        span: 608..630,
-                                    },
-                                    index: Integer {
-                                        value: 1,
-                                        ty: Int,
-                                    },
-                                    span: 608..630,
-                                },
-                                operand: Integer {
-                                    value: 5,
-                                    ty: Int,
-                                },
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
+                                        index: Literal(
+                                            Integer {
+                                                value: 1,
+                                                ty: Int,
+                                            },
                                         ),
-                                        index: Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
                                         span: 608..630,
                                     },
-                                    index: Integer {
-                                        value: 2,
-                                        ty: Int,
-                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 2,
+                                            ty: Int,
+                                        },
+                                    ),
                                     span: 608..630,
                                 },
-                                operand: Integer {
-                                    value: 6,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 6,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -1531,22 +1605,28 @@ Program {
                                                 2,
                                             ),
                                         ),
-                                        index: Integer {
+                                        index: Literal(
+                                            Integer {
+                                                value: 0,
+                                                ty: Int,
+                                            },
+                                        ),
+                                        span: 689..690,
+                                    },
+                                    index: Literal(
+                                        Integer {
                                             value: 0,
                                             ty: Int,
                                         },
-                                        span: 689..690,
-                                    },
-                                    index: Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
+                                    ),
                                     span: 692..693,
                                 },
-                                operand: Integer {
-                                    value: 99,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 99,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -1581,10 +1661,12 @@ Program {
                     Block {
                         instructions: [],
                         terminator: Exit {
-                            status: Integer {
-                                value: 255,
-                                ty: Int,
-                            },
+                            status: Literal(
+                                Integer {
+                                    value: 255,
+                                    ty: Int,
+                                },
+                            ),
                         },
                     },
                     Block {
@@ -1603,10 +1685,12 @@ Program {
                                         3,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -1666,10 +1750,12 @@ Program {
                                         6,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {

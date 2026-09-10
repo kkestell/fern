@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: lowered_tree(MODULE_TREE).program()
 ---
 Program {
@@ -9,7 +9,10 @@ Program {
                 Int,
             ),
             values: [
-                0,
+                Integer {
+                    value: 0,
+                    ty: Int,
+                },
             ],
         },
     ],
@@ -60,10 +63,12 @@ Program {
                                 2,
                             ),
                         ),
-                        right: Integer {
-                            value: 20,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 20,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -81,10 +86,12 @@ Program {
                                 3,
                             ),
                         ),
-                        right: Integer {
-                            value: 10,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 10,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
             ],
@@ -102,10 +109,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 20,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 20,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Call {
                                 result: Some(
@@ -182,10 +191,12 @@ Program {
                         instructions: [],
                         terminator: Return {
                             value: Some(
-                                Integer {
-                                    value: 6,
-                                    ty: Int,
-                                },
+                                Literal(
+                                    Integer {
+                                        value: 6,
+                                        ty: Int,
+                                    },
+                                ),
                             ),
                         },
                     },
@@ -363,10 +374,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 255,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 255,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Return {
@@ -412,10 +425,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 2,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
             ],

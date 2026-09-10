@@ -159,7 +159,7 @@ impl CheckedProgram<'_> {
             constant: None,
         };
         let right = self.infer_expression(value, scopes)?;
-        let (_, right, _, _, _) = self.check_integer_binary(
+        let (_, right, _, _, _) = self.check_numeric_binary(
             operator,
             operator_span,
             &format!("{}=", operator.spelling()),

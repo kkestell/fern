@@ -13,7 +13,7 @@ use logos::Logos;
 use std::ops::Range;
 
 use super::{
-    lexer::{Token, valid_integer},
+    lexer::{Token, is_floating, valid_number},
     syntax::*,
 };
 
@@ -143,11 +143,11 @@ impl Parser<'_> {
             end..end
         };
         self.current = match token {
-            Some(Ok(Token::Integer)) => {
-                if let Err(message) = valid_integer(self.lexer.slice()) {
+            Some(Ok(Token::Number)) => {
+                if let Err(message) = valid_number(self.lexer.slice()) {
                     return Err(self.error(message));
                 }
-                Some(Token::Integer)
+                Some(Token::Number)
             }
             Some(Ok(token)) => Some(token),
             Some(Err(())) => {
@@ -935,12 +935,16 @@ impl Parser<'_> {
 
     fn primary_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
         let span = self.span.clone();
-        let kind = if self.current == Some(Token::Integer) {
+        let kind = if self.current == Some(Token::Number) {
             let spelling = self.lexer.slice().to_owned();
             self.advance()?;
-            ExpressionKind::Integer(spelling)
+            if is_floating(&spelling) {
+                ExpressionKind::Floating(spelling)
+            } else {
+                ExpressionKind::Integer(spelling)
+            }
         } else if self.current == Some(Token::Name)
-            && Scalar::named(self.lexer.slice()).is_some_and(Scalar::is_integer)
+            && Scalar::named(self.lexer.slice()).is_some_and(Scalar::is_numeric)
         {
             return self.conversion_expression(span);
         } else if matches!(self.current, Some(Token::True | Token::False)) {
@@ -1027,11 +1031,17 @@ impl Parser<'_> {
     }
 
     /// Parses a conversion, `T(x)` or `T.truncate(x)`, whose head is the name
-    /// of an integer type.
+    /// of a numeric type. Only an integer destination has the truncating form.
     fn conversion_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
         self.enter_nesting()?;
         let (destination, destination_span) = self.named_type()?;
         let truncating = self.truncate_marker()?;
+        if truncating && destination.is_floating() {
+            return Err(Diagnostic::new(
+                destination_span,
+                format!("`{destination}` has no truncating conversion"),
+            ));
+        }
         if !truncating && self.current != Some(Token::LeftParen) {
             return Err(Diagnostic::new(
                 destination_span,

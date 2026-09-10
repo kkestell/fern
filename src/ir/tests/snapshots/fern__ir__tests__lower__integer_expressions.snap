@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -870,10 +870,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 40,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 40,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Local(
@@ -881,10 +883,12 @@ Program {
                                         1,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 2,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(

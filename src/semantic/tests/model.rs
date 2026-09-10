@@ -51,6 +51,7 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
         .filter_map(|(_, expression)| match &expression.value {
             ExpressionValue::Reference(id) => Some(*id),
             ExpressionValue::Integer
+            | ExpressionValue::Floating
             | ExpressionValue::Boolean
             | ExpressionValue::Conversion { .. }
             | ExpressionValue::Grouping { .. }

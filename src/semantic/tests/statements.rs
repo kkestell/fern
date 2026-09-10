@@ -519,7 +519,7 @@ fn compound_assignments_follow_binary_and_assignment_rules() {
         (
             "var value = true; value += true;",
             "+=",
-            "integer `+=` requires integer operands",
+            "`+=` requires numeric operands",
         ),
         (
             "var value: u8 = 1; value += u16(1);",
@@ -561,5 +561,62 @@ fn names_require_a_preceding_binding_even_after_exit() {
         };
         assert_eq!(error.span, start..start + 1);
         assert_eq!(error.message, "unknown binding `x`");
+    }
+}
+
+#[test]
+fn floating_bindings_and_assignments_follow_their_format() {
+    accepts_source(
+        "const ratio = 1.5;
+        var scale: f64 = 0.5;
+        fn main() -> void {
+            var value: f32 = 1.0;
+            value = 2.0;
+            value = 1;
+            value += 0.5;
+            value -= 1;
+            value *= 2.0;
+            value /= 4.0;
+            scale = scale * ratio;
+            exit(0);
+        }",
+    );
+    assert_eq!(
+        checked_bindings("const ratio = 1.5; fn main() -> void {}")[0],
+        (value_type(Scalar::F64), binary64(1.5))
+    );
+    for (body, offending, message) in [
+        (
+            "var value: f32 = 1.0; value = f64(1.0);",
+            "f64(1.0)",
+            "cannot implicitly convert `f64` to `f32`",
+        ),
+        (
+            "var value: f32 = 1.0; value = 16777217;",
+            "16777217",
+            "integer literal not representable in `f32`",
+        ),
+        (
+            "var value: int = 1; value = 1.5;",
+            "1.5",
+            "cannot implicitly convert `f64` to `int`",
+        ),
+        (
+            "var value: f32 = 1.0; value += true;",
+            "+=",
+            "`+=` requires numeric operands",
+        ),
+        (
+            "var value: f32 = 1.0; value += f64(1.0);",
+            "+=",
+            "binary operands have different types `f32` and `f64`",
+        ),
+        (
+            "var value: bool = true; value = 1.0;",
+            "1.0",
+            "cannot implicitly convert `f64` to `bool`",
+        ),
+    ] {
+        rejects(body, offending, message);
     }
 }

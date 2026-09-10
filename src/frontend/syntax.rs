@@ -194,6 +194,9 @@ pub(crate) struct Expression {
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
+    /// A floating-point literal's source spelling, kept exactly so constant
+    /// evaluation can read the value the program wrote.
+    Floating(String),
     Boolean(bool),
     Reference(QualifiedName),
     Grouping {
@@ -283,7 +286,10 @@ pub(crate) fn walk_expression(
 ) {
     visit(expression);
     match &syntax.expressions[expression].kind {
-        ExpressionKind::Integer(_) | ExpressionKind::Boolean(_) | ExpressionKind::Reference(_) => {}
+        ExpressionKind::Integer(_)
+        | ExpressionKind::Floating(_)
+        | ExpressionKind::Boolean(_)
+        | ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
             operand: expression,

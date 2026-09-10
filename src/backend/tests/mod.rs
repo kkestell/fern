@@ -1,5 +1,5 @@
 use crate::{
-    backend::{emitter::*, integer::*, qbe::*, toolchain::build_text},
+    backend::{emitter::*, qbe::*, toolchain::build_text},
     ir::model::*,
     ir::verify::VerifiedProgram,
     source::SourceMap,
@@ -8,10 +8,10 @@ use crate::{
 use std::{collections::BTreeSet, fmt::Write, process::Command};
 
 fn integer(value: i32) -> Operand {
-    Operand::Integer {
+    Operand::Literal(Literal::Integer {
         value: i128::from(value),
         ty: Scalar::Int,
-    }
+    })
 }
 
 fn copy(operand: Operand) -> Value {
@@ -119,6 +119,15 @@ fn assert_native_values(verified: &VerifiedProgram, expected: &[i128]) {
     assert_eq!(Command::new(output).status().unwrap().code(), Some(1));
 }
 
+/// Compiles a `main` body, runs it, and reports the status it exited with.
+fn native_status(body: &str) -> Option<i32> {
+    let program = lowered(&format!("fn main() -> void {{ {body} }}"));
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("program");
+    build_text(&emit(&program, None), &output).unwrap();
+    Command::new(output).status().unwrap().code()
+}
+
 fn assert_native_failure(body: &str, expected: &str) -> String {
     let text = format!("fn main() -> void {{ {body} }}");
     let program = lowered(&text);
@@ -133,4 +142,5 @@ fn assert_native_failure(body: &str, expected: &str) -> String {
 }
 
 mod emitter;
+mod floating;
 mod integer;

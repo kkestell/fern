@@ -27,6 +27,9 @@ The examples form a tour of the currently supported language, grouped by topic:
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is
   `examples/modules_and_imports/app`.
+- [Floating-point numbers](examples/floating_point.fern) covers floating-point
+  literal forms, `f32` and `f64` bindings, arithmetic, comparison, and
+  conversions between floating-point and integer types.
 
 ## Build and run
 

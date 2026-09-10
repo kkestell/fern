@@ -1,0 +1,45 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+fn main name=3..7 span=0..311
+  result void
+  const whole name=26..31 span=20..38
+    floating 1.0 span=34..37
+  const fraction name=45..53 span=39..59
+    floating .5 span=56..58
+  const trailing name=66..74 span=60..80
+    floating 2. span=77..79
+  const exponent name=87..95 span=81..102
+    floating 1e3 span=98..101
+  const scaled name=109..115 span=103..127
+    floating 6.02e-23 span=118..126
+  const upper name=134..139 span=128..148
+    floating 1E+10 span=142..147
+  const negated name=155..162 span=149..170
+    unary Negate operator=165..166 span=165..169
+      floating 1.5 span=166..169
+  const sum name=177..180 span=171..197
+    binary Add operator=187..188 span=183..196
+      floating 1.5 span=183..186
+      binary Multiply operator=192..193 span=189..196
+        floating .5 span=189..191
+        floating 2. span=194..196
+  const grouped name=204..211 span=198..232
+    binary Divide operator=226..227 span=214..231
+      group span=214..225
+        binary Add operator=219..220 span=215..224
+          floating 1.0 span=215..218
+          floating 2.5 span=221..224
+      floating 0.5 span=228..231
+  const compared name=239..247 span=233..260
+    comparison Less operator=254..255 span=250..259
+      floating 1.0 span=250..253
+      floating 2.0 span=256..259
+  const mixed name=267..272 span=261..283
+    binary Add operator=277..278 span=275..282
+      integer 1 span=275..276
+      floating 0.5 span=279..282
+  var annotated name=288..297 span=284..309
+    named int span=299..302
+    floating 1.0 span=305..308

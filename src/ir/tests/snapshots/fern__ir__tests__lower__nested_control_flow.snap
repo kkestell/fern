@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -36,10 +36,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 3,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 3,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -69,10 +71,12 @@ Program {
                                 2,
                             ),
                         ),
-                        right: Integer {
-                            value: 3,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 3,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -102,10 +106,12 @@ Program {
                                 4,
                             ),
                         ),
-                        right: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 0,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -183,10 +189,12 @@ Program {
                                 9,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -217,10 +225,12 @@ Program {
                                 11,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -251,10 +261,12 @@ Program {
                                 13,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -295,10 +307,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Store {
                                 place: Local(
@@ -306,10 +320,12 @@ Program {
                                         1,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {
@@ -353,10 +369,12 @@ Program {
                                         2,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Jump {

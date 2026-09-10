@@ -15,9 +15,11 @@ pub(crate) enum Scalar {
     U64,
     Int,
     Uint,
+    F32,
+    F64,
 }
 
-const NAMED_TYPES: [(Scalar, &str); 11] = [
+const NAMED_TYPES: [(Scalar, &str); 13] = [
     (Scalar::Bool, "bool"),
     (Scalar::I8, "i8"),
     (Scalar::I16, "i16"),
@@ -29,6 +31,8 @@ const NAMED_TYPES: [(Scalar, &str); 11] = [
     (Scalar::U64, "u64"),
     (Scalar::Int, "int"),
     (Scalar::Uint, "uint"),
+    (Scalar::F32, "f32"),
+    (Scalar::F64, "f64"),
 ];
 
 impl Scalar {
@@ -71,10 +75,19 @@ impl Scalar {
             Self::I32 | Self::U32 => 32,
             Self::I64 | Self::U64 => 64,
             Self::Int | Self::Uint => pointer_width,
+            Self::F32 => 32,
+            Self::F64 => 64,
         }
     }
 
+    /// Whether this type's values are signed. This and the range helpers
+    /// reached through it describe a two's complement bit pattern, which every
+    /// integer type and `bool` has and a floating-point type does not.
     pub(crate) fn signed(self) -> bool {
+        debug_assert!(
+            !self.is_floating(),
+            "`{self}` has no two's complement range"
+        );
         matches!(
             self,
             Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Int
@@ -82,6 +95,16 @@ impl Scalar {
     }
 
     pub(crate) fn is_integer(self) -> bool {
+        !matches!(self, Self::Bool | Self::F32 | Self::F64)
+    }
+
+    pub(crate) fn is_floating(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+
+    /// Whether this type names a number, which is what a conversion converts
+    /// between.
+    pub(crate) fn is_numeric(self) -> bool {
         self != Self::Bool
     }
 
@@ -97,8 +120,55 @@ impl Scalar {
         }
     }
 
+    /// How many bits of significand a value of this floating-point type has,
+    /// counting the leading bit a normal value does not store.
+    fn significand_bits(self) -> u32 {
+        match self {
+            Self::F32 => 24,
+            Self::F64 => 53,
+            _ => unreachable!("`{self}` has no significand"),
+        }
+    }
+
+    /// Whether every value of this type is also a value of `destination`,
+    /// which is when a checked conversion between them cannot fail.
     pub(crate) fn all_values_fit(self, destination: Self) -> bool {
-        self.min() >= destination.min() && self.max() <= destination.max()
+        match (self.is_floating(), destination.is_floating()) {
+            (false, false) => self.min() >= destination.min() && self.max() <= destination.max(),
+            // A wider interchange format holds every value of a narrower one.
+            (true, true) => self.width() <= destination.width(),
+            // No floating-point format holds every value of an integer type,
+            // and no integer type holds a NaN, an infinity, or a fraction.
+            (true, false) => false,
+            (false, true) => {
+                self.width() - u32::from(self.signed()) <= destination.significand_bits()
+            }
+        }
+    }
+}
+
+/// A concrete `f32` or `f64` value, stored as the bit pattern of its IEEE 754
+/// interchange format. The bits keep the value's format and its signed zero,
+/// which the mathematical value alone would lose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Float {
+    Binary32(u32),
+    Binary64(u64),
+}
+
+impl Float {
+    pub(crate) fn ty(self) -> Scalar {
+        match self {
+            Self::Binary32(_) => Scalar::F32,
+            Self::Binary64(_) => Scalar::F64,
+        }
+    }
+
+    pub(crate) fn bits(self) -> u64 {
+        match self {
+            Self::Binary32(bits) => u64::from(bits),
+            Self::Binary64(bits) => bits,
+        }
     }
 }
 
@@ -132,6 +202,12 @@ impl Type {
             Self::Scalar(scalar) => *scalar,
             Self::Array { element, .. } => element.leaf(),
         }
+    }
+
+    /// Whether values of this type are floating-point, which for an array is
+    /// whether its elements are.
+    pub(crate) fn is_floating(&self) -> bool {
+        self.leaf().is_floating()
     }
 
     /// How many scalars a value of this type stores; a scalar stores one.
@@ -230,6 +306,16 @@ impl BinaryOperator {
     pub(crate) fn is_shift(self) -> bool {
         matches!(self, Self::ShiftLeft | Self::ShiftRight)
     }
+
+    /// Whether this operator is defined on floating-point operands. Remainder,
+    /// the wrapping operators, the bitwise operators, and the shifts are
+    /// defined only on integers.
+    pub(crate) fn defined_on_floating(self) -> bool {
+        matches!(
+            self,
+            Self::Add | Self::Subtract | Self::Multiply | Self::Divide
+        )
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +357,57 @@ mod tests {
     fn nesting_does_not_change_the_leaf_scalar() {
         assert_eq!(Type::Scalar(Scalar::U8).leaf(), Scalar::U8);
         assert_eq!(array(2, array(3, Scalar::U8.into())).leaf(), Scalar::U8);
+    }
+
+    #[test]
+    fn every_scalar_is_looked_up_and_displayed_by_its_written_name() {
+        for (scalar, name) in super::NAMED_TYPES {
+            assert_eq!(Scalar::named(name), Some(scalar));
+            assert_eq!(scalar.name(), name);
+            assert_eq!(scalar.to_string(), name);
+        }
+        assert_eq!(Scalar::named("f16"), None);
+        assert_eq!(Scalar::named("float"), None);
+    }
+
+    #[test]
+    fn floating_types_have_their_interchange_widths_on_every_target() {
+        for (scalar, width) in [(Scalar::F32, 32), (Scalar::F64, 64)] {
+            assert_eq!(scalar.width(), width);
+            assert_eq!(scalar.width_on(32), width);
+            assert_eq!(scalar.width_on(64), width);
+        }
+    }
+
+    #[test]
+    fn the_floating_types_are_numbers_but_not_integers() {
+        for scalar in [Scalar::F32, Scalar::F64] {
+            assert!(scalar.is_floating(), "{scalar}");
+            assert!(scalar.is_numeric(), "{scalar}");
+            assert!(!scalar.is_integer(), "{scalar}");
+        }
+        for scalar in Scalar::ALL_INTEGERS {
+            assert!(!scalar.is_floating(), "{scalar}");
+            assert!(scalar.is_numeric(), "{scalar}");
+            assert!(scalar.is_integer(), "{scalar}");
+        }
+        assert!(!Scalar::Bool.is_floating());
+        assert!(!Scalar::Bool.is_numeric());
+        assert!(!Scalar::Bool.is_integer());
+    }
+
+    #[test]
+    #[should_panic(expected = "`f32` has no two's complement range")]
+    fn a_floating_type_has_no_two_s_complement_range() {
+        Scalar::F32.signed();
+    }
+
+    #[test]
+    fn an_array_is_floating_when_its_elements_are() {
+        assert!(Type::Scalar(Scalar::F64).is_floating());
+        assert!(array(2, array(3, Scalar::F32.into())).is_floating());
+        assert!(!array(2, Scalar::Int.into()).is_floating());
+        assert!(!Type::Scalar(Scalar::Bool).is_floating());
     }
 
     #[test]

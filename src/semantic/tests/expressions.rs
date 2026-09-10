@@ -197,7 +197,7 @@ fn main() -> void {}",
     );
     rejects_root(
         "fn main() -> void { var a: [2]int = [1, 2]; var b = a «+» 1; }",
-        "integer `+` requires integer operands",
+        "`+` requires numeric operands",
     );
 }
 
@@ -281,7 +281,7 @@ fn an_element_of_a_mutable_array_may_be_assigned() {
     );
     rejects_root(
         "fn main() -> void { var g: [2][3]int = [[1...]...]; g[0] «+=» 1; }",
-        "integer `+=` requires integer operands",
+        "`+=` requires numeric operands",
     );
 }
 
@@ -539,7 +539,7 @@ fn boolean_operators_and_contexts_reject_integer_mixing() {
         (
             "const value = true + false;",
             "+",
-            "integer `+` requires integer operands",
+            "`+` requires numeric operands",
         ),
         (
             "const value = !1;",
@@ -718,4 +718,261 @@ fn nonconstant_untyped_shift_counts_are_concretized_and_range_checked() {
         assert_eq!(error.message, "integer value out of range for `int`");
         assert!(text[error.span].contains("1 <<"));
     }
+}
+
+#[test]
+fn floating_expression_types_follow_the_operand_rules() {
+    for (body, ty, constant) in [
+        ("const value = 1.0 + 2.0;", Scalar::F64, binary64(3.0)),
+        (
+            "const a: f32 = 1.0; const b: f32 = 2.0; const value = a * b;",
+            Scalar::F32,
+            binary32(2.0),
+        ),
+        (
+            "const a: f32 = 1.5; const value = a - 0.5;",
+            Scalar::F32,
+            binary32(1.0),
+        ),
+        (
+            "const a: f64 = 1.5; const value = 4 / a;",
+            Scalar::F64,
+            binary64(4.0 / 1.5),
+        ),
+        ("const value = -f32(0.5);", Scalar::F32, binary32(-0.5)),
+        ("var a = f64(1.0); const value = -a;", Scalar::F64, None),
+    ] {
+        assert_eq!(
+            checked_bindings(&format!("fn main() -> void {{ {body} }}"))
+                .last()
+                .unwrap()
+                .clone(),
+            (value_type(ty), constant),
+            "{body}"
+        );
+    }
+    for (body, offending, message) in [
+        (
+            "const bad = f32(1.0) + f64(2.0);",
+            "+",
+            "binary operands have different types `f32` and `f64`",
+        ),
+        (
+            "const a: f32 = 1.0; var b: int = 2; const bad = a * b;",
+            "*",
+            "binary operands have different types `f32` and `int`",
+        ),
+        (
+            "var i: int = 1; const bad = i + 1.0;",
+            "1.0",
+            "cannot implicitly convert `f64` to `int`",
+        ),
+        (
+            "var i: int = 1; const bad = 1.0 + i;",
+            "1.0",
+            "cannot implicitly convert `f64` to `int`",
+        ),
+        (
+            "var n = 1; const bad = (1 << n) + 0.5;",
+            "(1 << n)",
+            "cannot implicitly convert `int` to `f64`",
+        ),
+        (
+            "const bad = 1.0 + true;",
+            "+",
+            "`+` requires numeric operands",
+        ),
+        (
+            "exit(1.0);",
+            "1.0",
+            "cannot implicitly convert `f64` to `int`",
+        ),
+    ] {
+        rejects(body, offending, message);
+    }
+}
+
+#[test]
+fn the_integer_only_operators_reject_floating_operands() {
+    for operator in ["%", "*%", "+%", "-%", "&", "|", "^", "<<", ">>"] {
+        rejects(
+            &format!("const bad = 1.0 {operator} 2.0;"),
+            operator,
+            &format!("integer `{operator}` requires integer operands"),
+        );
+        rejects(
+            &format!("const bad = f64(1.0) {operator} f64(2.0);"),
+            operator,
+            &format!("integer `{operator}` requires integer operands"),
+        );
+        rejects(
+            &format!("var x: f32 = 1.0; x {operator}= 2.0;"),
+            &format!("{operator}="),
+            &format!("integer `{operator}=` requires integer operands"),
+        );
+    }
+    for (body, offending) in [
+        ("const bad = ^1.0;", "^"),
+        ("const bad = -%f64(1.0);", "-%"),
+        ("var w: [2]f64 = [0.5...]; const bad = ^w[0];", "^"),
+    ] {
+        rejects(
+            body,
+            offending,
+            "integer unary operator requires an integer operand",
+        );
+    }
+    rejects(
+        "const bad = -true;",
+        "-",
+        "unary `-` requires a numeric operand",
+    );
+    rejects(
+        "var a: [2]f64 = [1.0...]; const bad = -a;",
+        "-",
+        "unary `-` requires a numeric operand",
+    );
+    rejects(
+        "const bad = u8.truncate(1.0);",
+        "u8.truncate(1.0)",
+        "cannot convert `f64` to `u8`",
+    );
+}
+
+#[test]
+fn floating_comparisons_compare_by_value() {
+    for (body, expected) in [
+        ("const value = 1.5 == 1.5;", 1),
+        ("const value = 1.5 != 1.5;", 0),
+        ("const value = 1 < 1.5;", 1),
+        ("const value = 2.0 >= 2;", 1),
+        ("const value = f32(1.0) < f32(2.0);", 1),
+        ("const value = f64(1.0) <= f64(1.0);", 1),
+        ("const value = f64(3.0) > f64(4.0);", 0),
+        ("const value = f64(1.0) == 1;", 1),
+        // A positive and a negative zero hold different bits and compare
+        // equal, which no ordering comparison separates either.
+        ("const value = -f64(0.0) == f64(0.0);", 1),
+        ("const value = -f32(0.0) < f32(0.0);", 0),
+        ("const value = -f32(0.0) >= f32(0.0);", 1),
+    ] {
+        assert_eq!(
+            checked_bindings(&format!("fn main() -> void {{ {body} }}"))
+                .last()
+                .unwrap()
+                .clone(),
+            (value_type(Scalar::Bool), folded(expected)),
+            "{body}"
+        );
+    }
+    for (body, offending, message) in [
+        (
+            "const bad = f32(1.0) == f64(1.0);",
+            "==",
+            "comparison operands have different types `f32` and `f64`",
+        ),
+        (
+            "const bad = f64(1.0) == true;",
+            "true",
+            "cannot implicitly convert `bool` to `f64`",
+        ),
+        (
+            "var i: int = 1; const bad = i < 1.5;",
+            "1.5",
+            "cannot implicitly convert `f64` to `int`",
+        ),
+    ] {
+        rejects(body, offending, message);
+    }
+}
+
+#[test]
+fn floating_arrays_hold_and_compare_their_elements() {
+    let bindings = checked_bindings(
+        "fn main() -> void {
+            const signed: [2]f32 = [-f32(0.0), 1.0];
+            const unsigned: [2]f32 = [0.0, 1.0];
+            const same = signed == unsigned;
+            const whole: [2]f32 = [1, 2];
+            const filled: [3]f64 = [0.5...];
+        }",
+    );
+    assert_eq!(
+        bindings[0],
+        (
+            array_type(2, value_type(Scalar::F32)),
+            binary32_array(&[-0.0, 1.0])
+        )
+    );
+    assert_eq!(
+        bindings[1],
+        (
+            array_type(2, value_type(Scalar::F32)),
+            binary32_array(&[0.0, 1.0])
+        )
+    );
+    assert_ne!(bindings[0].1, bindings[1].1);
+    assert_eq!(bindings[2], (value_type(Scalar::Bool), folded(1)));
+    assert_eq!(bindings[3].1, binary32_array(&[1.0, 2.0]));
+    assert_eq!(
+        bindings[4],
+        (
+            array_type(3, value_type(Scalar::F64)),
+            Some(Constant::Array(vec![
+                Constant::Float(Float::Binary64(
+                    0.5f64.to_bits()
+                ));
+                3
+            ]))
+        )
+    );
+    accepts_source(
+        "fn main() -> void {
+            var weights: [2]f64 = [0.5, 1.5];
+            weights[0] = 2.5;
+            weights[1] += 1.0;
+            for weight in weights { exit(0); }
+            exit(len(weights));
+        }",
+    );
+    rejects(
+        "const bad: [2]f32 = [0.5, 16777217];",
+        "16777217",
+        "integer literal not representable in `f32`",
+    );
+}
+
+#[test]
+fn floating_values_pass_through_calls_and_returns() {
+    accepts_source(
+        "fn scale(factor: f32, count: int) -> f32 {
+            var total: f32 = 0.0;
+            var left = count;
+            for left > 0 { total += factor; left = left - 1; }
+            return total;
+        }
+        fn main() -> void { const scaled = scale(0.5, 2); exit(0); }",
+    );
+    accepts_source(
+        "fn half() -> f64 { return 0.5; }
+        fn main() -> void { const value = half() + 1.0; exit(0); }",
+    );
+    rejects_source(
+        "fn scale(factor: f32) -> void {}
+        fn main() -> void { scale(16777217); }",
+        "16777217",
+        "integer literal not representable in `f32`",
+    );
+    rejects_source(
+        "fn scale(factor: f32) -> void {}
+        fn main() -> void { var value: f64 = 1.0; scale(value); }",
+        "value",
+        "cannot implicitly convert `f64` to `f32`",
+    );
+    rejects_source(
+        "fn count() -> int { return 1.5; }
+        fn main() -> void {}",
+        "1.5",
+        "cannot implicitly convert `f64` to `int`",
+    );
 }

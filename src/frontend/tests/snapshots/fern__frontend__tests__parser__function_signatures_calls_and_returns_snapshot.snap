@@ -1,5 +1,5 @@
 ---
-source: src/frontend.rs
+source: src/frontend/tests/parser.rs
 expression: projected(source)
 ---
 fn mark name=3..7 span=0..57

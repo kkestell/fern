@@ -1,5 +1,5 @@
 ---
-source: src/frontend.rs
+source: src/frontend/tests/parser.rs
 expression: projected(source)
 ---
 use fmt span=0..8 path=[4..7]

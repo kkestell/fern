@@ -47,10 +47,10 @@ fn full_width_integer_copies_and_conversions_execute() {
             numbers.sort_unstable();
             numbers.dedup();
             for number in numbers {
-                let literal = Operand::Integer {
+                let literal = Operand::Literal(Literal::Integer {
                     value: number,
                     ty: source,
-                };
+                });
                 let id = values.len();
                 values.push(Value {
                     span: None,
@@ -113,7 +113,7 @@ fn truncating_conversions_preserve_each_destination_bit_pattern() {
                 span: None,
                 ty: source.into(),
                 kind: ValueKind::Convert {
-                    operand: Operand::Integer { value, ty: source },
+                    operand: Operand::Literal(Literal::Integer { value, ty: source }),
                     truncating: false,
                 },
             });
@@ -334,7 +334,7 @@ fn nested_runtime_failures_follow_left_to_right_operand_order() {
     let stderr = assert_native_failure(
         "var wide: u16 = 300; var one: int = 1; var zero: int = 0;
              const failed = int(u8(wide)) + (one / zero);",
-        "checked integer conversion failed: `u16` to `u8`",
+        "checked conversion failed: `u16` to `u8`",
     );
     assert!(!stderr.contains("zero divisor"));
 }
@@ -372,7 +372,7 @@ fn checked_conversions_trap_outside_each_destination_range() {
                 assert!(!result.status.success(), "{text}");
                 assert!(
                     String::from_utf8_lossy(&result.stderr).contains(&format!(
-                        "checked integer conversion failed: `{}` to `{}`",
+                        "checked conversion failed: `{}` to `{}`",
                         source.name(),
                         destination.name(),
                     )),
@@ -449,10 +449,10 @@ fn negative_values_survive_chained_widening_and_exit() {
                     span: None,
                     ty: Scalar::I8.into(),
                     kind: ValueKind::Convert {
-                        operand: Operand::Integer {
+                        operand: Operand::Literal(Literal::Integer {
                             value: number,
                             ty: Scalar::I8,
-                        },
+                        }),
                         truncating: false,
                     },
                 },

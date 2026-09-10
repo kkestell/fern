@@ -1,6 +1,6 @@
 //! Fern IR data model.
 
-use crate::types::{BinaryOperator, ComparisonOperator, Scalar, Type, UnaryOperator};
+use crate::types::{BinaryOperator, ComparisonOperator, Float, Scalar, Type, UnaryOperator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ValueId(pub usize);
@@ -44,10 +44,33 @@ impl Place {
     }
 }
 
+/// An immediate value of a scalar type. This is the only way the IR carries a
+/// value that no instruction computes, so an operand and a global's static
+/// data cannot disagree about a value's type or its bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Literal {
+    // i128 holds both the signed minima and the full u64 range without bit reinterpretation.
+    Integer {
+        value: i128,
+        ty: Scalar,
+    },
+    /// A floating-point value, which keeps the bits of its interchange format
+    /// rather than the integer they spell.
+    Floating(Float),
+}
+
+impl Literal {
+    pub(crate) fn ty(self) -> Scalar {
+        match self {
+            Self::Integer { ty, .. } => ty,
+            Self::Floating(value) => value.ty(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Operand {
-    // i128 holds both the signed minima and the full u64 range without bit reinterpretation.
-    Integer { value: i128, ty: Scalar },
+    Literal(Literal),
     Value(ValueId),
 }
 
@@ -165,7 +188,7 @@ pub(crate) struct Global {
     pub ty: Type,
     /// Its scalars in memory order: one for a scalar global, one per element
     /// for an array global.
-    pub values: Vec<i128>,
+    pub values: Vec<Literal>,
 }
 
 #[derive(Debug)]

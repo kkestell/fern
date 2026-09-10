@@ -3,7 +3,7 @@
 use crate::{
     frontend::syntax::{Expression, Function, Statement, Syntax},
     source::FileId,
-    types::{BinaryOperator, ComparisonOperator, LogicalOperator, Type, UnaryOperator},
+    types::{BinaryOperator, ComparisonOperator, Float, LogicalOperator, Type, UnaryOperator},
 };
 
 use la_arena::{Arena, ArenaMap, Idx};
@@ -12,25 +12,49 @@ use lasso::Spur;
 
 use num_bigint::BigInt;
 
+use num_rational::BigRational;
+
 use std::collections::HashMap;
 
 use super::namespaces::{FileImports, Namespace};
 
 /// The value a constant expression folds to. An array literal folds when
 /// every element does.
+///
+/// An untyped constant keeps the exact value it was written with: an integer
+/// as a `BigInt` and a floating-point value as a `Rational`. A concrete
+/// floating-point value has already rounded to its format, so it is a `Float`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Constant {
     Integer(BigInt),
+    Rational(BigRational),
+    Float(Float),
     Array(Vec<Constant>),
 }
 
 impl Constant {
-    /// The integer this constant folded to, or `None` when it folded to an
-    /// array.
+    /// The integer this constant folded to, or `None` when it folded to any
+    /// other value.
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Array(_) => None,
+            Self::Rational(_) | Self::Float(_) | Self::Array(_) => None,
+        }
+    }
+
+    /// The exact value an untyped floating-point constant folded to.
+    pub(crate) fn rational(&self) -> Option<&BigRational> {
+        match self {
+            Self::Rational(value) => Some(value),
+            Self::Integer(_) | Self::Float(_) | Self::Array(_) => None,
+        }
+    }
+
+    /// The concrete floating-point value this constant folded to.
+    pub(crate) fn float(&self) -> Option<Float> {
+        match self {
+            Self::Float(value) => Some(*value),
+            Self::Integer(_) | Self::Rational(_) | Self::Array(_) => None,
         }
     }
 }
@@ -38,6 +62,18 @@ impl Constant {
 impl From<BigInt> for Constant {
     fn from(value: BigInt) -> Self {
         Self::Integer(value)
+    }
+}
+
+impl From<BigRational> for Constant {
+    fn from(value: BigRational) -> Self {
+        Self::Rational(value)
+    }
+}
+
+impl From<Float> for Constant {
+    fn from(value: Float) -> Self {
+        Self::Float(value)
     }
 }
 
@@ -51,6 +87,7 @@ pub(crate) struct Binding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
     Integer,
+    Floating,
     Boolean,
     Reference(Idx<Binding>),
     Grouping {
@@ -117,9 +154,20 @@ pub(crate) struct CheckedExpression {
 
 impl CheckedExpression {
     /// The integer this expression folded to, or `None` when it did not fold
-    /// or folded to an array.
+    /// or folded to another kind of value.
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         self.constant.as_ref().and_then(Constant::integer)
+    }
+
+    /// The exact value this expression folded to as an untyped
+    /// floating-point constant.
+    pub(crate) fn rational(&self) -> Option<&BigRational> {
+        self.constant.as_ref().and_then(Constant::rational)
+    }
+
+    /// The concrete floating-point value this expression folded to.
+    pub(crate) fn float(&self) -> Option<Float> {
+        self.constant.as_ref().and_then(Constant::float)
     }
 }
 

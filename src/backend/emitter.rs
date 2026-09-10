@@ -3,8 +3,8 @@
 use crate::{
     diagnostic::DiagnosticRenderer,
     ir::model::{
-        BlockId, ControlFlow, Function, FunctionId, Instruction, Operand, Place, Terminator,
-        ValueId, ValueKind,
+        BlockId, ControlFlow, Function, FunctionId, Instruction, Literal, Operand, Place,
+        Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
     source::SourceMap,
@@ -12,10 +12,14 @@ use crate::{
 };
 use std::fmt::Write;
 
-use super::{integer::*, qbe::*};
+use super::{floating, integer::*, qbe::*};
 
 fn allocation(ty: &Type) -> &'static str {
-    if word(ty) == 'l' { "alloc8" } else { "alloc4" }
+    if bytes(ty.leaf()) == 8 {
+        "alloc8"
+    } else {
+        "alloc4"
+    }
 }
 
 /// How a signature, a call argument, or a call result names this type. An
@@ -84,7 +88,12 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             // array literal through constant indices, and a check for each of
             // them would carry a trap block and a message that cannot run.
             let constant = match index {
-                Operand::Integer { value, .. } => (0..i128::from(length)).contains(value),
+                Operand::Literal(Literal::Integer { value, .. }) => {
+                    (0..i128::from(length)).contains(value)
+                }
+                Operand::Literal(Literal::Floating(_)) => {
+                    unreachable!("a verified index has type `int`")
+                }
                 Operand::Value(_) => false,
             };
             let index = operand(*index);
@@ -146,11 +155,11 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         // emitted data once instead of allocating one temporary string per scalar.
         emitter.data.reserve(global.values.len().saturating_mul(44));
         write!(emitter.data, "data $global{id} = {{ ").unwrap();
-        for (index, value) in global.values.iter().enumerate() {
+        for (index, &value) in global.values.iter().enumerate() {
             if index != 0 {
                 emitter.data.push_str(", ");
             }
-            write!(emitter.data, "{} {value}", word(&global.ty)).unwrap();
+            emitter.data.push_str(&data_item(value));
         }
         emitter.data.push_str(" }\n");
     }
@@ -380,34 +389,56 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             truncating,
         } => {
             let ty = scalar(&value.ty);
-            let source_ty = operand_type(function, source);
-            if truncating || source_ty.all_values_fit(ty) {
+            let source_ty = operand_scalar(function, source);
+            if ty.is_floating() || source_ty.is_floating() {
+                floating::emit_conversion(emitter, id, value, source, source_ty, ty);
+            } else if truncating || source_ty.all_values_fit(ty) {
                 emit_truncation(&mut emitter.text, id, source, source_ty, ty);
             } else {
-                let message = format!(
-                    "checked integer conversion failed: `{}` to `{}`",
-                    source_ty.name(),
-                    ty.name()
-                );
-                let message =
-                    operation_message(value.span.as_ref(), emitter.diagnostics.as_ref(), &message);
+                let message = conversion_message(emitter, value, source_ty, ty);
                 emit_checked_conversion(emitter, id, source, source_ty, ty, message);
             }
         }
         ValueKind::Unary { operator, operand } => {
-            emit_unary_operation(emitter, id, value, operator, operand);
+            let ty = scalar(&value.ty);
+            if ty.is_floating() {
+                floating::emit_unary(&mut emitter.text, id, ty, operand);
+            } else {
+                emit_unary_operation(emitter, id, value, operator, operand);
+            }
         }
         ValueKind::Binary {
             operator,
             form,
             left,
             right,
-        } => emit_binary_operation(emitter, id, value, operator, form, (left, right), function),
+        } => {
+            let ty = scalar(&value.ty);
+            if ty.is_floating() {
+                floating::emit_binary(&mut emitter.text, id, ty, operator, left, right);
+            } else {
+                emit_binary_operation(emitter, id, value, operator, form, (left, right), function);
+            }
+        }
         ValueKind::Comparison {
             operator,
             left,
             right,
-        } => emit_comparison(&mut emitter.text, id, operator, left, right, function),
+        } => {
+            let operand_ty = operand_type(function, left);
+            if operand_ty.is_floating() {
+                floating::emit_comparison(
+                    &mut emitter.text,
+                    id,
+                    operator,
+                    left,
+                    right,
+                    &operand_ty,
+                );
+            } else {
+                emit_comparison(&mut emitter.text, id, operator, left, right, &operand_ty);
+            }
+        }
         ValueKind::LogicalNot { operand: source } => {
             writeln!(emitter.text, "    %v{id} =w ceqw {}, 0", operand(source)).unwrap();
         }

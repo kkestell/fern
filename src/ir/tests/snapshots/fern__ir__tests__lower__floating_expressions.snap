@@ -1,0 +1,843 @@
+---
+source: src/ir/tests/lower.rs
+expression: program.program()
+---
+Program {
+    globals: [],
+    functions: [
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        126..127,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        150..151,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Binary {
+                        operator: Subtract,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                3,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                4,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        190..191,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Binary {
+                        operator: Multiply,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                6,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                7,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        212..213,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Binary {
+                        operator: Divide,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                9,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                10,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        232..233,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Unary {
+                        operator: Negate,
+                        operand: Value(
+                            ValueId(
+                                12,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        268..270,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Equal,
+                        left: Value(
+                            ValueId(
+                                14,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                15,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        289..290,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Less,
+                        left: Value(
+                            ValueId(
+                                17,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                18,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        326..332,
+                    ),
+                    ty: Scalar(
+                        F32,
+                    ),
+                    kind: Convert {
+                        operand: Value(
+                            ValueId(
+                                20,
+                            ),
+                        ),
+                        truncating: false,
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F32,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        350..361,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Convert {
+                        operand: Value(
+                            ValueId(
+                                22,
+                            ),
+                        ),
+                        truncating: false,
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        393..399,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Convert {
+                        operand: Value(
+                            ValueId(
+                                24,
+                            ),
+                        ),
+                        truncating: false,
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                12,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        422..432,
+                    ),
+                    ty: Scalar(
+                        F64,
+                    ),
+                    kind: Convert {
+                        operand: Value(
+                            ValueId(
+                                26,
+                            ),
+                        ),
+                        truncating: false,
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                12,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F32,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        Bool,
+                    ),
+                    Scalar(
+                        Bool,
+                    ),
+                    Scalar(
+                        F32,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        F64,
+                    ),
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            4630896685587890176,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            4611686018427387904,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Literal(
+                                    Floating(
+                                        Binary32(
+                                            1056964608,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        5,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        5,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        8,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    11,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        11,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    12,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    13,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        7,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        13,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    14,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    15,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    16,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        8,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        16,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    17,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    18,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    19,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        9,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        19,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    20,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    21,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        10,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        21,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    22,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    23,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        11,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        23,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    24,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    25,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        12,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        25,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    26,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    27,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        13,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        27,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    28,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    28,
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+    main: FunctionId(
+        0,
+    ),
+}

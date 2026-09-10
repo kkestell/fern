@@ -184,18 +184,34 @@ fn verification_checks_a_globals_values_against_its_type() {
     for (ty, values, expected) in [
         (
             array(2, Scalar::Int.into()),
-            vec![1],
+            integers([1], Scalar::Int),
             "holds 1 values, expected 2",
         ),
         (
             array(2, array(2, Scalar::Int.into())),
-            vec![1, 2, 3, 4, 5],
+            integers([1, 2, 3, 4, 5], Scalar::Int),
             "holds 5 values, expected 4",
         ),
         (
             array(2, Scalar::U8.into()),
-            vec![0, 256],
+            integers([0, 256], Scalar::U8),
             "IR integer 256 out of range",
+        ),
+        (
+            array(2, Scalar::Int.into()),
+            integers([1, 2], Scalar::I64),
+            "holds a `i64` value",
+        ),
+        (
+            array(2, Scalar::F64.into()),
+            integers([1, 2], Scalar::Int),
+            "holds a `int` value",
+        ),
+        (Scalar::F32.into(), doubles([1.0]), "holds a `f64` value"),
+        (
+            Scalar::F32.into(),
+            integers([1], Scalar::F32),
+            "IR integer 1 has floating-point type F32",
         ),
     ] {
         let mut program = one_function(main_function(
@@ -922,7 +938,7 @@ fn verification_checks_main_globals_and_global_places() {
     };
     stores_to_global(vec![Global {
         ty: Scalar::Int.into(),
-        values: vec![0],
+        values: integers([0], Scalar::Int),
     }])
     .verify()
     .unwrap();
@@ -932,7 +948,7 @@ fn verification_checks_main_globals_and_global_places() {
 
     let error = stores_to_global(vec![Global {
         ty: Scalar::U8.into(),
-        values: vec![0],
+        values: integers([0], Scalar::U8),
     }])
     .verify()
     .unwrap_err();
@@ -941,7 +957,7 @@ fn verification_checks_main_globals_and_global_places() {
     let error = Program {
         globals: vec![Global {
             ty: Scalar::U8.into(),
-            values: vec![256],
+            values: integers([256], Scalar::U8),
         }],
         functions: vec![main_function(
             vec![],
@@ -958,4 +974,210 @@ fn verification_checks_main_globals_and_global_places() {
     .verify()
     .unwrap_err();
     assert!(error.to_string().contains("out of range"), "{error}");
+}
+
+/// One operation value with the span a trapping operation carries.
+fn operation(ty: Scalar, kind: ValueKind) -> Value {
+    Value {
+        span: Some(0..1),
+        ty: ty.into(),
+        kind,
+    }
+}
+
+fn binary(ty: Scalar, operator: BinaryOperator, left: Operand, right: Operand) -> Value {
+    operation(
+        ty,
+        ValueKind::Binary {
+            operator,
+            form: BinaryForm::Infix,
+            left,
+            right,
+        },
+    )
+}
+
+fn unary(ty: Scalar, operator: UnaryOperator, operand: Operand) -> Value {
+    operation(ty, ValueKind::Unary { operator, operand })
+}
+
+fn double(value: f64) -> Operand {
+    floating(Float::Binary64(value.to_bits()))
+}
+
+fn single(value: f32) -> Operand {
+    floating(Float::Binary32(value.to_bits()))
+}
+
+/// The zero of a scalar type, spelled as the literal that holds it.
+fn zero(ty: Scalar) -> Operand {
+    match ty {
+        Scalar::F32 => single(0.0),
+        Scalar::F64 => double(0.0),
+        _ => integer(0, ty),
+    }
+}
+
+#[test]
+fn verification_admits_only_the_floating_point_operations() {
+    let accepted = [
+        binary(Scalar::F64, BinaryOperator::Add, double(1.0), double(2.0)),
+        binary(
+            Scalar::F64,
+            BinaryOperator::Subtract,
+            double(1.0),
+            double(2.0),
+        ),
+        binary(
+            Scalar::F32,
+            BinaryOperator::Multiply,
+            single(1.0),
+            single(2.0),
+        ),
+        binary(
+            Scalar::F32,
+            BinaryOperator::Divide,
+            single(1.0),
+            single(2.0),
+        ),
+        unary(Scalar::F64, UnaryOperator::Negate, double(1.0)),
+        operation(
+            Scalar::Bool,
+            ValueKind::Comparison {
+                operator: ComparisonOperator::Less,
+                left: double(1.0),
+                right: double(2.0),
+            },
+        ),
+    ];
+    for value in accepted {
+        program(vec![value.clone()], integer(0, Scalar::Int))
+            .verify()
+            .unwrap_or_else(|error| panic!("{error}: {value:?}"));
+    }
+    let rejected = [
+        // `%`, the wrapping operators, the bitwise operators, and the shifts
+        // read integers.
+        binary(
+            Scalar::F64,
+            BinaryOperator::Remainder,
+            double(1.0),
+            double(2.0),
+        ),
+        binary(
+            Scalar::F64,
+            BinaryOperator::WrappingAdd,
+            double(1.0),
+            double(2.0),
+        ),
+        binary(Scalar::F64, BinaryOperator::And, double(1.0), double(2.0)),
+        binary(
+            Scalar::F64,
+            BinaryOperator::ShiftLeft,
+            double(1.0),
+            integer(1, Scalar::Int),
+        ),
+        unary(Scalar::F64, UnaryOperator::WrappingNegate, double(1.0)),
+        unary(Scalar::F64, UnaryOperator::Complement, double(1.0)),
+        // An operation takes one format, and no operation mixes a
+        // floating-point operand with an integer one.
+        binary(Scalar::F32, BinaryOperator::Add, single(1.0), double(2.0)),
+        binary(Scalar::F64, BinaryOperator::Add, double(1.0), single(2.0)),
+        binary(
+            Scalar::F64,
+            BinaryOperator::Add,
+            double(1.0),
+            integer(1, Scalar::Int),
+        ),
+        binary(
+            Scalar::Int,
+            BinaryOperator::Add,
+            integer(1, Scalar::Int),
+            double(1.0),
+        ),
+        unary(Scalar::F32, UnaryOperator::Negate, double(1.0)),
+    ];
+    for value in rejected {
+        let error = program(vec![value.clone()], integer(0, Scalar::Int))
+            .verify()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid IR value 0"),
+            "{error}: {value:?}"
+        );
+    }
+}
+
+#[test]
+fn verification_checks_conversions_between_the_numeric_categories() {
+    // A conversion that cannot lose its value needs no span; every other one
+    // carries the span its trap reports.
+    for (source, destination, span) in [
+        (Scalar::F32, Scalar::F64, None),
+        (Scalar::U8, Scalar::F32, None),
+        (Scalar::U32, Scalar::F64, None),
+        (Scalar::F64, Scalar::F32, Some(0..1)),
+        (Scalar::F64, Scalar::I32, Some(0..1)),
+        (Scalar::I32, Scalar::F32, Some(0..1)),
+        (Scalar::U64, Scalar::F64, Some(0..1)),
+        (Scalar::F32, Scalar::F32, None),
+    ] {
+        let value = Value {
+            span,
+            ty: destination.into(),
+            kind: ValueKind::Convert {
+                operand: zero(source),
+                truncating: false,
+            },
+        };
+        program(vec![value], integer(0, Scalar::Int))
+            .verify()
+            .unwrap_or_else(|error| panic!("{error}: {source} to {destination}"));
+    }
+    for (source, destination, truncating, span) in [
+        // A conversion that can lose its value must be reportable.
+        (Scalar::F64, Scalar::F32, false, None),
+        (Scalar::F64, Scalar::I32, false, None),
+        (Scalar::I32, Scalar::F32, false, None),
+        // Truncation reinterprets a bit pattern, which no floating-point
+        // value has.
+        (Scalar::F64, Scalar::I32, true, Some(0..1)),
+        (Scalar::I32, Scalar::F64, true, Some(0..1)),
+        (Scalar::F64, Scalar::F32, true, Some(0..1)),
+        // `bool` is not a number.
+        (Scalar::F64, Scalar::Bool, false, Some(0..1)),
+        (Scalar::Bool, Scalar::F64, false, Some(0..1)),
+    ] {
+        let value = Value {
+            span,
+            ty: destination.into(),
+            kind: ValueKind::Convert {
+                operand: zero(source),
+                truncating,
+            },
+        };
+        let error = program(vec![value], integer(0, Scalar::Int))
+            .verify()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid IR value 0"),
+            "{error}: {source} to {destination}"
+        );
+    }
+}
+
+#[test]
+fn verification_rejects_an_integer_literal_of_a_floating_point_type() {
+    let error = program(
+        vec![convert(integer(1, Scalar::F32), Scalar::F32)],
+        integer(0, Scalar::Int),
+    )
+    .verify()
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR integer 1 has floating-point type F32"),
+        "{error}"
+    );
 }

@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -9,7 +9,10 @@ Program {
                 Int,
             ),
             values: [
-                0,
+                Integer {
+                    value: 0,
+                    ty: Int,
+                },
             ],
         },
     ],
@@ -50,10 +53,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 10,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 10,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -304,10 +309,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 0,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -351,10 +358,12 @@ Program {
                                 3,
                             ),
                         ),
-                        right: Integer {
-                            value: 1,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
                 Value {
@@ -428,10 +437,12 @@ Program {
                         instructions: [],
                         terminator: Return {
                             value: Some(
-                                Integer {
-                                    value: 0,
-                                    ty: Int,
-                                },
+                                Literal(
+                                    Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                ),
                             ),
                         },
                     },
@@ -532,10 +543,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 0,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
             ],
@@ -606,10 +619,12 @@ Program {
                                 0,
                             ),
                         ),
-                        right: Integer {
-                            value: 0,
-                            ty: Int,
-                        },
+                        right: Literal(
+                            Integer {
+                                value: 0,
+                                ty: Int,
+                            },
+                        ),
                     },
                 },
             ],
@@ -672,10 +687,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 255,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 255,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                         ],
                         terminator: Return {
@@ -773,10 +790,12 @@ Program {
                                     0,
                                 ),
                                 arguments: [
-                                    Integer {
-                                        value: 4,
-                                        ty: Int,
-                                    },
+                                    Literal(
+                                        Integer {
+                                            value: 4,
+                                            ty: Int,
+                                        },
+                                    ),
                                 ],
                                 span: 795..802,
                             },
@@ -790,10 +809,12 @@ Program {
                                     0,
                                 ),
                                 arguments: [
-                                    Integer {
-                                        value: 2,
-                                        ty: Int,
-                                    },
+                                    Literal(
+                                        Integer {
+                                            value: 2,
+                                            ty: Int,
+                                        },
+                                    ),
                                 ],
                                 span: 804..811,
                             },
@@ -830,10 +851,12 @@ Program {
                                     2,
                                 ),
                                 arguments: [
-                                    Integer {
-                                        value: 3,
-                                        ty: Int,
-                                    },
+                                    Literal(
+                                        Integer {
+                                            value: 3,
+                                            ty: Int,
+                                        },
+                                    ),
                                 ],
                                 span: 845..854,
                             },
@@ -855,10 +878,12 @@ Program {
                                     4,
                                 ),
                                 arguments: [
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
+                                    Literal(
+                                        Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                    ),
                                 ],
                                 span: 873..886,
                             },
@@ -927,10 +952,12 @@ Program {
                     Block {
                         instructions: [],
                         terminator: Exit {
-                            status: Integer {
-                                value: 255,
-                                ty: Int,
-                            },
+                            status: Literal(
+                                Integer {
+                                    value: 255,
+                                    ty: Int,
+                                },
+                            ),
                         },
                     },
                 ],

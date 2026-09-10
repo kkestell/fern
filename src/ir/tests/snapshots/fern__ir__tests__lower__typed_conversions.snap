@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -290,10 +290,12 @@ Program {
                                         0,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 42,
-                                    ty: I8,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 42,
+                                        ty: I8,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -345,10 +347,12 @@ Program {
                                         3,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 255,
-                                    ty: U8,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 255,
+                                        ty: U8,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -378,10 +382,12 @@ Program {
                                         5,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 42,
-                                    ty: Int,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 42,
+                                        ty: Int,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(
@@ -433,10 +439,12 @@ Program {
                                         8,
                                     ),
                                 ),
-                                operand: Integer {
-                                    value: 42,
-                                    ty: Uint,
-                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 42,
+                                        ty: Uint,
+                                    },
+                                ),
                             },
                             Value(
                                 ValueId(

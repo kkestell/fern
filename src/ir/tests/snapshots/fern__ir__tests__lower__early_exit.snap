@@ -1,5 +1,5 @@
 ---
-source: src/ir.rs
+source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
@@ -18,10 +18,12 @@ Program {
                     Block {
                         instructions: [],
                         terminator: Exit {
-                            status: Integer {
-                                value: 42,
-                                ty: Int,
-                            },
+                            status: Literal(
+                                Integer {
+                                    value: 42,
+                                    ty: Int,
+                                },
+                            ),
                         },
                     },
                 ],

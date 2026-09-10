@@ -230,6 +230,32 @@ fn integer_operator_precedence_and_grouping_snapshot() {
 }
 
 #[test]
+fn floating_literals_snapshot() {
+    let source = "fn main() -> void { const whole = 1.0; const fraction = .5; const trailing = 2.; const exponent = 1e3; const scaled = 6.02e-23; const upper = 1E+10; const negated = -1.5; const sum = 1.5 + .5 * 2.; const grouped = (1.0 + 2.5) / 0.5; const compared = 1.0 < 2.0; const mixed = 1 + 0.5; var annotated: int = 1.0; }";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn floating_annotations_and_conversions_snapshot() {
+    let source = "fn scale(factor: f32, weights: [2]f64) -> f64 { var narrow: f32 = factor; var matrix: [2][3]f32 = weights; const widened = f64(factor); const narrowed = f32(weights[0]); return f64(1); }";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn a_floating_type_has_no_truncating_conversion() {
+    for name in ["f32", "f64"] {
+        let prefix = "/* 🌿 */ fn main() -> void { const x = ";
+        let source = format!("{prefix}{name}.truncate(1); }}");
+        let error = parse(&source).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("`{name}` has no truncating conversion")
+        );
+        assert_eq!(error.span, prefix.len()..prefix.len() + name.len());
+    }
+}
+
+#[test]
 fn boolean_expressions_and_control_flow_snapshot() {
     let source = "fn main() -> void { var ready: bool = true; const stopped = false; const result = 1 + 2 < 4 && !stopped || ready == false; if ready { exit(1); } else if stopped { exit(2); } else {} for { break; } for ready { continue; } for :rows var i: int = 0; i < 4; i += 1 { if i >= 2 { break :rows; } } for cursor = 0; cursor != 2; cursor = cursor + 1 { continue; } }";
     insta::assert_snapshot!(projected(source));
@@ -348,7 +374,6 @@ fn malformed_annotations_report_the_offending_token() {
         "size",
         "uintptr",
         "void",
-        "f32",
         "i128",
         "u7",
         "int_value",
@@ -432,13 +457,16 @@ fn malformed_expressions_and_calls_have_specific_diagnostics() {
         ("const = 1;", "expected a binding name after `const`"),
         ("var x = ;", "expected an expression"),
         ("exit();", "exit requires one argument"),
-        ("exit(1.5);", "expected `)` after exit argument"),
+        ("exit(1..5);", "expected `)` after exit argument"),
         ("exit(1, 2);", "exit takes one argument"),
         ("var x = int();", "expected an expression"),
         ("var x = 1 + ;", "expected an expression"),
         ("var x = 1 + * 2;", "expected an expression"),
         ("var x = ();", "expected an expression"),
         ("var x = (1 + 2;", "expected `)` after grouped expression"),
+        // Two decimal points make two literals, not one candidate.
+        ("var x = 1.5.5;", "expected `;`"),
+        ("var x = 1..5;", "expected `;`"),
     ] {
         let error = parse(&format!("fn main() -> void {{ {body} }}")).unwrap_err();
         assert_eq!(error.message, message, "{body}");

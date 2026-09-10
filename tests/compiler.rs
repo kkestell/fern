@@ -1085,7 +1085,7 @@ fn explicit_integer_conversions_execute_and_trap() {
     fern::compile(&input, &output).unwrap();
     let result = Command::new(output).output().unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("checked integer conversion failed"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("checked conversion failed"));
 }
 
 #[test]
@@ -1109,7 +1109,91 @@ fn runtime_diagnostics_identify_the_first_failing_conversion_on_stderr() {
         let stderr = String::from_utf8(result.stderr).unwrap();
         assert!(
             stderr.contains(&format!(
-                "checked integer conversion failed: `{source_type}` to `{destination}`"
+                "checked conversion failed: `{source_type}` to `{destination}`"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{}:3:", input.display())),
+            "{stderr}"
+        );
+        assert!(stderr.contains(spelling), "{stderr}");
+    }
+}
+
+#[test]
+fn floating_point_programs_execute() {
+    let (_dir, input, output) = fixture(include_str!("fixtures/programs/floating_point.fern"));
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn non_finite_floating_constants_are_rejected_and_preserve_output() {
+    for (body, message) in [
+        (
+            "const bad: f64 = 1.0 / 0.0;",
+            "constant `/` divisor is zero",
+        ),
+        (
+            "const bad: f64 = 0.0 / 0.0;",
+            "constant `/` divisor is zero",
+        ),
+        (
+            "const wide: f64 = 1.0e308; const bad: f64 = wide * 10.0;",
+            "constant `*` on `f64` would overflow",
+        ),
+        (
+            "const bad: f32 = 1.0e300;",
+            "floating-point literal out of range for `f32`",
+        ),
+        (
+            "{ exit(0); } const bad = 1.0e400;",
+            "floating-point literal out of range for `f64`",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} exit(42); }}"));
+        fs::write(&output, "old executable").unwrap();
+        let error = fern::compile(&input, &output).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error.contains(input.file_name().unwrap().to_str().unwrap()),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+    }
+}
+
+#[test]
+fn runtime_floating_conversion_failures_report_their_source() {
+    // A fractional part, a non-finite value, and lost precision each trap where
+    // the conversion is written.
+    for (binding, destination, spelling) in [
+        ("var value: f64 = 1.5;", "i32", "i32(value)"),
+        (
+            "var zero: f64 = 0.0; var value = 1.0 / zero;",
+            "i32",
+            "i32(value)",
+        ),
+        ("var value: f64 = 0.1;", "f32", "f32(value)"),
+    ] {
+        let source = format!(
+            "fn main() -> void {{
+  {binding}
+  var narrowed = {destination}(value);
+  exit(42);
+}}"
+        );
+        let (_dir, input, output) = fixture(&source);
+        fern::compile(&input, &output).unwrap();
+        let result = Command::new(&output).output().unwrap();
+        assert!(!result.status.success());
+        assert_eq!(result.status.code(), None);
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(
+            stderr.contains(&format!(
+                "checked conversion failed: `f64` to `{destination}`"
             )),
             "{stderr}"
         );

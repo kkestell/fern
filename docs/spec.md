@@ -58,8 +58,9 @@ var x = 10; // int
 `fn`, `void`, `var`, `const`, `type`, `struct`, `pub`, `use`, `if`, `else`,
 `for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `true`, and `false`
 are reserved.
-The ten integer type names listed under Integer types and `bool` are also
-reserved. Reserved words cannot be identifiers.
+The ten integer type names listed under Integer types, the two floating-point
+type names listed under Floating-point types, and `bool` are also reserved.
+Reserved words cannot be identifiers.
 
 ### Integer literals
 
@@ -83,6 +84,26 @@ annotation or an explicit conversion to select an integer type.
 var a: u8 = 42;
 var b = u8(42);
 ```
+
+### Floating-point literals
+
+A floating-point literal is a decimal number with either a decimal point or a
+decimal exponent. Its integer part or fractional part may be omitted when a
+decimal point is present. An exponent begins with `e` or `E`, has an optional
+`+` or `-`, and is followed by one or more decimal digits. Digit separators,
+hexadecimal floating-point literals, and type suffixes are not allowed.
+
+```fern
+1.0
+.5
+2.
+1e3
+6.02e-23
+```
+
+`1` is an integer literal, while `1.` and `1e0` are floating-point literals.
+Floating-point literals are untyped. Floating-point constant expressions
+defines how they acquire an `f32` or `f64` type.
 
 ## Declarations
 
@@ -164,12 +185,14 @@ const name: T [= e];
 A declaration introduces a binding. When an initializer is present, it is
 initialized to the value of `e`. A type annotation determines the binding's
 type. A typed initializer must have that same type, while an untyped constant
-must be representable by the annotated type. Other integer conversions must be
+must be representable by the annotated type. Other numeric conversions must be
 explicit. Without an annotation, the binding takes the initializer's type, with
-untyped integer constants defaulting to `int`. A declaration without an
-initializer must have a type annotation and receives that type's zero value.
-Zero values are `0` for integer types, `false` for `bool`, and recursive zero
-values for arrays and structs. A binding reference has the binding's type.
+untyped integer constants defaulting to `int` and untyped floating-point
+constants defaulting to `f64`. A declaration without an initializer must have a
+type annotation and receives that type's zero value.
+Zero values are `0` for integer and floating-point types, `false` for `bool`,
+and recursive zero values for arrays and structs. A binding reference has the
+binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
 
@@ -250,8 +273,8 @@ fn main() -> void {
 
 A `var` binding may be reassigned. A `const` binding cannot be reassigned. A
 local `const` binding may be initialized from a runtime value; immutability does
-not require compile-time evaluation. Integer constant expressions defines when a
-binding can be used in a constant expression.
+not require compile-time evaluation. Integer and floating-point constant
+expressions define when a binding can be used in a constant expression.
 
 ```fern
 fn main() -> void {
@@ -450,17 +473,22 @@ const limit: u16 = 65535;
 const bad: u16 = 65536; // error
 ```
 
-### Integer conversions
+### Numeric conversions
 
-There are no implicit conversions between integer types. Widening, narrowing,
-and changing signedness all require an explicit conversion. This includes
-conversions between `int` and `i64`, or `uint` and `u64`, even on a platform
-where the widths coincide.
+There are no implicit conversions between concrete numeric types. Every integer
+type, `f32`, and `f64` is distinct. Widening, narrowing, changing signedness,
+and crossing between integer and floating-point types all require an explicit
+conversion. This includes conversions between `int` and `i64`, `f32` and `f64`,
+or `i32` and `f32`.
 
 #### Checked conversion
 
-`T(x)` converts `x` to type `T`. If the value of `x` is not representable in
-`T`, the program traps at runtime.
+`T(x)` converts a numeric value `x` to numeric type `T`. The conversion must
+preserve the value exactly. If it would discard a fractional part, precision, or
+range, the program traps at runtime. A conversion between floating-point types
+preserves an infinity, NaN, or signed zero when the destination has that value;
+no conversion between a floating-point type and an integer type accepts an
+infinity or NaN.
 
 ```fern
 var a: i64 = 300;
@@ -469,19 +497,31 @@ var c = u16(a); // 300
 var d = i8(-1); // -1
 var e = u8(i8(-1)); // compile error: constant conversion would trap
 var f = int(a); // 300 on every platform
+
+var exact: f32 = 0.5;
+var rounded: f32 = 0.1; // literal rounds once to the nearest f32 value
+var not_exact: f64 = 0.1;
+var narrow = f32(not_exact); // trap: the f64 value is not exactly an f32
+var whole = i32(f64(2.0)); // 2
+var fraction = i32(f64(1.5)); // trap
 ```
 
-Converting an untyped constant follows the rules of Typing by context: the value
-must fit or the program does not compile.
+Converting an untyped constant follows the rules of Typing by context. An
+untyped integer must fit the destination type. An untyped floating-point
+constant rounds once to the nearest value of the destination floating-point
+type, using round-to-nearest, ties-to-even, and that value must be finite.
+Conversions of a constant expression that would trap are compile-time errors.
 
 #### Truncating conversion
 
-`T.truncate(x)` converts `x` to type `T` by reinterpreting its two's complement
-bit pattern at the width of `T`: high bits are discarded on narrowing, and the
-value is sign-extended (from a signed source) or zero-extended (from an unsigned
-source) on widening. This conversion never traps. An untyped constant is reduced
-modulo 2 to the power of the destination width, then interpreted using the
-destination signedness; it need not first fit `int` or the destination type.
+`T.truncate(x)` is defined only when `T` is an integer type and `x` has an
+integer type or is an untyped integer constant. It converts `x` to type `T` by
+reinterpreting its two's complement bit pattern at the width of `T`: high bits
+are discarded on narrowing, and the value is sign-extended (from a signed
+source) or zero-extended (from an unsigned source) on widening. This conversion
+never traps. An untyped constant is reduced modulo 2 to the power of the
+destination width, then interpreted using the destination signedness; it need
+not first fit `int` or the destination type.
 
 ```fern
 var a: i64 = 300;
@@ -524,9 +564,11 @@ operand; see [Logical operators](#logical-operators).
 #### Operand types
 
 Binary arithmetic operators require both operands to have the identical type.
-There is no promotion: `u8 + u8` is `u8`. Untyped constants adopt the type of
-the other operand. It is a compile-time error to combine two differently typed
-integers.
+There is no promotion: `u8 + u8` is `u8` and `f32 + f32` is `f32`. Untyped
+constants adopt the type of the other operand. An untyped integer and an
+untyped floating-point constant combine as an untyped floating-point constant.
+It is a compile-time error to combine two differently typed concrete numeric
+values.
 
 ```fern
 var a: u8 = 10;
@@ -537,6 +579,8 @@ var e = a + 5; // ok, 5 becomes u8
 var n: int = 3;
 var m: i64 = 4;
 var p = n + m; // error: int and i64, on every platform
+var q = f32(1.0) + f64(2.0); // error: f32 and f64
+var r = 1 + 0.5; // untyped floating-point constant
 ```
 
 #### Integer operators
@@ -607,7 +651,7 @@ Because indices are signed, an expression such as `i - 1` when `i == 0` produces
 
 The maximum length of an object is `2ʷ⁻¹ − 1` elements, where `w` is the pointer
 width. Allocation sizes use `uint`; converting between lengths and allocation
-sizes follows Integer conversions.
+sizes follows Numeric conversions.
 
 ### Bitwise operations
 
@@ -694,8 +738,10 @@ A typed left operand retains its type regardless of the destination.
 
 The comparisons `== != < <= > >=` require identical operand types and yield
 `bool`, the type specified under [The bool type](#the-bool-type). Untyped
-constants adopt the type of the other operand when their values fit. Comparison
-precedence is given under Precedence, associativity, and evaluation order.
+constants adopt the type of the other operand when their values fit. An untyped
+integer and an untyped floating-point constant compare as untyped
+floating-point constants. Comparison precedence is given under Precedence,
+associativity, and evaluation order.
 
 A well-typed comparison remains valid when the operand types make its result
 always true or always false. For unsigned `x`, `x < 0` and `0 > x` yield `false`,
@@ -754,11 +800,12 @@ specific width should use fixed-width types; their distinctness from `int` and
 |-----------|----------|
 | Constant does not fit target type | Compile error |
 | Constant index out of range | Compile error |
-| Constant expression would trap | Compile error |
+| Integer constant expression would trap | Compile error |
+| Floating-point constant expression is non-finite | Compile error |
 | `+ - *` overflow | Trap |
-| `/` or `%` by zero | Trap |
+| Integer `/` or `%` by zero | Trap |
 | `MIN / -1`, `MIN % -1`, `-MIN` | Trap |
-| Checked conversion out of range | Trap |
+| Checked conversion would discard information | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
@@ -766,6 +813,71 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Wrapping operators | Defined, no trap |
 | Truncating conversion | Defined, no trap |
 | Bitwise operators | Defined, no trap |
+
+## Floating-point Semantics
+
+Floating-point values use the IEEE 754 binary32 and binary64 interchange
+formats. Every floating-point operation rounds its result to its operand type
+with round-to-nearest, ties-to-even. Floating-point arithmetic does not trap:
+it may produce infinities, NaNs, signed zeroes, and subnormal values.
+
+### Floating-point types
+
+| Type | Format | Width |
+|------|--------|-------|
+| `f32` | IEEE 754 binary32 | 32 bits |
+| `f64` | IEEE 754 binary64 | 64 bits |
+
+`f32` and `f64` are distinct value types. Their zero value is positive zero.
+There is no platform-dependent floating-point type.
+
+### Floating-point constant expressions
+
+An untyped floating-point constant is an exact, finite mathematical value. It
+is formed by a floating-point literal; by an arithmetic or unary operation on
+untyped floating-point constants; by an arithmetic operation that combines an
+untyped integer with an untyped floating-point constant; or by parentheses
+around one. Untyped floating-point constant expressions are evaluated at
+compile time with exact arithmetic.
+
+An untyped floating-point constant acquires an `f32` or `f64` type from context.
+It rounds once to the nearest value in that format, using round-to-nearest,
+ties-to-even, and the rounded result must be finite. Without context, it
+defaults to `f64`.
+
+A floating-point literal, a conversion of a constant expression, parentheses
+around a constant expression, and an arithmetic or unary operation whose
+operands are all constant expressions are floating-point constant expressions.
+All of them must have finite results. Division by a constant zero, an invalid
+operation, or an overflow in a floating-point constant expression is a
+compile-time error. A reference to a `const` binding initialized by a
+floating-point constant expression is a constant expression.
+
+```fern
+var half: f32 = .5;
+var defaulted = 1e0; // f64
+const ratio = 3.0 / 2.0; // untyped floating-point constant 1.5
+const bad: f64 = 1.0 / 0.0; // error
+```
+
+### Floating-point operators
+
+`+`, `-`, `*`, `/`, and unary `-` are defined on `f32` and `f64`. Their operands
+follow [Operand types](#operand-types). The result has the operand type. `%`,
+wrapping operators, bitwise operators, and shifts are not defined on
+floating-point values.
+
+At runtime, floating-point operations follow IEEE 754 results. For example,
+nonzero division by signed zero produces a signed infinity, zero divided by zero
+produces NaN, and overflow produces a signed infinity. A floating-point
+operation that produces one of these values does not trap.
+
+### Floating-point comparison
+
+Floating-point comparisons follow the general [Comparison](#comparison) rules
+and IEEE 754 comparison semantics. `NaN == NaN` is `false`, `NaN != NaN` is
+`true`, and every ordering comparison with a NaN is `false`. Positive and
+negative zero compare equal.
 
 ## Boolean Semantics
 
@@ -780,7 +892,7 @@ cannot stand in for an integer.
 acquires type `bool` from the context in which it is used, and `bool` is its
 default type. A `var` or `const` binding may have type `bool`.
 [Comparison](#comparison) specifies the operators that produce `bool` from
-integer operands.
+comparable operands.
 
 ```fern
 var ready = true; // ready: bool
@@ -823,7 +935,8 @@ fn main() -> void {
 expression when all of its operands are constant expressions, and its result is
 then an untyped boolean constant. A reference to a `const` binding of type
 `bool` initialized by a constant expression is a constant expression, under the
-rules given in [Integer constant expressions](#untyped-constants).
+rules given in [Integer constant expressions](#untyped-constants) and
+[Floating-point constant expressions](#floating-point-constant-expressions).
 
 Short-circuiting does not exempt an unevaluated constant operand from the
 compile-time checks that apply to constant expressions. `false && 1 / 0 == 0` is

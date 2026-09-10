@@ -131,3 +131,97 @@ It continues to exit with status 46.
   and identity rules.
 - Existing diagnostics, emitted QBE, and native compiler and CLI results remain
   unchanged, including the array completion fixture.
+
+---
+
+## Floating-point numbers
+
+Implement `f32` and `f64` values, floating-point literals, numeric conversions,
+arithmetic, and comparisons as specified in
+[the floating-point sections](../docs/spec.md#floating-point-semantics).
+
+### Example
+
+The completion fixture will be
+[`tests/fixtures/programs/floating_point.fern`](../tests/fixtures/programs/floating_point.fern).
+
+```fern
+fn main() -> void {
+    const half = .5;
+    var value: f32 = half + half;
+
+    if f64(value) / 2.0 == 0.5 {
+        exit(42);
+    }
+    exit(255);
+}
+```
+
+It exits with status 42.
+
+### Tasks
+
+- [ ] Lex and parse floating-point literals
+- [ ] Represent floating-point types and numeric conversions across the compiler
+- [ ] Check floating-point expressions and constant expressions
+- [ ] Lower and emit floating-point values, operations, and comparisons
+- [ ] Compile and execute floating-point programs and failures
+
+### Completion gates
+
+- `f32` and `f64` literals, bindings, arithmetic, comparisons, and conversions
+  agree with the specification, including exact constant evaluation and
+  round-to-nearest, ties-to-even conversion.
+- Runtime arithmetic has the specified IEEE 754 results, while invalid or
+  non-finite constant expressions and information-losing conversions are
+  rejected or trap as specified.
+- The floating-point completion fixture exits with status 42.
+
+---
+
+## Structs
+
+Implement named struct declarations, literals, field selection, copying, and
+struct equality as specified in [Type declarations](../docs/spec.md#type-declarations)
+and [Struct literals](../docs/spec.md#struct-literals).
+
+### Example
+
+The completion fixture will be
+[`tests/fixtures/programs/structs.fern`](../tests/fixtures/programs/structs.fern).
+
+```fern
+type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var point = Point { x = 19, y = 23 };
+    point.x = point.x + 1;
+    const expected = Point { x = 20, y = 23 };
+
+    if point == expected {
+        exit(point.x + point.y);
+    }
+    exit(255);
+}
+```
+
+It exits with status 43.
+
+### Tasks
+
+- [ ] Parse named struct declarations, literals, and field selection
+- [ ] Resolve struct fields and check struct values, assignments, and equality
+- [ ] Represent structs and field access in Fern IR
+- [ ] Lay out, copy, compare, and access structs in native code
+- [ ] Compile and execute struct programs and failures
+
+### Completion gates
+
+- Struct declarations, literals, zero-value fields, field selection, and
+  recursive value copying agree with the specification.
+- Field mutability and structural equality reject invalid programs and handle
+  nested comparable values as specified.
+- The struct completion fixture exits with status 43.

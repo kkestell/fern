@@ -70,8 +70,6 @@ This skill produces an implementation plan. It never implements the plan.
 7. Name each plan `eng/plans/YYYY-MM-DD-NNN-slug.md`, using the next sequence
    for the day.
 8. Write from `assets/plan-template.md`.
-   - Plans are slim by default. Prefer 300–800 words, and use fewer when the
-     specification and roadmap already settle the work.
    - Keep only information the implementer needs to execute this slice:
      source-of-truth references, concrete file-oriented tasks, decisions not
      obvious from those sources, and tests unique to the change.

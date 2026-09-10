@@ -154,9 +154,8 @@ In `tests/compiler.rs`, executing programs:
 
 ## Extra validation
 
-- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test`, and `scripts/code-health.sh check`; this task integrates the
-  milestone.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
+  `cargo test`; this task integrates the milestone.
 - Walk the roadmap's completion gates and confirm each has a test.
 - Review the milestone once for correctness and simplicity: look for
   path-selection between scalars and arrays that one type-driven helper could

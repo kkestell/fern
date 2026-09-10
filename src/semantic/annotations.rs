@@ -10,11 +10,7 @@ use crate::{
 
 use la_arena::Idx;
 
-use lasso::Spur;
-
 use num_traits::ToPrimitive;
-
-use std::collections::HashMap;
 
 use super::model::*;
 
@@ -46,7 +42,7 @@ impl CheckedProgram<'_> {
     pub(super) fn resolve_annotation(
         &mut self,
         annotation: Idx<TypeAnnotation>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
         initializer: Option<Idx<Expression>>,
     ) -> Result<Type, Diagnostic> {
         let syntax = self.syntax;
@@ -75,7 +71,7 @@ impl CheckedProgram<'_> {
     fn array_length(
         &mut self,
         length: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<u64, Diagnostic> {
         let span = self.syntax.expressions[length].span.clone();
         // A length is resolved before the module's signatures are, so a call

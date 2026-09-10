@@ -377,7 +377,7 @@ impl CheckedProgram<'_> {
         module_scope: &HashMap<Spur, Idx<Binding>>,
     ) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
-        let scopes = std::slice::from_ref(module_scope);
+        let scopes = ScopeStack::module(module_scope);
         for &(file, item) in items {
             let TopLevelItem::Function { function, .. } = item else {
                 continue;
@@ -386,7 +386,7 @@ impl CheckedProgram<'_> {
             let function_syntax = &syntax.functions[function];
             let mut parameters = Vec::new();
             for parameter in &function_syntax.parameters {
-                let ty = self.resolve_annotation(parameter.annotation, scopes, None)?;
+                let ty = self.resolve_annotation(parameter.annotation, &scopes, None)?;
                 parameters.push(self.bindings.alloc(Binding {
                     ty,
                     mutable: false,
@@ -396,7 +396,7 @@ impl CheckedProgram<'_> {
             let result = match syntax.functions[function].result {
                 FunctionResult::Void => None,
                 FunctionResult::Value(annotation) => {
-                    Some(self.resolve_annotation(annotation, scopes, None)?)
+                    Some(self.resolve_annotation(annotation, &scopes, None)?)
                 }
             };
             self.functions
@@ -558,14 +558,14 @@ impl CheckedProgram<'_> {
                 "module-level initializer must be a constant expression",
             ));
         }
-        let scopes = std::slice::from_ref(module_scope);
+        let scopes = ScopeStack::module(module_scope);
         let destination = match annotation {
             Some(annotation) => {
-                Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
+                Some(self.resolve_annotation(annotation, &scopes, Some(initializer))?)
             }
             None => None,
         };
-        let expression = self.check_expression(initializer, scopes, destination)?;
+        let expression = self.check_expression(initializer, &scopes, destination)?;
         if expression.constant.is_none() {
             return Err(Diagnostic::new(
                 syntax.expressions[initializer].span.clone(),
@@ -601,7 +601,7 @@ impl CheckedProgram<'_> {
                 .zip(parameter_bindings)
                 .map(|(parameter, binding)| (parameter.name, binding))
                 .collect();
-            let mut scopes = vec![module_scope.clone(), parameter_scope];
+            let mut scopes = ScopeStack::function(module_scope, parameter_scope);
             let result = self.functions[function].result.clone();
             let body = &syntax.functions[function].body;
             self.check_body(body, result.as_ref(), &mut scopes, &mut Vec::new())?;
@@ -740,17 +740,13 @@ impl CheckedProgram<'_> {
     pub(super) fn resolve_call(
         &mut self,
         call: &Call,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<Idx<Function>, Diagnostic> {
         let target = &call.target;
         let declaration = if target.qualifier.is_some() {
             self.qualified(target, scopes)?
         } else {
-            if scopes
-                .iter()
-                .rev()
-                .any(|scope| scope.contains_key(&target.name))
-            {
+            if scopes.contains(target.name) {
                 return Err(Diagnostic::new(
                     target.span.clone(),
                     format!(
@@ -779,13 +775,13 @@ impl CheckedProgram<'_> {
     pub(super) fn resolve(
         &mut self,
         name: &QualifiedName,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<Idx<Binding>, Diagnostic> {
         let declaration = if name.qualifier.is_some() {
             self.qualified(name, scopes)?
         } else {
-            if let Some(binding) = scopes.iter().rev().find_map(|scope| scope.get(&name.name)) {
-                return Ok(*binding);
+            if let Some(binding) = scopes.get(name.name) {
+                return Ok(binding);
             }
             self.imported(name, Wanted::Value)?
         };
@@ -843,17 +839,13 @@ impl CheckedProgram<'_> {
     fn qualified(
         &mut self,
         name: &QualifiedName,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<DeclarationKind, Diagnostic> {
         let qualifier = name
             .qualifier
             .as_ref()
             .expect("the caller checked the qualifier");
-        if scopes
-            .iter()
-            .rev()
-            .any(|scope| scope.contains_key(&qualifier.name))
-        {
+        if scopes.contains(qualifier.name) {
             return Err(Diagnostic::new(
                 qualifier.name_span.clone(),
                 format!(

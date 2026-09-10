@@ -11,7 +11,7 @@ use crate::{
 use la_arena::Idx;
 use lasso::Spur;
 use num_traits::ToPrimitive;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Index};
 
 use super::model::*;
 /// The IR function ID of a syntax function. `syntax.functions` holds every
@@ -78,7 +78,7 @@ fn lower_function(
 ) -> Function {
     let signature = &checked.functions[id];
     let mut builder = FlowBuilder::new();
-    let mut bindings = module_places.clone();
+    let mut bindings = Places::new(module_places);
     for &parameter in &signature.parameters {
         let local = builder.local(checked.bindings[parameter].ty.clone());
         bindings.insert(parameter, Place::Local(local));
@@ -98,6 +98,37 @@ fn lower_function(
         builder.terminate(Terminator::Return { value: None });
     }
     builder.finish(parameters, result)
+}
+
+/// The immutable module storage and the locals one function owns while it is
+/// lowered. Local bindings shadow module bindings without copying the latter.
+struct Places<'a> {
+    module: &'a HashMap<Idx<Binding>, Place>,
+    locals: HashMap<Idx<Binding>, Place>,
+}
+
+impl<'a> Places<'a> {
+    fn new(module: &'a HashMap<Idx<Binding>, Place>) -> Self {
+        Self {
+            module,
+            locals: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, binding: Idx<Binding>, place: Place) {
+        self.locals.insert(binding, place);
+    }
+}
+
+impl Index<&Idx<Binding>> for Places<'_> {
+    type Output = Place;
+
+    fn index(&self, binding: &Idx<Binding>) -> &Self::Output {
+        self.locals
+            .get(binding)
+            .or_else(|| self.module.get(binding))
+            .expect("checked bindings have a lowered place")
+    }
 }
 
 fn integer(value: i128, ty: Scalar) -> Operand {
@@ -250,7 +281,7 @@ struct LoopTarget {
 fn lower_flow_binding(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     builder: &mut FlowBuilder,
 ) {
     let StatementKind::Binding { initializer, .. } = &checked.syntax.statements[statement].kind
@@ -270,7 +301,7 @@ fn lower_flow_binding(
 fn lower_flow_body(
     checked: &CheckedProgram<'_>,
     body: &[Idx<Statement>],
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) -> bool {
@@ -285,7 +316,7 @@ fn lower_flow_body(
 fn lower_flow_statement(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) -> bool {
@@ -388,7 +419,7 @@ fn lower_target(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
     target: &AssignmentTarget,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> HeldPlace {
     let root = bindings[&checked.assignments[statement].binding].clone();
@@ -408,7 +439,7 @@ fn lower_call(
     function: Idx<SyntaxFunction>,
     arguments: &[Idx<Expression>],
     span: std::ops::Range<usize>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Option<Operand> {
     let mut held = Vec::with_capacity(arguments.len());
@@ -432,7 +463,7 @@ fn lower_call(
 fn lower_call_expression(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Operand {
     let ExpressionValue::Call { function } = &checked.expressions[id].value else {
@@ -457,7 +488,7 @@ fn lower_if(
     condition: Idx<Expression>,
     then_body: &[Idx<Statement>],
     else_branch: Option<Idx<Statement>>,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) -> bool {
@@ -568,7 +599,7 @@ fn lower_for_header(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
     header: &ForHeader,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) -> LoopKind {
@@ -610,7 +641,7 @@ fn capture(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
     operand: Idx<Expression>,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Iteration {
     let ty = checked.expressions[operand].ty.clone();
@@ -648,7 +679,7 @@ fn capture(
 fn lower_for(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) {
@@ -717,7 +748,7 @@ fn lower_for(
 fn lower_for_post(
     checked: &CheckedProgram<'_>,
     kind: &LoopKind,
-    bindings: &mut HashMap<Idx<Binding>, Place>,
+    bindings: &mut Places<'_>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
 ) {
@@ -787,7 +818,7 @@ fn store_elements(
     id: Idx<Expression>,
     elements: &[Idx<Expression>],
     fill: bool,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) {
     let Type::Array { length, .. } = &checked.expressions[id].ty else {
@@ -816,7 +847,7 @@ fn store_elements(
 fn lower_array_place(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Place {
     let expression = &checked.expressions[id];
@@ -852,7 +883,7 @@ fn lower_array_place(
 fn element_place(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Place {
     let ExpressionValue::Index { operand, index } = &checked.expressions[id].value else {
@@ -873,7 +904,7 @@ fn element_place(
 fn lower_length(
     checked: &CheckedProgram<'_>,
     operand: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Operand {
     let Type::Array { length, .. } = checked.expressions[operand].ty else {
@@ -890,7 +921,7 @@ fn lower_length(
 fn lower_folded_effects(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) {
     let mut operands = Vec::new();
@@ -923,7 +954,7 @@ fn lower_folded_effects(
 fn lower_flow_operand(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Operand {
     let expression = &checked.expressions[id];
@@ -1126,7 +1157,7 @@ fn lower_second_operand(
     left: Operand,
     left_type: Type,
     right: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> (Operand, Operand) {
     let mut held_left = hold_operand(builder, left, left_type);
@@ -1147,7 +1178,7 @@ fn lower_logical(
     operator: LogicalOperator,
     left: Idx<Expression>,
     right: Idx<Expression>,
-    bindings: &HashMap<Idx<Binding>, Place>,
+    bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Operand {
     let left = lower_flow_operand(checked, left, bindings, builder);

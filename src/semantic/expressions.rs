@@ -6,10 +6,8 @@ use crate::{
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
 };
 use la_arena::Idx;
-use lasso::Spur;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use std::collections::HashMap;
 
 use super::{annotations::check_element_count, constants::*, model::*};
 
@@ -17,7 +15,7 @@ impl CheckedProgram<'_> {
     pub(super) fn check_expression(
         &mut self,
         id: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let syntax = self.syntax;
@@ -56,7 +54,7 @@ impl CheckedProgram<'_> {
     pub(super) fn infer_expression(
         &mut self,
         id: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let expression = &self.syntax.expressions[id];
         match &expression.kind {
@@ -139,7 +137,7 @@ impl CheckedProgram<'_> {
     fn check_array_literal(
         &mut self,
         id: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let span = self.syntax.expressions[id].span.clone();
@@ -183,7 +181,7 @@ impl CheckedProgram<'_> {
     fn array_literal_type(
         &mut self,
         span: &std::ops::Range<usize>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
         destination: Option<Type>,
         elements: &[Idx<Expression>],
         fill: Option<&std::ops::Range<usize>>,
@@ -215,7 +213,7 @@ impl CheckedProgram<'_> {
     fn common_element_type(
         &mut self,
         elements: &[Idx<Expression>],
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
         let mut default = None;
         for &element in elements {
@@ -237,7 +235,7 @@ impl CheckedProgram<'_> {
         operand: &Type,
         operand_span: &std::ops::Range<usize>,
         index: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
         let Type::Array { length, element } = operand else {
             return Err(Diagnostic::new(
@@ -262,7 +260,7 @@ impl CheckedProgram<'_> {
         &mut self,
         operand: Idx<Expression>,
         index: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let span = self.syntax.expressions[operand].span.clone();
@@ -281,7 +279,7 @@ impl CheckedProgram<'_> {
     fn infer_length(
         &mut self,
         operand: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let Type::Array { length, .. } = &checked_operand.ty else {
@@ -324,7 +322,7 @@ impl CheckedProgram<'_> {
     fn infer_grouping(
         &mut self,
         inner: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked = self.infer_expression(inner, scopes)?;
         let result = CheckedExpression {
@@ -342,7 +340,7 @@ impl CheckedProgram<'_> {
         operator: UnaryOperator,
         operator_span: &std::ops::Range<usize>,
         operand: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let error = |message| Diagnostic::new(operator_span.clone(), message);
@@ -387,7 +385,7 @@ impl CheckedProgram<'_> {
         operator_span: &std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_left = self.infer_expression(left, scopes)?;
         let checked_right = self.infer_expression(right, scopes)?;
@@ -427,7 +425,7 @@ impl CheckedProgram<'_> {
         operator_span: &std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_left = self.infer_expression(left, scopes)?;
         let mut checked_right = self.infer_expression(right, scopes)?;
@@ -511,7 +509,7 @@ impl CheckedProgram<'_> {
         operator_span: &std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_left = self.infer_expression(left, scopes)?;
         let mut checked_right = self.infer_expression(right, scopes)?;
@@ -550,7 +548,7 @@ impl CheckedProgram<'_> {
         &mut self,
         operator_span: &std::ops::Range<usize>,
         operand: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         require_boolean(self.syntax, operand, &checked_operand)?;
@@ -576,7 +574,7 @@ impl CheckedProgram<'_> {
         truncating: bool,
         operand: Idx<Expression>,
         span: &std::ops::Range<usize>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_operand = self.infer_expression(operand, scopes)?;
         if integer_operand(&checked_operand).is_none() {

@@ -177,3 +177,56 @@ pub(crate) struct CheckedProgram<'a> {
     /// selects the imports name resolution sees.
     pub(super) file: FileId,
 }
+
+/// The module bindings a function can read, plus its nested lexical bindings.
+/// The module map is shared because a function never changes it.
+pub(super) struct ScopeStack<'a> {
+    module: &'a HashMap<Spur, Idx<Binding>>,
+    locals: Vec<HashMap<Spur, Idx<Binding>>>,
+}
+
+impl<'a> ScopeStack<'a> {
+    pub(super) fn module(module: &'a HashMap<Spur, Idx<Binding>>) -> Self {
+        Self {
+            module,
+            locals: Vec::new(),
+        }
+    }
+
+    pub(super) fn function(
+        module: &'a HashMap<Spur, Idx<Binding>>,
+        parameters: HashMap<Spur, Idx<Binding>>,
+    ) -> Self {
+        Self {
+            module,
+            locals: vec![parameters],
+        }
+    }
+
+    pub(super) fn push(&mut self, scope: HashMap<Spur, Idx<Binding>>) {
+        self.locals.push(scope);
+    }
+
+    pub(super) fn pop(&mut self) {
+        self.locals.pop();
+    }
+
+    pub(super) fn insert(&mut self, name: Spur, binding: Idx<Binding>) {
+        self.locals
+            .last_mut()
+            .expect("a statement is checked inside a local scope")
+            .insert(name, binding);
+    }
+
+    pub(super) fn get(&self, name: Spur) -> Option<Idx<Binding>> {
+        self.locals
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name).copied())
+            .or_else(|| self.module.get(&name).copied())
+    }
+
+    pub(super) fn contains(&self, name: Spur) -> bool {
+        self.get(name).is_some()
+    }
+}

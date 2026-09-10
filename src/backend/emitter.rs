@@ -142,17 +142,17 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
     for (id, global) in program.globals.iter().enumerate() {
-        writeln!(
-            emitter.data,
-            "data $global{id} = {{ {} }}",
-            global
-                .values
-                .iter()
-                .map(|value| format!("{} {value}", word(&global.ty)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .unwrap();
+        // An i128, its QBE word, and a separator fit in 44 bytes. Reserve the
+        // emitted data once instead of allocating one temporary string per scalar.
+        emitter.data.reserve(global.values.len().saturating_mul(44));
+        write!(emitter.data, "data $global{id} = {{ ").unwrap();
+        for (index, value) in global.values.iter().enumerate() {
+            if index != 0 {
+                emitter.data.push_str(", ");
+            }
+            write!(emitter.data, "{} {value}", word(&global.ty)).unwrap();
+        }
+        emitter.data.push_str(" }\n");
     }
     for (index, function) in program.functions.iter().enumerate() {
         let id = FunctionId(index);

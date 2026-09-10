@@ -19,7 +19,7 @@ impl CheckedProgram<'_> {
         &mut self,
         body: &[Idx<Statement>],
         result: Option<&Type>,
-        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        scopes: &mut ScopeStack<'_>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
         scopes.push(HashMap::new());
@@ -34,7 +34,7 @@ impl CheckedProgram<'_> {
         &mut self,
         statement: Idx<Statement>,
         result: Option<&Type>,
-        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        scopes: &mut ScopeStack<'_>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
         match &self.syntax.statements[statement].kind {
@@ -114,7 +114,7 @@ impl CheckedProgram<'_> {
         mutable: bool,
         annotation: Option<Idx<TypeAnnotation>>,
         initializer: Idx<Expression>,
-        scopes: &mut [HashMap<Spur, Idx<Binding>>],
+        scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let destination = match annotation {
             Some(annotation) => {
@@ -136,10 +136,7 @@ impl CheckedProgram<'_> {
             constant,
         });
         self.declarations.insert(statement, binding);
-        scopes
-            .last_mut()
-            .expect("a statement is checked inside a scope")
-            .insert(name, binding);
+        scopes.insert(name, binding);
         Ok(())
     }
 
@@ -152,7 +149,7 @@ impl CheckedProgram<'_> {
         operator: BinaryOperator,
         operator_span: &std::ops::Range<usize>,
         value: Idx<Expression>,
-        scopes: &mut [HashMap<Spur, Idx<Binding>>],
+        scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let target = self.assignment_target(target, scopes)?;
         let left = CheckedExpression {
@@ -184,7 +181,7 @@ impl CheckedProgram<'_> {
         &mut self,
         statement: Idx<Statement>,
         result: Option<&Type>,
-        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        scopes: &mut ScopeStack<'_>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
         let StatementKind::For {
@@ -223,7 +220,7 @@ impl CheckedProgram<'_> {
         statement: Idx<Statement>,
         header: &ForHeader,
         result: Option<&Type>,
-        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        scopes: &mut ScopeStack<'_>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<bool, Diagnostic> {
         match header {
@@ -263,7 +260,7 @@ impl CheckedProgram<'_> {
         value: Spur,
         index: Option<&(Spur, std::ops::Range<usize>)>,
         operand: Idx<Expression>,
-        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+        scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let checked = self.infer_expression(operand, scopes)?;
         let Type::Array { element, .. } = &checked.ty else {
@@ -334,7 +331,7 @@ impl CheckedProgram<'_> {
         statement: Idx<Statement>,
         result: Option<&Type>,
         value: Option<Idx<Expression>>,
-        scopes: &mut [HashMap<Spur, Idx<Binding>>],
+        scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         match (result, value) {
             (None, None) => Ok(()),
@@ -360,7 +357,7 @@ impl CheckedProgram<'_> {
     fn assignment_target(
         &mut self,
         target: &AssignmentTarget,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<CheckedTarget, Diagnostic> {
         let name = &target.name;
         let binding = self.resolve(name, scopes)?;
@@ -385,7 +382,7 @@ impl CheckedProgram<'_> {
     fn check_condition(
         &mut self,
         condition: Idx<Expression>,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let expression = self.check_expression(condition, scopes, Some(Scalar::Bool.into()))?;
         self.expressions.insert(condition, expression);
@@ -395,7 +392,7 @@ impl CheckedProgram<'_> {
     pub(super) fn check_call(
         &mut self,
         call: &Call,
-        scopes: &[HashMap<Spur, Idx<Binding>>],
+        scopes: &ScopeStack<'_>,
         value_context: bool,
     ) -> Result<(Idx<Function>, Option<Type>), Diagnostic> {
         let function = self.resolve_call(call, scopes)?;

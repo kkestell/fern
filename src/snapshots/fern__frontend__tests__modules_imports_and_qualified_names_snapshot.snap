@@ -1,30 +1,34 @@
 ---
 source: src/frontend.rs
-expression: project(&parse(source).unwrap())
+expression: projected(source)
 ---
 use fmt span=0..8 path=[4..7]
 use network::http span=9..27 path=[13..20, 22..26]
 use fs::{flag, mode} span=28..50 path=[32..34] selection=[37..41, 43..47]
-pub const limit name=61..66 annotation=Some(TypeAnnotation { ty: Int, span: 68..71 }) span=55..76
+pub const limit name=61..66 span=55..76
+  named int span=68..71
   integer 4 span=74..75
-pub var total name=85..90 annotation=None span=81..95
+pub var total name=85..90 span=81..95
   integer 0 span=93..94
-const private name=102..109 annotation=None span=96..114
+const private name=102..109 span=96..114
   integer 1 span=112..113
-fn helper name=118..124 result=Value(TypeAnnotation { ty: Int, span: 130..133 }) span=115..153
+fn helper name=118..124 span=115..153
+  result
+    named int span=130..133
   return span=136..151
     reference private span=143..150
-pub fn main name=161..165 result=Void span=158..321
+pub fn main name=161..165 span=158..321
+  result void
   call http::serve target=188..193 left_paren=193..194 right_paren=222..223 span=182..224 qualifier=182..186
     binary Add operator=212..213 span=194..222
       call fmt::width target=199..204 left_paren=204..205 right_paren=210..211 span=194..211 qualifier=194..197
         reference limit span=205..210
       call helper target=214..220 left_paren=220..221 right_paren=221..222 span=214..222
-  assign http::total name=235..240 qualifier=229..233 span=229..249
+  assign http::total name=235..240 span=229..249 qualifier=229..233
     reference limit span=243..248
-  compound assign http::total Add= name=260..265 operator=266..268 qualifier=254..258 span=254..271
+  compound assign http::total Add= name=260..265 operator=266..268 span=254..271 qualifier=254..258
     integer 2 span=269..270
-  const value name=282..287 annotation=None span=276..302
+  const value name=282..287 span=276..302
     reference http::total span=290..301 qualifier=290..294
   exit span=307..319
     reference value span=312..317

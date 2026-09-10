@@ -5,8 +5,12 @@ expression: program.program()
 Program {
     globals: [
         Global {
-            ty: Int,
-            value: 40,
+            ty: Scalar(
+                Int,
+            ),
+            values: [
+                40,
+            ],
         },
     ],
     functions: [
@@ -16,7 +20,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -29,7 +35,9 @@ Program {
                     span: Some(
                         209..210,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -46,7 +54,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -61,7 +71,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    U8,
+                    Scalar(
+                        U8,
+                    ),
                 ],
                 blocks: [
                     Block {

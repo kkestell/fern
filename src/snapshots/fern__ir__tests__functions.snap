@@ -5,20 +5,28 @@ expression: program.program()
 Program {
     globals: [
         Global {
-            ty: Int,
-            value: 0,
+            ty: Scalar(
+                Int,
+            ),
+            values: [
+                0,
+            ],
         },
     ],
     functions: [
         Function {
             parameters: 1,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -31,7 +39,9 @@ Program {
                     span: Some(
                         89..90,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Multiply,
                         form: Infix,
@@ -48,7 +58,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -61,7 +73,9 @@ Program {
                     span: Some(
                         94..95,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -79,7 +93,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -94,7 +110,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -153,12 +171,16 @@ Program {
         Function {
             parameters: 2,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -169,7 +191,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -182,7 +206,9 @@ Program {
                     span: Some(
                         238..239,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Subtract,
                         form: Infix,
@@ -204,8 +230,12 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -242,12 +272,16 @@ Program {
         Function {
             parameters: 1,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -260,7 +294,9 @@ Program {
                     span: Some(
                         333..335,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Equal,
                         left: Value(
@@ -276,7 +312,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -287,7 +325,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -300,7 +340,9 @@ Program {
                     span: Some(
                         435..436,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Subtract,
                         form: Infix,
@@ -317,14 +359,18 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: Some(
                         420..421,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -346,7 +392,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -452,12 +500,16 @@ Program {
         Function {
             parameters: 1,
             result: Some(
-                Bool,
+                Scalar(
+                    Bool,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -470,7 +522,9 @@ Program {
                     span: Some(
                         534..535,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Greater,
                         left: Value(
@@ -490,7 +544,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -525,7 +581,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -538,7 +596,9 @@ Program {
                     span: Some(
                         633..635,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Equal,
                         left: Value(
@@ -558,7 +618,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -629,27 +691,37 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -660,12 +732,16 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -680,7 +756,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

@@ -1,0 +1,1820 @@
+---
+source: src/ir.rs
+expression: program.program()
+---
+Program {
+    globals: [],
+    functions: [
+        Function {
+            parameters: 1,
+            result: Some(
+                Scalar(
+                    Int,
+                ),
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        144..147,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Less,
+                        left: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 3,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Element {
+                            base: Local(
+                                LocalId(
+                                    2,
+                                ),
+                            ),
+                            index: Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            span: 144..147,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                4,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Element {
+                            base: Local(
+                                LocalId(
+                                    5,
+                                ),
+                            ),
+                            index: Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            span: 199..200,
+                        },
+                    ),
+                },
+                Value {
+                    span: Some(
+                        189..190,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Multiply,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                6,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                8,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: Some(
+                        185..186,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                5,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                9,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        144..147,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                11,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Scalar(
+                        Int,
+                    ),
+                    Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                1,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                2,
+                            ),
+                            else_target: BlockId(
+                                4,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    index: Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                    span: 191..198,
+                                },
+                                operand: Integer {
+                                    value: 1,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    index: Integer {
+                                        value: 1,
+                                        ty: Int,
+                                    },
+                                    span: 191..198,
+                                },
+                                operand: Integer {
+                                    value: 2,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    index: Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                    span: 191..198,
+                                },
+                                operand: Integer {
+                                    value: 3,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        10,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    11,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    12,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        12,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                1,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    13,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        13,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 1,
+            result: Some(
+                Array {
+                    length: 2,
+                    element: Scalar(
+                        Int,
+                    ),
+                },
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        398..399,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Less,
+                        left: Value(
+                            ValueId(
+                                1,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 2,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: Load(
+                        Element {
+                            base: Local(
+                                LocalId(
+                                    0,
+                                ),
+                            ),
+                            index: Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            span: 467..468,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        417..418,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                8,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Scalar(
+                        Int,
+                    ),
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    index: Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                    span: 356..362,
+                                },
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    index: Integer {
+                                        value: 1,
+                                        ty: Int,
+                                    },
+                                    span: 356..362,
+                                },
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                1,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                2,
+                            ),
+                            else_target: BlockId(
+                                4,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        7,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    0,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            6,
+                                        ),
+                                    ),
+                                ],
+                                span: 453..470,
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            2,
+                                        ),
+                                    ),
+                                    index: Value(
+                                        ValueId(
+                                            4,
+                                        ),
+                                    ),
+                                    span: 448..449,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        7,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        9,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                1,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        10,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        726..728,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Equal,
+                        left: Value(
+                            ValueId(
+                                2,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                3,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                4,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                6,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        844..856,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Less,
+                        left: Value(
+                            ValueId(
+                                8,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 2,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                6,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Element {
+                            base: Local(
+                                LocalId(
+                                    5,
+                                ),
+                            ),
+                            index: Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                            span: 844..856,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                7,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        890..891,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                12,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                13,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                6,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        844..856,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                15,
+                            ),
+                        ),
+                        right: Integer {
+                            value: 1,
+                            ty: Int,
+                        },
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    Scalar(
+                        Int,
+                    ),
+                    Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 1,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 1,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 2,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 3,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 4,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 1,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 5,
+                                    ty: Int,
+                                },
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                0,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                        span: 608..630,
+                                    },
+                                    index: Integer {
+                                        value: 2,
+                                        ty: Int,
+                                    },
+                                    span: 608..630,
+                                },
+                                operand: Integer {
+                                    value: 6,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Element {
+                                        base: Local(
+                                            LocalId(
+                                                2,
+                                            ),
+                                        ),
+                                        index: Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                        span: 689..690,
+                                    },
+                                    index: Integer {
+                                        value: 0,
+                                        ty: Int,
+                                    },
+                                    span: 692..693,
+                                },
+                                operand: Integer {
+                                    value: 99,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Exit {
+                            status: Integer {
+                                value: 255,
+                                ty: Int,
+                            },
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        6,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    1,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            5,
+                                        ),
+                                    ),
+                                ],
+                                span: 844..856,
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        6,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        5,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        7,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                                operand: Integer {
+                                    value: 0,
+                                    ty: Int,
+                                },
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                4,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                5,
+                            ),
+                            else_target: BlockId(
+                                7,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    11,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        7,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        11,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    12,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    13,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    14,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        14,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                6,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    15,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    16,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        16,
+                                    ),
+                                ),
+                            },
+                        ],
+                        terminator: Jump {
+                            target: BlockId(
+                                4,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    17,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    17,
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+    main: FunctionId(
+        2,
+    ),
+}

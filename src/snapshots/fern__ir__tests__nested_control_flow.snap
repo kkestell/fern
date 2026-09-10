@@ -11,7 +11,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -24,7 +26,9 @@ Program {
                     span: Some(
                         91..92,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Less,
                         left: Value(
@@ -40,7 +44,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -53,7 +59,9 @@ Program {
                     span: Some(
                         142..143,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Less,
                         left: Value(
@@ -69,7 +77,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -82,7 +92,9 @@ Program {
                     span: Some(
                         185..187,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Equal,
                         left: Value(
@@ -98,7 +110,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -109,7 +123,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -122,7 +138,9 @@ Program {
                     span: Some(
                         233..235,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Equal,
                         left: Value(
@@ -139,7 +157,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -152,7 +172,9 @@ Program {
                     span: Some(
                         246..248,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: CompoundAssignment,
@@ -169,7 +191,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -182,7 +206,9 @@ Program {
                     span: Some(
                         149..151,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: CompoundAssignment,
@@ -199,7 +225,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -212,7 +240,9 @@ Program {
                     span: Some(
                         98..100,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: CompoundAssignment,
@@ -229,7 +259,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -244,9 +276,15 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
-                    Int,
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

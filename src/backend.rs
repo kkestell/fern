@@ -7,7 +7,7 @@ use crate::{
         Place, Terminator, Value, ValueId, ValueKind, VerifiedProgram,
     },
     source::SourceMap,
-    types::Type,
+    types::{Scalar, Type},
 };
 use std::{env, fmt::Write, fs, path::Path, process::Command};
 
@@ -18,8 +18,62 @@ fn operand(operand: Operand) -> String {
     }
 }
 
-fn qbe_type(ty: Type) -> char {
+/// Arithmetic, conversions, and branching are defined on scalars, so the
+/// emission for them states that no array reaches it.
+fn scalar(ty: &Type) -> Scalar {
+    ty.scalar()
+        .expect("integer and boolean emission runs on scalars")
+}
+
+fn qbe_type(ty: Scalar) -> char {
     if ty.width() == 64 { 'l' } else { 'w' }
+}
+
+/// Every scalar occupies its whole QBE word wherever it is stored, so an array
+/// occupies that word once per element.
+fn word(ty: &Type) -> char {
+    qbe_type(ty.leaf())
+}
+
+fn size(ty: &Type) -> u64 {
+    ty.element_count() * if word(ty) == 'l' { 8 } else { 4 }
+}
+
+fn allocation(ty: &Type) -> &'static str {
+    if word(ty) == 'l' { "alloc8" } else { "alloc4" }
+}
+
+/// How a signature, a call argument, or a call result names this type. An
+/// array is an aggregate named by its layout, so two array types made of the
+/// same scalars share one QBE type definition.
+fn class(ty: &Type) -> String {
+    match ty {
+        Type::Scalar(ty) => qbe_type(*ty).to_string(),
+        Type::Array { .. } => format!(":array{}{}", word(ty), ty.element_count()),
+    }
+}
+
+/// The aggregate type definitions the signatures name. QBE needs the layout of
+/// every array a function takes or returns.
+fn emit_aggregate_types(functions: &[Function]) -> String {
+    let mut definitions: Vec<String> = Vec::new();
+    for function in functions {
+        let signature = function.flow.locals[..function.parameters]
+            .iter()
+            .chain(function.result.as_ref());
+        for ty in signature.filter(|ty| ty.scalar().is_none()) {
+            let definition = format!(
+                "type {} = {{ {} {} }}\n",
+                class(ty),
+                word(ty),
+                ty.element_count()
+            );
+            if !definitions.contains(&definition) {
+                definitions.push(definition);
+            }
+        }
+    }
+    definitions.concat()
 }
 
 struct Emitter<'a> {
@@ -33,7 +87,10 @@ struct Emitter<'a> {
     function: usize,
     /// The return type of the signature being emitted, absent for a function
     /// that returns nothing.
-    qbe_result: Option<char>,
+    qbe_result: Option<String>,
+    /// How many element places the program has materialized, which names their
+    /// temporaries and their bounds-check symbols.
+    accesses: usize,
     diagnostics: Option<DiagnosticRenderer<'a>>,
 }
 
@@ -48,11 +105,69 @@ fn function_symbol(main: FunctionId, id: FunctionId) -> String {
     }
 }
 
-/// Names the QBE symbol holding `place`.
-fn place(place: Place) -> String {
+/// The address of a place and the type stored there. An element place emits
+/// its bounds check here, so every read and write through it is checked.
+fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -> (String, Type) {
     match place {
-        Place::Local(local) => format!("%local{}", local.0),
-        Place::Global(global) => format!("$global{}", global.0),
+        Place::Local(local) => (format!("%local{}", local.0), flow.locals[local.0].clone()),
+        Place::Global(global) => (
+            format!("$global{}", global.0),
+            emitter.globals[global.0].ty.clone(),
+        ),
+        Place::Element { base, index, span } => {
+            let (base, ty) = place_address(emitter, flow, base);
+            let spelling = ty.to_string();
+            let Type::Array { length, element } = ty else {
+                unreachable!("a verified element place indexes an array")
+            };
+            let access = emitter.accesses;
+            emitter.accesses += 1;
+            // A constant index the checker accepted is in range, so only an
+            // index computed at run time needs the check. Lowering writes an
+            // array literal through constant indices, and a check for each of
+            // them would carry a trap block and a message that cannot run.
+            let constant = match index {
+                Operand::Integer { value, .. } => (0..i128::from(length)).contains(value),
+                Operand::Value(_) => false,
+            };
+            let index = operand(*index);
+            if !constant {
+                // Indices are signed, so one unsigned comparison rejects both
+                // a negative index and one at or past the length.
+                writeln!(
+                    emitter.text,
+                    "    %access{access}_out =w {} {index}, {length}",
+                    comparison_operation("ge", false, Scalar::Int)
+                )
+                .unwrap();
+                let message = operation_message(
+                    Some(span),
+                    emitter.diagnostics.as_ref(),
+                    &format!("array index out of range for `{spelling}`"),
+                );
+                emit_conditional_trap(
+                    &mut emitter.text,
+                    &mut emitter.data,
+                    emitter.function,
+                    access,
+                    "bounds",
+                    &format!("%access{access}_out"),
+                    message,
+                );
+            }
+            writeln!(
+                emitter.text,
+                "    %access{access}_offset =l mul {index}, {}",
+                size(&element)
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %access{access}_address =l add {base}, %access{access}_offset"
+            )
+            .unwrap();
+            (format!("%access{access}_address"), *element)
+        }
     }
 }
 
@@ -66,14 +181,19 @@ pub(crate) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         main: program.main,
         function: 0,
         qbe_result: None,
+        accesses: 0,
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
     for (id, global) in program.globals.iter().enumerate() {
         writeln!(
             emitter.data,
-            "data $global{id} = {{ {} {} }}",
-            qbe_type(global.ty),
-            global.value
+            "data $global{id} = {{ {} }}",
+            global
+                .values
+                .iter()
+                .map(|value| format!("{} {value}", word(&global.ty)))
+                .collect::<Vec<_>>()
+                .join(", ")
         )
         .unwrap();
     }
@@ -84,19 +204,19 @@ pub(crate) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         // `main` reports the process status, so it returns a word even though
         // Fern declares it as returning nothing.
         emitter.qbe_result = if entry {
-            Some('w')
+            Some("w".to_owned())
         } else {
-            function.result.map(qbe_type)
+            function.result.as_ref().map(class)
         };
         let parameters = (0..function.parameters)
-            .map(|index| format!("{} %param{index}", qbe_type(function.flow.locals[index])))
+            .map(|index| format!("{} %param{index}", class(&function.flow.locals[index])))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
             emitter.text,
             "{}function {}${}({parameters}) {{\n@start",
             if entry { "export " } else { "" },
-            match emitter.qbe_result {
+            match &emitter.qbe_result {
                 Some(result) => format!("{result} "),
                 None => String::new(),
             },
@@ -106,25 +226,49 @@ pub(crate) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emit_control_flow(&mut emitter, function, &function.flow);
         emitter.text.push_str("}\n");
     }
-    emitter.data + &emitter.text
+    emit_aggregate_types(&program.functions) + &emitter.data + &emitter.text
 }
 
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
     for (id, ty) in flow.locals.iter().enumerate() {
-        let (allocation, size) = if qbe_type(*ty) == 'l' {
-            ("alloc8", 8)
-        } else {
-            ("alloc4", 4)
-        };
-        writeln!(emitter.text, "    %local{id} =l {allocation} {size}").unwrap();
+        writeln!(
+            emitter.text,
+            "    %local{id} =l {} {}",
+            allocation(ty),
+            size(ty)
+        )
+        .unwrap();
+    }
+    // An array value holds its own copy of the array. QBE allocates once per
+    // `alloc` it executes, so the storage is allocated here rather than where
+    // the load runs, which may be inside a loop.
+    for (id, value) in function.values.iter().enumerate() {
+        if matches!(value.kind, ValueKind::Load(_)) && value.ty.scalar().is_none() {
+            writeln!(
+                emitter.text,
+                "    %v{id}_storage =l {} {}",
+                allocation(&value.ty),
+                size(&value.ty)
+            )
+            .unwrap();
+        }
     }
     // The parameters are the leading locals, so the loop above allocated them.
     for index in 0..function.parameters {
-        writeln!(
-            emitter.text,
-            "    store{} %param{index}, %local{index}",
-            qbe_type(flow.locals[index])
-        )
+        let ty = &flow.locals[index];
+        if ty.scalar().is_some() {
+            writeln!(
+                emitter.text,
+                "    store{} %param{index}, %local{index}",
+                word(ty)
+            )
+        } else {
+            writeln!(
+                emitter.text,
+                "    blit %param{index}, %local{index}, {}",
+                size(ty)
+            )
+        }
         .unwrap();
     }
     writeln!(emitter.text, "    jmp @block{}", flow.entry.0).unwrap();
@@ -150,16 +294,13 @@ fn emit_instruction(
             place: destination,
             operand: source,
         } => {
-            let width = match destination {
-                Place::Local(local) => qbe_type(flow.locals[local.0]),
-                Place::Global(global) => qbe_type(emitter.globals[global.0].ty),
-            };
-            writeln!(
-                emitter.text,
-                "    store{width} {}, {}",
-                operand(*source),
-                place(*destination)
-            )
+            let (address, ty) = place_address(emitter, flow, destination);
+            let source = operand(*source);
+            if ty.scalar().is_some() {
+                writeln!(emitter.text, "    store{} {source}, {address}", word(&ty))
+            } else {
+                writeln!(emitter.text, "    blit {source}, {address}, {}", size(&ty))
+            }
             .unwrap();
         }
         Instruction::Call {
@@ -186,7 +327,7 @@ fn emit_call(
         .map(|(index, argument)| {
             format!(
                 "{} {}",
-                qbe_type(target.flow.locals[index]),
+                class(&target.flow.locals[index]),
                 operand(*argument)
             )
         })
@@ -197,9 +338,10 @@ fn emit_call(
         Some(ValueId(id)) => writeln!(
             emitter.text,
             "    %v{id} ={} call ${symbol}({arguments})",
-            qbe_type(
+            class(
                 target
                     .result
+                    .as_ref()
                     .expect("a call result requires a callee that returns one")
             )
         ),
@@ -258,13 +400,20 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
 fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
     let value = &function.values[id];
     match value.kind {
-        ValueKind::Load(source) => {
-            let width = qbe_type(value.ty);
-            writeln!(
-                emitter.text,
-                "    %v{id} ={width} load{width} {}",
-                place(source)
-            )
+        ValueKind::Load(ref source) => {
+            let (address, _) = place_address(emitter, &function.flow, source);
+            if value.ty.scalar().is_some() {
+                let width = word(&value.ty);
+                writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
+            } else {
+                // Loading an array copies it, so a later call in the same
+                // expression cannot change what the value holds.
+                writeln!(
+                    emitter.text,
+                    "    blit {address}, %v{id}_storage, {}\n    %v{id} =l copy %v{id}_storage",
+                    size(&value.ty)
+                )
+            }
             .unwrap();
         }
         // A call result is defined by its call instruction.
@@ -273,17 +422,19 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             operand: source,
             truncating,
         } => {
+            let ty = scalar(&value.ty);
             let source_ty = operand_type(function, source);
-            if truncating || source_ty.all_values_fit(value.ty) {
-                emit_truncation(&mut emitter.text, id, source, source_ty, value.ty);
+            if truncating || source_ty.all_values_fit(ty) {
+                emit_truncation(&mut emitter.text, id, source, source_ty, ty);
             } else {
                 let message = format!(
                     "checked integer conversion failed: `{}` to `{}`",
                     source_ty.name(),
-                    value.ty.name()
+                    ty.name()
                 );
-                let message = operation_message(value, emitter.diagnostics.as_ref(), &message);
-                emit_checked_conversion(emitter, id, source, source_ty, value.ty, message);
+                let message =
+                    operation_message(value.span.as_ref(), emitter.diagnostics.as_ref(), &message);
+                emit_checked_conversion(emitter, id, source, source_ty, ty, message);
             }
         }
         ValueKind::Unary { operator, operand } => {
@@ -314,7 +465,10 @@ fn emit_comparison(
     right: Operand,
     function: &Function,
 ) {
-    let ty = operand_type(function, left);
+    let operand_ty = operand_value_type(function, left);
+    let Some(ty) = operand_ty.scalar() else {
+        return emit_array_comparison(text, id, operator, left, right, &operand_ty);
+    };
     let comparison = match operator {
         ComparisonOperator::Equal => format!("ceq{}", qbe_type(ty)),
         ComparisonOperator::NotEqual => format!("cne{}", qbe_type(ty)),
@@ -332,7 +486,34 @@ fn emit_comparison(
     .unwrap();
 }
 
-fn comparison_operation(relation: &str, signed: bool, ty: Type) -> String {
+/// Two arrays are equal when every pair of corresponding elements is. Every
+/// scalar is stored normalized in its whole word, so equal arrays hold
+/// identical bytes and one comparison of their storage answers for all of them.
+fn emit_array_comparison(
+    text: &mut String,
+    id: usize,
+    operator: ComparisonOperator,
+    left: Operand,
+    right: Operand,
+    ty: &Type,
+) {
+    writeln!(
+        text,
+        "    %v{id}_difference =w call $memcmp(l {}, l {}, l {})",
+        operand(left),
+        operand(right),
+        size(ty)
+    )
+    .unwrap();
+    let comparison = match operator {
+        ComparisonOperator::Equal => "ceqw",
+        ComparisonOperator::NotEqual => "cnew",
+        _ => unreachable!("only equality compares arrays"),
+    };
+    writeln!(text, "    %v{id} =w {comparison} %v{id}_difference, 0").unwrap();
+}
+
+fn comparison_operation(relation: &str, signed: bool, ty: Scalar) -> String {
     format!(
         "c{}{relation}{}",
         if signed { "s" } else { "u" },
@@ -347,7 +528,7 @@ fn emit_unary_operation(
     operator: UnaryOperator,
     source: Operand,
 ) {
-    let ty = value.ty;
+    let ty = scalar(&value.ty);
     let width = qbe_type(ty);
     let source = operand(source);
     match operator {
@@ -366,7 +547,7 @@ fn emit_unary_operation(
                 "overflow",
                 &format!("%operation{id}_minimum"),
                 operation_message(
-                    value,
+                    value.span.as_ref(),
                     emitter.diagnostics.as_ref(),
                     "integer unary `-` overflowed",
                 ),
@@ -417,12 +598,19 @@ fn emit_binary_operation(
                 BinaryOperator::WrappingMultiply => "mul",
                 _ => unreachable!(),
             };
-            emit_binary_raw(&mut emitter.text, id, value.ty, instruction, left, right);
+            emit_binary_raw(
+                &mut emitter.text,
+                id,
+                scalar(&value.ty),
+                instruction,
+                left,
+                right,
+            );
             emit_normalized(
                 &mut emitter.text,
                 id,
                 &format!("%operation{id}_raw"),
-                value.ty,
+                scalar(&value.ty),
             );
         }
         BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => emit_shift(
@@ -441,12 +629,19 @@ fn emit_binary_operation(
                 BinaryOperator::Or => "or",
                 _ => unreachable!(),
             };
-            emit_binary_raw(&mut emitter.text, id, value.ty, instruction, left, right);
+            emit_binary_raw(
+                &mut emitter.text,
+                id,
+                scalar(&value.ty),
+                instruction,
+                left,
+                right,
+            );
             emit_normalized(
                 &mut emitter.text,
                 id,
                 &format!("%operation{id}_raw"),
-                value.ty,
+                scalar(&value.ty),
             );
         }
     }
@@ -455,7 +650,7 @@ fn emit_binary_operation(
 fn emit_binary_raw(
     text: &mut String,
     id: usize,
-    ty: Type,
+    ty: Scalar,
     instruction: &str,
     left: Operand,
     right: Operand,
@@ -479,7 +674,7 @@ fn emit_checked_arithmetic(
     left: Operand,
     right: Operand,
 ) {
-    let ty = value.ty;
+    let ty = scalar(&value.ty);
     let instruction = match operator {
         BinaryOperator::Add => "add",
         BinaryOperator::Subtract => "sub",
@@ -504,7 +699,7 @@ fn emit_checked_arithmetic(
         "overflow",
         &format!("%operation{id}_overflow"),
         operation_message(
-            value,
+            value.span.as_ref(),
             emitter.diagnostics.as_ref(),
             &format!("integer `{spelling}` overflowed"),
         ),
@@ -512,7 +707,13 @@ fn emit_checked_arithmetic(
     emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
-fn emit_wide_word_multiply(text: &mut String, id: usize, ty: Type, left: Operand, right: Operand) {
+fn emit_wide_word_multiply(
+    text: &mut String,
+    id: usize,
+    ty: Scalar,
+    left: Operand,
+    right: Operand,
+) {
     let extension = if ty.signed() { "extsw" } else { "extuw" };
     writeln!(
         text,
@@ -563,7 +764,7 @@ fn emit_wide_word_multiply(text: &mut String, id: usize, ty: Type, left: Operand
 fn emit_arithmetic_overflow(
     text: &mut String,
     id: usize,
-    ty: Type,
+    ty: Scalar,
     operator: BinaryOperator,
     left: Operand,
     right: Operand,
@@ -661,7 +862,7 @@ fn emit_arithmetic_overflow(
 fn emit_long_multiply_overflow(
     text: &mut String,
     id: usize,
-    ty: Type,
+    ty: Scalar,
     left: Operand,
     right: Operand,
 ) {
@@ -740,7 +941,7 @@ fn emit_division(
     left: Operand,
     right: Operand,
 ) {
-    let ty = value.ty;
+    let ty = scalar(&value.ty);
     let width = qbe_type(ty);
     let left_text = operand(left);
     let right_text = operand(right);
@@ -757,7 +958,7 @@ fn emit_division(
         "zero",
         &format!("%operation{id}_zero"),
         operation_message(
-            value,
+            value.span.as_ref(),
             emitter.diagnostics.as_ref(),
             &format!("integer `{spelling}` has a zero divisor"),
         ),
@@ -787,7 +988,7 @@ fn emit_division(
             "overflow",
             &format!("%operation{id}_overflow"),
             operation_message(
-                value,
+                value.span.as_ref(),
                 emitter.diagnostics.as_ref(),
                 &format!("integer `{spelling}` overflowed"),
             ),
@@ -814,7 +1015,7 @@ fn emit_shift(
     function: &Function,
 ) {
     let (left, right) = operands;
-    let ty = value.ty;
+    let ty = scalar(&value.ty);
     let count_ty = operand_type(function, right);
     let count_width = qbe_type(count_ty);
     let left = operand(left);
@@ -837,7 +1038,7 @@ fn emit_shift(
             id,
             "negative",
             &format!("%operation{id}_negative"),
-            operation_message(value, emitter.diagnostics.as_ref(), &message),
+            operation_message(value.span.as_ref(), emitter.diagnostics.as_ref(), &message),
         );
     }
     writeln!(
@@ -899,16 +1100,16 @@ fn emit_shift(
     emit_normalized(&mut emitter.text, id, &format!("%operation{id}_raw"), ty);
 }
 
-fn emit_normalized(text: &mut String, id: usize, source: &str, ty: Type) {
+fn emit_normalized(text: &mut String, id: usize, source: &str, ty: Scalar) {
     emit_truncation_operand(text, id, source, ty, ty);
 }
 
 fn operation_message(
-    value: &Value,
+    span: Option<&std::ops::Range<usize>>,
     diagnostic_renderer: Option<&DiagnosticRenderer<'_>>,
     message: &str,
 ) -> String {
-    match (&value.span, diagnostic_renderer) {
+    match (span, diagnostic_renderer) {
         (Some(span), Some(renderer)) => renderer.render(&Diagnostic::new(span.clone(), message)),
         _ => format!("{message}\n"),
     }
@@ -968,19 +1169,23 @@ fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
     data.push_str("b 0 }\n");
 }
 
-fn operand_type(function: &Function, operand: Operand) -> Type {
+fn operand_value_type(function: &Function, operand: Operand) -> Type {
     match operand {
-        Operand::Integer { ty, .. } => ty,
-        Operand::Value(ValueId(id)) => function.values[id].ty,
+        Operand::Integer { ty, .. } => ty.into(),
+        Operand::Value(ValueId(id)) => function.values[id].ty.clone(),
     }
+}
+
+fn operand_type(function: &Function, operand: Operand) -> Scalar {
+    scalar(&operand_value_type(function, operand))
 }
 
 fn emit_checked_conversion(
     emitter: &mut Emitter<'_>,
     id: usize,
     source: Operand,
-    source_ty: Type,
-    destination: Type,
+    source_ty: Scalar,
+    destination: Scalar,
     message: String,
 ) {
     let text = &mut emitter.text;
@@ -1041,8 +1246,8 @@ fn emit_truncation(
     text: &mut String,
     id: usize,
     source: Operand,
-    source_ty: Type,
-    destination: Type,
+    source_ty: Scalar,
+    destination: Scalar,
 ) {
     emit_truncation_operand(text, id, &operand(source), source_ty, destination);
 }
@@ -1051,8 +1256,8 @@ fn emit_truncation_operand(
     text: &mut String,
     id: usize,
     source: &str,
-    source_ty: Type,
-    destination: Type,
+    source_ty: Scalar,
+    destination: Scalar,
 ) {
     let raw = format!("%conversion{id}_raw");
     match destination.width() {
@@ -1162,14 +1367,14 @@ mod tests {
     fn integer(value: i32) -> Operand {
         Operand::Integer {
             value: i128::from(value),
-            ty: Type::Int,
+            ty: Scalar::Int,
         }
     }
 
     fn copy(operand: Operand) -> Value {
         Value {
             span: None,
-            ty: Type::Int,
+            ty: Scalar::Int.into(),
             kind: ValueKind::Convert {
                 operand,
                 truncating: false,
@@ -1221,8 +1426,6 @@ mod tests {
         .unwrap()
     }
 
-    /// The symbol of every emitted function definition, paired with whether
-    /// the definition is exported.
     fn definitions(qbe: &str) -> Vec<(&str, bool)> {
         qbe.lines()
             .filter_map(|line| {
@@ -1237,7 +1440,6 @@ mod tests {
             .collect()
     }
 
-    /// The symbol of every emitted data definition.
     fn data_symbols(qbe: &str) -> Vec<&str> {
         qbe.lines()
             .filter_map(|line| line.strip_prefix("data $"))
@@ -1263,7 +1465,7 @@ mod tests {
         text.truncate(end);
         text.push_str("    %ok0 =w copy 1\n");
         for (id, (value, expected)) in values.iter().zip(expected).enumerate() {
-            let width = qbe_type(value.ty);
+            let width = qbe_type(scalar(&value.ty));
             writeln!(text, "    %check{id} =w ceq{width} %v{id}, {expected}").unwrap();
             writeln!(text, "    %ok{} =w and %ok{id}, %check{id}", id + 1).unwrap();
         }
@@ -1320,7 +1522,7 @@ mod tests {
 
     #[test]
     fn full_width_integer_copies_and_conversions_execute() {
-        let ranges = Type::ALL_INTEGERS.map(|ty| (ty, ty.min(), i128::from(ty.max())));
+        let ranges = Scalar::ALL_INTEGERS.map(|ty| (ty, ty.min(), i128::from(ty.max())));
         let mut values = vec![];
         let mut expected = Vec::new();
         for (source, min, max) in ranges {
@@ -1341,7 +1543,7 @@ mod tests {
                     let id = values.len();
                     values.push(Value {
                         span: None,
-                        ty: source,
+                        ty: source.into(),
                         kind: ValueKind::Convert {
                             operand: literal,
                             truncating: false,
@@ -1352,7 +1554,7 @@ mod tests {
                         // Conversions between types carry the span their range trap reports.
                         values.push(Value {
                             span: Some(0..1),
-                            ty: destination,
+                            ty: destination.into(),
                             kind: ValueKind::Convert {
                                 operand,
                                 truncating: false,
@@ -1362,7 +1564,7 @@ mod tests {
                         let copied = Operand::Value(ValueId(values.len() - 1));
                         values.push(Value {
                             span: Some(0..1),
-                            ty: destination,
+                            ty: destination.into(),
                             kind: ValueKind::Convert {
                                 operand: copied,
                                 truncating: false,
@@ -1376,7 +1578,7 @@ mod tests {
         assert_native_values(&program(values, integer(0)).verify().unwrap(), &expected);
     }
 
-    fn truncated(value: i128, destination: Type) -> i128 {
+    fn truncated(value: i128, destination: Scalar) -> i128 {
         let modulus = 1i128 << destination.width();
         let bits = value.rem_euclid(modulus);
         if destination.signed() && bits >= (1i128 << (destination.width() - 1)) {
@@ -1388,7 +1590,7 @@ mod tests {
 
     #[test]
     fn truncating_conversions_preserve_each_destination_bit_pattern() {
-        let types = Type::ALL_INTEGERS;
+        let types = Scalar::ALL_INTEGERS;
         let mut values = vec![];
         let mut expected = Vec::new();
         for source in types {
@@ -1398,7 +1600,7 @@ mod tests {
                 let source_id = values.len();
                 values.push(Value {
                     span: None,
-                    ty: source,
+                    ty: source.into(),
                     kind: ValueKind::Convert {
                         operand: Operand::Integer { value, ty: source },
                         truncating: false,
@@ -1408,7 +1610,7 @@ mod tests {
                 for destination in types {
                     values.push(Value {
                         span: None,
-                        ty: destination,
+                        ty: destination.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Value(ValueId(source_id)),
                             truncating: true,
@@ -1423,7 +1625,7 @@ mod tests {
 
     #[test]
     fn native_integer_operations_preserve_values_for_every_type() {
-        let types = Type::ALL_INTEGERS;
+        let types = Scalar::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             let minimum = ty.min();
@@ -1502,7 +1704,7 @@ mod tests {
 
     #[test]
     fn checked_arithmetic_traps_at_each_integer_width() {
-        let types = Type::ALL_INTEGERS;
+        let types = Scalar::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             let minimum = ty.min();
@@ -1533,7 +1735,7 @@ mod tests {
 
     #[test]
     fn division_remainder_and_shift_failures_are_explicit() {
-        let types = Type::ALL_INTEGERS;
+        let types = Scalar::ALL_INTEGERS;
         for ty in types {
             let name = ty.name();
             for operator in ["/", "%"] {
@@ -1628,7 +1830,7 @@ mod tests {
 
     #[test]
     fn checked_conversions_trap_outside_each_destination_range() {
-        let types = Type::ALL_INTEGERS;
+        let types = Scalar::ALL_INTEGERS;
         for source in types {
             let minimum = source.min();
             let maximum = i128::from(source.max());
@@ -1733,18 +1935,18 @@ mod tests {
                 vec![
                     Value {
                         span: None,
-                        ty: Type::I8,
+                        ty: Scalar::I8.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Integer {
                                 value: number,
-                                ty: Type::I8,
+                                ty: Scalar::I8,
                             },
                             truncating: false,
                         },
                     },
                     Value {
                         span: None,
-                        ty: Type::I16,
+                        ty: Scalar::I16.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Value(ValueId(0)),
                             truncating: false,
@@ -1752,7 +1954,7 @@ mod tests {
                     },
                     Value {
                         span: None,
-                        ty: Type::I32,
+                        ty: Scalar::I32.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Value(ValueId(1)),
                             truncating: false,
@@ -1760,7 +1962,7 @@ mod tests {
                     },
                     Value {
                         span: None,
-                        ty: Type::I64,
+                        ty: Scalar::I64.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Value(ValueId(2)),
                             truncating: false,
@@ -1768,7 +1970,7 @@ mod tests {
                     },
                     Value {
                         span: None,
-                        ty: Type::Int,
+                        ty: Scalar::Int.into(),
                         kind: ValueKind::Convert {
                             operand: Operand::Value(ValueId(2)),
                             truncating: false,
@@ -1848,7 +2050,7 @@ mod tests {
                 );
                 assert!(qbe.contains(&expected_mask));
                 if through_copy {
-                    let ty = qbe_type(Type::Int);
+                    let ty = qbe_type(Scalar::Int);
                     assert!(
                         qbe.contains(&format!("%v0 ={ty} copy {value}\n    %v1 ={ty} copy %v0"))
                     );
@@ -1862,6 +2064,144 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn array_signatures_declare_one_aggregate_type_for_each_layout() {
+        let program = lowered(
+            "fn row(seed: int) -> [3]int { var out: [3]int = [seed...]; return out; }
+             fn total(values: [3]int) -> int { return values[0] + values[2]; }
+             fn grid() -> [2][3]int { var out: [2][3]int = [[1, 2, 3]...]; return out; }
+             fn main() -> void {
+                 if grid()[1][2] == 3 { exit(total(row(21))); }
+                 exit(255);
+             }",
+        );
+        let qbe = emit(&program, None);
+        let types: Vec<&str> = qbe
+            .lines()
+            .filter(|line| line.starts_with("type "))
+            .collect();
+        // `[3]int` is a parameter and a result, and both name one definition.
+        assert_eq!(
+            types,
+            ["type :arrayl3 = { l 3 }", "type :arrayl6 = { l 6 }"]
+        );
+        let first_use = qbe
+            .find(":arrayl3 %param")
+            .expect("an aggregate parameter names its type");
+        assert!(qbe.find("type :arrayl3").unwrap() < first_use, "{qbe}");
+        assert!(qbe.contains("blit %param0, %local0, 24"), "{qbe}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("program");
+        build_text(&qbe, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+
+        let scalars = emit(&lowered("fn main() -> void { exit(42); }"), None);
+        assert!(!scalars.contains("type "), "{scalars}");
+    }
+
+    #[test]
+    fn an_array_global_holds_one_data_item_for_each_element() {
+        let program = lowered(
+            "var flags: [2][2]u8 = [[1, 2], [3, 4]];
+             fn main() -> void { exit(int(flags[1][1])); }",
+        );
+        let qbe = emit(&program, None);
+        assert!(
+            qbe.contains("data $global0 = { w 1, w 2, w 3, w 4 }"),
+            "{qbe}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("program");
+        build_text(&qbe, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(4));
+    }
+
+    #[test]
+    fn every_allocation_is_emitted_in_the_entry_block() {
+        // QBE allocates once per `alloc` it executes, so an `alloc` reached by
+        // a loop would grow the stack on every iteration.
+        let program = lowered(
+            "fn build(seed: int) -> [3]int { var out: [3]int = [seed...]; return out; }
+             fn main() -> void {
+                 var source: [3]int = [1, 2, 3];
+                 var total = 0;
+                 for var i = 0; i < 3; i += 1 {
+                     var copy = source;
+                     total += copy[0] + build(i)[2];
+                 }
+                 exit(total);
+             }",
+        );
+        let qbe = emit(&program, None);
+        let mut block = "";
+        let mut allocations = 0;
+        for line in qbe.lines() {
+            if let Some(label) = line.strip_prefix('@') {
+                block = label;
+            }
+            if line.contains(" alloc") {
+                allocations += 1;
+                assert_eq!(block, "start", "{line}");
+            }
+        }
+        assert!(allocations > 0, "{qbe}");
+    }
+
+    #[test]
+    fn out_of_range_indices_trap_and_name_the_array_type() {
+        for (body, expected) in [
+            (
+                "var a: [3]int = [1, 2, 3]; var i = 3; exit(a[i]);",
+                "[3]int",
+            ),
+            (
+                "var a: [3]int = [1, 2, 3]; var i = 0; exit(a[i - 1]);",
+                "[3]int",
+            ),
+            (
+                "var g: [2][3]int = [[1, 2, 3], [4, 5, 6]]; var i = 2; exit(g[i][0]);",
+                "[2][3]int",
+            ),
+            // `len` reads the length from the type, and still evaluates its
+            // operand, including when an operator around it folds the result.
+            (
+                "var g: [2][3]int = [[1, 2, 3], [4, 5, 6]]; var i = 2; exit(len(g[i]));",
+                "[2][3]int",
+            ),
+            (
+                "var g: [2][3]int = [[1, 2, 3], [4, 5, 6]]; var i = 2; exit(len(g[i]) + 1);",
+                "[2][3]int",
+            ),
+        ] {
+            assert_native_failure(body, &format!("array index out of range for `{expected}`"));
+        }
+    }
+
+    #[test]
+    fn two_bounds_checks_in_one_function_link_separately() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var i = 1;
+                 exit(a[i] + a[i + 1]);
+             }",
+        );
+        let qbe = emit(&program, None);
+        let symbols: Vec<&str> = data_symbols(&qbe)
+            .into_iter()
+            .filter(|symbol| symbol.contains("_bounds_"))
+            .collect();
+        assert_eq!(symbols.len(), 2, "{symbols:?}");
+        assert_eq!(symbols.iter().collect::<BTreeSet<_>>().len(), 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("program");
+        build_text(&qbe, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(5));
     }
 
     #[test]

@@ -1,20 +1,26 @@
 ---
 source: src/frontend.rs
-expression: project(&parse(source).unwrap())
+expression: projected(source)
 ---
-fn mark name=3..7 result=Value(TypeAnnotation { ty: Int, span: 36..39 }) span=0..57
-  parameter digit name=8..13 annotation=TypeAnnotation { ty: Int, span: 15..18 }
-  parameter flag name=20..24 annotation=TypeAnnotation { ty: Bool, span: 26..30 }
+fn mark name=3..7 span=0..57
+  parameter digit name=8..13
+    named int span=15..18
+  parameter flag name=20..24
+    named bool span=26..30
+  result
+    named int span=36..39
   return span=42..55
     reference digit span=49..54
-fn nothing name=61..68 result=Void span=58..90
+fn nothing name=61..68 span=58..90
+  result void
   return span=81..88
-fn main name=94..98 result=Void span=91..230
+fn main name=94..98 span=91..230
+  result void
   call mark target=111..115 left_paren=115..116 right_paren=124..125 span=111..126
     integer 1 span=116..117
     boolean true span=119..123
   call nothing target=127..134 left_paren=134..135 right_paren=135..136 span=127..137
-  const value name=144..149 annotation=None span=138..195
+  const value name=144..149 span=138..195
     binary Add operator=179..180 span=152..194
       call mark target=152..156 left_paren=156..157 right_paren=177..178 span=152..178
         call mark target=157..161 left_paren=161..162 right_paren=170..171 span=157..171

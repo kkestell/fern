@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::source::SourceMap;
-use crate::{diagnostic::Diagnostic, source::Source, types::Type};
+use crate::{diagnostic::Diagnostic, source::Source, types::Scalar};
 use la_arena::{Arena, Idx};
 use lasso::{Rodeo, Spur};
 use logos::Logos;
@@ -31,6 +31,10 @@ enum Token {
     Continue,
     #[token("return")]
     Return,
+    #[token("in")]
+    In,
+    #[token("len")]
+    Len,
     #[token("true")]
     True,
     #[token("false")]
@@ -135,6 +139,12 @@ enum Token {
     LeftBrace,
     #[token("}")]
     RightBrace,
+    #[token("[")]
+    LeftBracket,
+    #[token("]")]
+    RightBracket,
+    #[token("...")]
+    Ellipsis,
     #[regex(r"//[^\r\n]*", logos::skip, allow_greedy = true)]
     LineComment,
     #[token("/*", block_comment)]
@@ -209,13 +219,13 @@ pub(crate) struct Function {
 pub(crate) struct Parameter {
     pub name: Spur,
     pub name_span: Range<usize>,
-    pub annotation: TypeAnnotation,
+    pub annotation: Idx<TypeAnnotation>,
 }
 
 #[derive(Debug)]
 pub(crate) enum FunctionResult {
     Void,
-    Value(TypeAnnotation),
+    Value(Idx<TypeAnnotation>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,15 +252,15 @@ pub(crate) enum StatementKind {
         mutable: bool,
         name: Spur,
         name_span: Range<usize>,
-        annotation: Option<TypeAnnotation>,
+        annotation: Option<Idx<TypeAnnotation>>,
         initializer: Idx<Expression>,
     },
     Assignment {
-        target: QualifiedName,
+        target: AssignmentTarget,
         value: Idx<Expression>,
     },
     CompoundAssignment {
-        target: QualifiedName,
+        target: AssignmentTarget,
         operator: BinaryOperator,
         operator_span: Range<usize>,
         value: Idx<Expression>,
@@ -291,6 +301,14 @@ pub(crate) struct Label {
     pub name_span: Range<usize>,
 }
 
+/// The left side of an assignment: a binding, or an element reached through
+/// one index per `[ … ]` group.
+#[derive(Debug)]
+pub(crate) struct AssignmentTarget {
+    pub name: QualifiedName,
+    pub indices: Vec<Idx<Expression>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Call {
     pub target: QualifiedName,
@@ -309,12 +327,28 @@ pub(crate) enum ForHeader {
         condition: Idx<Expression>,
         post: Idx<Statement>,
     },
+    Iteration {
+        value: Spur,
+        index: Option<(Spur, Range<usize>)>,
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct TypeAnnotation {
-    pub ty: Type,
+    pub kind: AnnotationKind,
     pub span: Range<usize>,
+}
+
+/// A written type. An array's length is an unevaluated expression, and `None`
+/// is the `[_]` length taken from an initializer.
+#[derive(Debug)]
+pub(crate) enum AnnotationKind {
+    Named(Scalar),
+    Array {
+        length: Option<Idx<Expression>>,
+        element: Idx<TypeAnnotation>,
+    },
 }
 
 #[derive(Debug)]
@@ -339,6 +373,14 @@ pub(crate) enum ComparisonOperator {
     LessEqual,
     Greater,
     GreaterEqual,
+}
+
+impl ComparisonOperator {
+    /// Equality is defined on every value type; the ordering comparisons are
+    /// defined only on integers.
+    pub(crate) fn is_equality(self) -> bool {
+        matches!(self, Self::Equal | Self::NotEqual)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,6 +431,12 @@ impl BinaryOperator {
             Self::Or => "|",
         }
     }
+
+    /// A shift takes its count independently of its left operand's type, so
+    /// every phase treats the two shifts apart from the other operators.
+    pub(crate) fn is_shift(self) -> bool {
+        matches!(self, Self::ShiftLeft | Self::ShiftRight)
+    }
 }
 
 #[derive(Debug)]
@@ -427,11 +475,23 @@ pub(crate) enum ExpressionKind {
         operand: Idx<Expression>,
     },
     Conversion {
-        destination: TypeAnnotation,
+        destination: Scalar,
         truncating: bool,
         operand: Idx<Expression>,
     },
     Call(Call),
+    /// `[a, b, c]`, where `fill` is the span of a trailing `...`.
+    ArrayLiteral {
+        elements: Vec<Idx<Expression>>,
+        fill: Option<Range<usize>>,
+    },
+    Index {
+        operand: Idx<Expression>,
+        index: Idx<Expression>,
+    },
+    Length {
+        operand: Idx<Expression>,
+    },
 }
 
 /// One source file's declarations. Imports are file-local, so they are kept
@@ -449,6 +509,7 @@ pub(crate) struct Syntax {
     pub functions: Arena<Function>,
     pub statements: Arena<Statement>,
     pub expressions: Arena<Expression>,
+    pub annotations: Arena<TypeAnnotation>,
 }
 
 fn reserved(name: &str) -> bool {
@@ -468,9 +529,11 @@ fn reserved(name: &str) -> bool {
             | "break"
             | "continue"
             | "return"
+            | "in"
+            | "len"
             | "pub"
             | "use"
-    ) || Type::named(name).is_some()
+    ) || Scalar::named(name).is_some()
 }
 
 pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {
@@ -624,9 +687,14 @@ impl Parser<'_> {
     }
 
     fn nesting_error(&self) -> Diagnostic {
-        self.error(format!(
-            "source nesting exceeds compiler limit of {MAX_NESTING}"
-        ))
+        self.nesting_error_at(self.span.clone())
+    }
+
+    fn nesting_error_at(&self, span: Range<usize>) -> Diagnostic {
+        Diagnostic::new(
+            span,
+            format!("source nesting exceeds compiler limit of {MAX_NESTING}"),
+        )
     }
 
     fn expect(&mut self, token: Token, message: &str) -> Result<Range<usize>, Diagnostic> {
@@ -818,18 +886,7 @@ impl Parser<'_> {
             Some(Token::Name) => self.assignment()?,
             Some(Token::Exit) => {
                 self.advance()?;
-                self.expect(Token::LeftParen, "expected `(`")?;
-                if self.current == Some(Token::RightParen) {
-                    return Err(self.error("exit requires one argument"));
-                }
-                let argument = self.expression()?;
-                if self.current == Some(Token::Comma) {
-                    self.advance()?;
-                    if self.current != Some(Token::RightParen) {
-                        return Err(self.error("exit takes one argument"));
-                    }
-                }
-                self.expect(Token::RightParen, "expected `)` after exit argument")?;
+                let (argument, _) = self.single_argument("exit")?;
                 StatementKind::Exit { argument }
             }
             Some(Token::Break) => {
@@ -864,8 +921,46 @@ impl Parser<'_> {
         }))
     }
 
+    /// Parses the `( expression [,] )` of `exit` or `len`, which use call
+    /// syntax without being calls. Returns the operand and the `)` span.
+    fn single_argument(
+        &mut self,
+        keyword: &str,
+    ) -> Result<(Idx<Expression>, Range<usize>), Diagnostic> {
+        self.expect(Token::LeftParen, "expected `(`")?;
+        if self.current == Some(Token::RightParen) {
+            return Err(self.error(format!("{keyword} requires one argument")));
+        }
+        let argument = self.expression()?;
+        if self.current == Some(Token::Comma) {
+            self.advance()?;
+            if self.current != Some(Token::RightParen) {
+                return Err(self.error(format!("{keyword} takes one argument")));
+            }
+        }
+        let right_paren_span = self.expect(
+            Token::RightParen,
+            &format!("expected `)` after {keyword} argument"),
+        )?;
+        Ok((argument, right_paren_span))
+    }
+
+    /// Parses an assignment target: a name followed by one index per `[ … ]`.
+    fn assignment_target(&mut self) -> Result<AssignmentTarget, Diagnostic> {
+        let name = self.qualified_name("expected an assignment target")?;
+        let mut indices = Vec::new();
+        while self.current == Some(Token::LeftBracket) {
+            self.enter_nesting()?;
+            self.advance()?;
+            indices.push(self.expression()?);
+            self.expect(Token::RightBracket, "expected `]` after index")?;
+            self.nesting -= 1;
+        }
+        Ok(AssignmentTarget { name, indices })
+    }
+
     fn assignment(&mut self) -> Result<StatementKind, Diagnostic> {
-        let target = self.qualified_name("expected an assignment target")?;
+        let target = self.assignment_target()?;
         let (operator, operator_span) = self.assignment_operator()?;
         let value = self.expression()?;
         Ok(if let Some(operator) = operator {
@@ -951,56 +1046,7 @@ impl Parser<'_> {
     fn for_statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
         let start = self.expect(Token::For, "expected `for`")?.start;
         let label = self.optional_label("expected a loop label after `:`")?;
-        let header = if self.current == Some(Token::LeftBrace) {
-            ForHeader::Infinite
-        } else if matches!(self.current, Some(Token::Const | Token::Var))
-            || self.starts_assignment()
-        {
-            let initializer_start = self.span.start;
-            let initializer_kind = if matches!(self.current, Some(Token::Const | Token::Var)) {
-                self.binding()?
-            } else {
-                self.assignment()?
-            };
-            if let StatementKind::CompoundAssignment { operator_span, .. } = &initializer_kind {
-                return Err(Diagnostic::new(
-                    operator_span.clone(),
-                    "for initializer does not permit compound assignment",
-                ));
-            }
-            let initializer_end = self
-                .expect(Token::Semicolon, "expected `;` after for initializer")?
-                .end;
-            let initializer = self.syntax.statements.alloc(Statement {
-                kind: initializer_kind,
-                span: initializer_start..initializer_end,
-            });
-            let condition = self.expression()?;
-            self.expect(Token::Semicolon, "expected `;` after for condition")?;
-            if !self.starts_assignment() {
-                return Err(self.error("expected an assignment after second `;`"));
-            }
-            let post_start = self.span.start;
-            let post_kind = self.assignment()?;
-            let post_end = match &post_kind {
-                StatementKind::Assignment { value, .. }
-                | StatementKind::CompoundAssignment { value, .. } => {
-                    self.syntax.expressions[*value].span.end
-                }
-                _ => unreachable!(),
-            };
-            let post = self.syntax.statements.alloc(Statement {
-                kind: post_kind,
-                span: post_start..post_end,
-            });
-            ForHeader::ThreeClause {
-                initializer,
-                condition,
-                post,
-            }
-        } else {
-            ForHeader::Condition(self.expression()?)
-        };
+        let header = self.for_header()?;
         let (body, end) = self.body()?;
         Ok(self.syntax.statements.alloc(Statement {
             kind: StatementKind::For {
@@ -1012,9 +1058,95 @@ impl Parser<'_> {
         }))
     }
 
-    /// Returns the token that follows a qualified name starting at the current
-    /// token, or `None` when no qualified name starts here.
-    fn token_after_qualified_name(&self) -> Option<Token> {
+    fn for_header(&mut self) -> Result<ForHeader, Diagnostic> {
+        if self.current == Some(Token::LeftBrace) {
+            return Ok(ForHeader::Infinite);
+        }
+        if self.starts_iteration() {
+            return self.iteration_header();
+        }
+        if matches!(self.current, Some(Token::Const | Token::Var)) || self.starts_assignment() {
+            return self.three_clause_header();
+        }
+        Ok(ForHeader::Condition(self.expression()?))
+    }
+
+    fn three_clause_header(&mut self) -> Result<ForHeader, Diagnostic> {
+        let initializer_start = self.span.start;
+        let initializer_kind = if matches!(self.current, Some(Token::Const | Token::Var)) {
+            self.binding()?
+        } else {
+            self.assignment()?
+        };
+        if let StatementKind::CompoundAssignment { operator_span, .. } = &initializer_kind {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                "for initializer does not permit compound assignment",
+            ));
+        }
+        let initializer_end = self
+            .expect(Token::Semicolon, "expected `;` after for initializer")?
+            .end;
+        let initializer = self.syntax.statements.alloc(Statement {
+            kind: initializer_kind,
+            span: initializer_start..initializer_end,
+        });
+        let condition = self.expression()?;
+        self.expect(Token::Semicolon, "expected `;` after for condition")?;
+        if !self.starts_assignment() {
+            return Err(self.error("expected an assignment after second `;`"));
+        }
+        let post_start = self.span.start;
+        let post_kind = self.assignment()?;
+        let post_end = match &post_kind {
+            StatementKind::Assignment { value, .. }
+            | StatementKind::CompoundAssignment { value, .. } => {
+                self.syntax.expressions[*value].span.end
+            }
+            _ => unreachable!(),
+        };
+        let post = self.syntax.statements.alloc(Statement {
+            kind: post_kind,
+            span: post_start..post_end,
+        });
+        Ok(ForHeader::ThreeClause {
+            initializer,
+            condition,
+            post,
+        })
+    }
+
+    fn iteration_header(&mut self) -> Result<ForHeader, Diagnostic> {
+        let (value, _) = self.name("expected a loop variable")?;
+        let index = (self.current == Some(Token::Comma))
+            .then(|| {
+                self.advance()?;
+                self.name("expected an index variable after `,`")
+            })
+            .transpose()?;
+        self.expect(Token::In, "expected `in`")?;
+        let operand = self.expression()?;
+        Ok(ForHeader::Iteration {
+            value,
+            index,
+            operand,
+        })
+    }
+
+    /// Reports whether a `for` header starts the `v in a` or `v, i in a` form.
+    /// No condition can hold `in` or `,` at that position.
+    fn starts_iteration(&self) -> bool {
+        if self.current != Some(Token::Name) || reserved(self.lexer.slice()) {
+            return false;
+        }
+        let mut lexer = self.lexer.clone();
+        matches!(lexer.next(), Some(Ok(Token::In | Token::Comma)))
+    }
+
+    /// Returns the token that follows an assignment target starting at the
+    /// current token, and whether the target carried any index brackets.
+    /// `None` when no target starts here.
+    fn token_after_target(&self) -> Option<(Token, bool)> {
         if self.current != Some(Token::Name) || reserved(self.lexer.slice()) {
             return None;
         }
@@ -1026,16 +1158,30 @@ impl Parser<'_> {
             }
             following = lexer.next();
         }
+        let mut indexed = false;
+        while following == Some(Ok(Token::LeftBracket)) {
+            indexed = true;
+            let mut depth = 1usize;
+            while depth > 0 {
+                match lexer.next() {
+                    Some(Ok(Token::LeftBracket)) => depth += 1,
+                    Some(Ok(Token::RightBracket)) => depth -= 1,
+                    Some(Ok(_)) => {}
+                    Some(Err(())) | None => return None,
+                }
+            }
+            following = lexer.next();
+        }
         match following {
-            Some(Ok(token)) => Some(token),
+            Some(Ok(token)) => Some((token, indexed)),
             Some(Err(())) | None => None,
         }
     }
 
     fn starts_assignment(&self) -> bool {
         matches!(
-            self.token_after_qualified_name(),
-            Some(
+            self.token_after_target(),
+            Some((
                 Token::Equals
                     | Token::PlusEquals
                     | Token::MinusEquals
@@ -1049,13 +1195,14 @@ impl Parser<'_> {
                     | Token::ShiftRightEquals
                     | Token::WrappingPlusEquals
                     | Token::WrappingMinusEquals
-                    | Token::WrappingStarEquals
-            )
+                    | Token::WrappingStarEquals,
+                _
+            ))
         )
     }
 
     fn starts_call(&self) -> bool {
-        self.token_after_qualified_name() == Some(Token::LeftParen)
+        self.token_after_target() == Some((Token::LeftParen, false))
     }
 
     fn call(&mut self) -> Result<Call, Diagnostic> {
@@ -1118,19 +1265,45 @@ impl Parser<'_> {
         })
     }
 
-    fn type_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
+    fn named_type(&mut self) -> Result<(Scalar, Range<usize>), Diagnostic> {
         let Some(ty) = (self.current == Some(Token::Name))
-            .then(|| Type::named(self.lexer.slice()))
+            .then(|| Scalar::named(self.lexer.slice()))
             .flatten()
         else {
             return Err(self.error("expected a type"));
         };
-        let annotation = TypeAnnotation {
-            ty,
-            span: self.span.clone(),
-        };
+        let span = self.span.clone();
         self.advance()?;
-        Ok(annotation)
+        Ok((ty, span))
+    }
+
+    /// Parses a type annotation, which is a type name or one or more `[ … ]`
+    /// lengths in front of an element annotation.
+    fn type_annotation(&mut self) -> Result<Idx<TypeAnnotation>, Diagnostic> {
+        let start = self.span.start;
+        if self.current != Some(Token::LeftBracket) {
+            let (ty, span) = self.named_type()?;
+            return Ok(self.syntax.annotations.alloc(TypeAnnotation {
+                kind: AnnotationKind::Named(ty),
+                span,
+            }));
+        }
+        self.enter_nesting()?;
+        self.advance()?;
+        let length = if self.current == Some(Token::Name) && self.lexer.slice() == "_" {
+            self.advance()?;
+            None
+        } else {
+            Some(self.expression()?)
+        };
+        self.expect(Token::RightBracket, "expected `]` after array length")?;
+        let element = self.type_annotation()?;
+        self.nesting -= 1;
+        let span = start..self.syntax.annotations[element].span.end;
+        Ok(self.syntax.annotations.alloc(TypeAnnotation {
+            kind: AnnotationKind::Array { length, element },
+            span,
+        }))
     }
 
     fn expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
@@ -1151,10 +1324,7 @@ impl Parser<'_> {
                 .max(self.syntax.expressions[right].depth)
                 + 1;
             if self.nesting + depth > MAX_NESTING {
-                return Err(Diagnostic::new(
-                    operator_span,
-                    format!("source nesting exceeds compiler limit of {MAX_NESTING}"),
-                ));
+                return Err(self.nesting_error_at(operator_span));
             }
             let span =
                 self.syntax.expressions[left].span.start..self.syntax.expressions[right].span.end;
@@ -1236,7 +1406,7 @@ impl Parser<'_> {
             Some(Token::Minus) => UnaryOperator::Negate,
             Some(Token::WrappingMinus) => UnaryOperator::WrappingNegate,
             Some(Token::Caret) => UnaryOperator::Complement,
-            _ => return self.primary_expression(),
+            _ => return self.postfix_expression(),
         };
         self.enter_nesting()?;
         let operator_span = self.span.clone();
@@ -1254,6 +1424,35 @@ impl Parser<'_> {
         }))
     }
 
+    /// Parses a primary expression and the `[ … ]` indexes that follow it, so
+    /// `grid[r][c]` indexes the row first and `f(x)[0]` indexes the result.
+    fn postfix_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
+        let mut operand = self.primary_expression()?;
+        while self.current == Some(Token::LeftBracket) {
+            let bracket_span = self.span.clone();
+            self.enter_nesting()?;
+            self.advance()?;
+            let index = self.expression()?;
+            let end = self
+                .expect(Token::RightBracket, "expected `]` after index")?
+                .end;
+            self.nesting -= 1;
+            let depth = self.syntax.expressions[operand]
+                .depth
+                .max(self.syntax.expressions[index].depth)
+                + 1;
+            if self.nesting + depth > MAX_NESTING {
+                return Err(self.nesting_error_at(bracket_span));
+            }
+            operand = self.syntax.expressions.alloc(Expression {
+                span: self.syntax.expressions[operand].span.start..end,
+                depth,
+                kind: ExpressionKind::Index { operand, index },
+            });
+        }
+        Ok(operand)
+    }
+
     fn primary_expression(&mut self) -> Result<Idx<Expression>, Diagnostic> {
         let span = self.span.clone();
         let kind = if self.current == Some(Token::Integer) {
@@ -1261,7 +1460,7 @@ impl Parser<'_> {
             self.advance()?;
             ExpressionKind::Integer(spelling)
         } else if self.current == Some(Token::Name)
-            && Type::named(self.lexer.slice()).is_some_and(Type::is_integer)
+            && Scalar::named(self.lexer.slice()).is_some_and(Scalar::is_integer)
         {
             return self.conversion_expression(span);
         } else if matches!(self.current, Some(Token::True | Token::False)) {
@@ -1270,6 +1469,10 @@ impl Parser<'_> {
             ExpressionKind::Boolean(value)
         } else if self.current == Some(Token::LeftParen) {
             return self.grouping_expression(span);
+        } else if self.current == Some(Token::LeftBracket) {
+            return self.array_literal(span);
+        } else if self.current == Some(Token::Len) {
+            return self.length_expression(span);
         } else {
             return self.name_expression(span);
         };
@@ -1280,15 +1483,78 @@ impl Parser<'_> {
         }))
     }
 
+    /// Parses `[e1, e2]`, with an optional trailing comma, or `[e1, last...]`,
+    /// whose `...` repeats the last element across the remaining elements.
+    fn array_literal(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        self.enter_nesting()?;
+        self.advance()?;
+        if self.current == Some(Token::RightBracket) {
+            return Err(self.error("expected an array element"));
+        }
+        let mut elements = Vec::new();
+        let mut fill = None;
+        loop {
+            elements.push(self.expression()?);
+            if self.current == Some(Token::Ellipsis) {
+                fill = Some(self.span.clone());
+                self.advance()?;
+                break;
+            }
+            match self.current {
+                Some(Token::Comma) => {
+                    self.advance()?;
+                    if self.current == Some(Token::RightBracket) {
+                        break;
+                    }
+                }
+                Some(Token::RightBracket) => break,
+                _ => return Err(self.error("expected `,` or `]` after array element")),
+            }
+        }
+        let end = self
+            .expect(Token::RightBracket, "expected `]` after array elements")?
+            .end;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            depth: elements
+                .iter()
+                .map(|element| self.syntax.expressions[*element].depth)
+                .max()
+                .expect("an array literal has at least one element")
+                + 1,
+            span: span.start..end,
+            kind: ExpressionKind::ArrayLiteral { elements, fill },
+        }))
+    }
+
+    /// Parses `len(a)`, which uses call syntax without being a call.
+    fn length_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        self.advance()?;
+        if self.current != Some(Token::LeftParen) {
+            return Err(Diagnostic::new(
+                span,
+                "reserved word cannot be used as an identifier",
+            ));
+        }
+        self.enter_nesting()?;
+        let (operand, right_paren_span) = self.single_argument("len")?;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            depth: self.syntax.expressions[operand].depth + 1,
+            span: span.start..right_paren_span.end,
+            kind: ExpressionKind::Length { operand },
+        }))
+    }
+
     /// Parses a conversion, `T(x)` or `T.truncate(x)`, whose head is the name
     /// of an integer type.
     fn conversion_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
         self.enter_nesting()?;
-        let destination = self.type_annotation()?;
+        let (destination, destination_span) = self.named_type()?;
         let truncating = self.truncate_marker()?;
         if !truncating && self.current != Some(Token::LeftParen) {
             return Err(Diagnostic::new(
-                destination.span.clone(),
+                destination_span,
                 "reserved word cannot be used as an identifier",
             ));
         }
@@ -1307,8 +1573,6 @@ impl Parser<'_> {
         }))
     }
 
-    /// Consumes the `.truncate` of a truncating conversion, reporting whether
-    /// it was there.
     fn truncate_marker(&mut self) -> Result<bool, Diagnostic> {
         if self.current != Some(Token::Dot) {
             return Ok(false);
@@ -1455,23 +1719,29 @@ mod tests {
                     let function = &syntax.functions[*id];
                     writeln!(
                         output,
-                        "{}fn {} name={:?} result={:?} span={:?}",
+                        "{}fn {} name={:?} span={:?}",
                         if *public { "pub " } else { "" },
                         syntax.names.resolve(&function.name),
                         function.name_span,
-                        function.result,
                         function.span
                     )
                     .unwrap();
                     for parameter in &function.parameters {
                         writeln!(
                             output,
-                            "  parameter {} name={:?} annotation={:?}",
+                            "  parameter {} name={:?}",
                             syntax.names.resolve(&parameter.name),
                             parameter.name_span,
-                            parameter.annotation
                         )
                         .unwrap();
+                        project_annotation(syntax, parameter.annotation, 2, output);
+                    }
+                    match function.result {
+                        FunctionResult::Void => writeln!(output, "  result void").unwrap(),
+                        FunctionResult::Value(annotation) => {
+                            writeln!(output, "  result").unwrap();
+                            project_annotation(syntax, annotation, 2, output);
+                        }
                     }
                     project_body(syntax, &function.body, 1, output);
                 }
@@ -1493,7 +1763,7 @@ mod tests {
         let indent = "  ".repeat(depth);
         for &id in body {
             let statement = &syntax.statements[id];
-            let expression = match &statement.kind {
+            match &statement.kind {
                 StatementKind::Binding {
                     mutable,
                     name,
@@ -1501,25 +1771,31 @@ mod tests {
                     annotation,
                     initializer,
                 } => {
-                    write!(
+                    writeln!(
                         output,
-                        "{indent}{} {} name={name_span:?} annotation={annotation:?}",
+                        "{indent}{} {} name={name_span:?} span={:?}",
                         if *mutable { "var" } else { "const" },
-                        syntax.names.resolve(name)
+                        syntax.names.resolve(name),
+                        statement.span
                     )
                     .unwrap();
-                    *initializer
+                    if let Some(annotation) = annotation {
+                        project_annotation(syntax, *annotation, depth + 1, output);
+                    }
+                    project_expression(syntax, *initializer, depth + 1, output);
                 }
                 StatementKind::Assignment { target, value } => {
-                    write!(
+                    writeln!(
                         output,
-                        "{indent}assign {} name={:?}{}",
-                        spell(syntax, target),
-                        target.name_span,
-                        qualifier(target)
+                        "{indent}assign {} name={:?} span={:?}{}",
+                        spell(syntax, &target.name),
+                        target.name.name_span,
+                        statement.span,
+                        qualifier(&target.name)
                     )
                     .unwrap();
-                    *value
+                    project_target_indices(syntax, target, depth + 1, output);
+                    project_expression(syntax, *value, depth + 1, output);
                 }
                 StatementKind::CompoundAssignment {
                     target,
@@ -1527,24 +1803,25 @@ mod tests {
                     operator_span,
                     value,
                 } => {
-                    write!(
+                    writeln!(
                         output,
-                        "{indent}compound assign {} {operator:?}= name={:?} operator={operator_span:?}{}",
-                        spell(syntax, target),
-                        target.name_span,
-                        qualifier(target)
+                        "{indent}compound assign {} {operator:?}= name={:?} operator={operator_span:?} span={:?}{}",
+                        spell(syntax, &target.name),
+                        target.name.name_span,
+                        statement.span,
+                        qualifier(&target.name)
                     )
                     .unwrap();
-                    *value
+                    project_target_indices(syntax, target, depth + 1, output);
+                    project_expression(syntax, *value, depth + 1, output);
                 }
                 StatementKind::Block { body } => {
                     writeln!(output, "{indent}block span={:?}", statement.span).unwrap();
                     project_body(syntax, body, depth + 1, output);
-                    continue;
                 }
                 StatementKind::Exit { argument } => {
-                    write!(output, "{indent}exit").unwrap();
-                    *argument
+                    writeln!(output, "{indent}exit span={:?}", statement.span).unwrap();
+                    project_expression(syntax, *argument, depth + 1, output);
                 }
                 StatementKind::Call { call } => {
                     writeln!(
@@ -1561,14 +1838,12 @@ mod tests {
                     for &argument in &call.arguments {
                         project_expression(syntax, argument, depth + 1, output);
                     }
-                    continue;
                 }
                 StatementKind::Return { value } => {
                     writeln!(output, "{indent}return span={:?}", statement.span).unwrap();
                     if let Some(value) = value {
                         project_expression(syntax, *value, depth + 1, output);
                     }
-                    continue;
                 }
                 StatementKind::If {
                     condition,
@@ -1583,7 +1858,6 @@ mod tests {
                         writeln!(output, "{indent}else").unwrap();
                         project_body(syntax, std::slice::from_ref(branch), depth + 1, output);
                     }
-                    continue;
                 }
                 StatementKind::For {
                     label,
@@ -1624,10 +1898,27 @@ mod tests {
                             writeln!(output, "{indent}  post").unwrap();
                             project_body(syntax, std::slice::from_ref(post), depth + 2, output);
                         }
+                        ForHeader::Iteration {
+                            value,
+                            index,
+                            operand,
+                        } => {
+                            writeln!(
+                                output,
+                                "{indent}  iteration value={} index={} index_span={:?}",
+                                syntax.names.resolve(value),
+                                index
+                                    .as_ref()
+                                    .map(|(name, _)| syntax.names.resolve(name))
+                                    .unwrap_or("-"),
+                                index.as_ref().map(|(_, span)| span),
+                            )
+                            .unwrap();
+                            project_expression(syntax, *operand, depth + 2, output);
+                        }
                     }
                     writeln!(output, "{indent}  body").unwrap();
                     project_body(syntax, body, depth + 2, output);
-                    continue;
                 }
                 StatementKind::Break { label } | StatementKind::Continue { label } => {
                     let keyword = if matches!(&statement.kind, StatementKind::Break { .. }) {
@@ -1646,11 +1937,57 @@ mod tests {
                         statement.span
                     )
                     .unwrap();
-                    continue;
                 }
-            };
-            writeln!(output, " span={:?}", statement.span).unwrap();
-            project_expression(syntax, expression, depth + 1, output);
+            }
+        }
+    }
+
+    /// Projects an assignment target's indices, which precede the assigned
+    /// value in evaluation order.
+    fn project_target_indices(
+        syntax: &Syntax,
+        target: &AssignmentTarget,
+        depth: usize,
+        output: &mut String,
+    ) {
+        use std::fmt::Write;
+        for &index in &target.indices {
+            writeln!(output, "{}index", "  ".repeat(depth)).unwrap();
+            project_expression(syntax, index, depth + 1, output);
+        }
+    }
+
+    fn project_annotation(
+        syntax: &Syntax,
+        id: Idx<TypeAnnotation>,
+        depth: usize,
+        output: &mut String,
+    ) {
+        use std::fmt::Write;
+        let indent = "  ".repeat(depth);
+        let annotation = &syntax.annotations[id];
+        match &annotation.kind {
+            AnnotationKind::Named(ty) => {
+                writeln!(
+                    output,
+                    "{indent}named {} span={:?}",
+                    ty.name(),
+                    annotation.span
+                )
+                .unwrap();
+            }
+            AnnotationKind::Array { length, element } => {
+                writeln!(output, "{indent}array span={:?}", annotation.span).unwrap();
+                match length {
+                    Some(length) => {
+                        writeln!(output, "{indent}  length").unwrap();
+                        project_expression(syntax, *length, depth + 2, output);
+                    }
+                    None => writeln!(output, "{indent}  inferred length").unwrap(),
+                }
+                writeln!(output, "{indent}  element").unwrap();
+                project_annotation(syntax, *element, depth + 2, output);
+            }
         }
     }
 
@@ -1759,7 +2096,7 @@ mod tests {
                     output,
                     "{indent}{} conversion {} span={:?}",
                     if *truncating { "truncating" } else { "checked" },
-                    destination.ty.name(),
+                    destination.name(),
                     expression.span
                 )
                 .unwrap();
@@ -1780,6 +2117,26 @@ mod tests {
                 for &argument in &call.arguments {
                     project_expression(syntax, argument, depth + 1, output);
                 }
+            }
+            ExpressionKind::ArrayLiteral { elements, fill } => {
+                writeln!(
+                    output,
+                    "{indent}array literal fill={fill:?} span={:?}",
+                    expression.span
+                )
+                .unwrap();
+                for &element in elements {
+                    project_expression(syntax, element, depth + 1, output);
+                }
+            }
+            ExpressionKind::Index { operand, index } => {
+                writeln!(output, "{indent}index span={:?}", expression.span).unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
+                project_expression(syntax, *index, depth + 1, output);
+            }
+            ExpressionKind::Length { operand } => {
+                writeln!(output, "{indent}len span={:?}", expression.span).unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
             }
         }
     }
@@ -2026,7 +2383,7 @@ pub fn main() -> void {
     #[test]
     fn integer_annotations_snapshot() {
         let mut source = String::from("/* 🌿 */ fn main() -> void {\n");
-        for name in Type::ALL_INTEGERS.map(Type::name) {
+        for name in Scalar::ALL_INTEGERS.map(Scalar::name) {
             source.push_str(&format!("var value: {name} = 0x2A;\n"));
             source.push_str(&format!("{{ const copy: /* type */ {name} = value; }}\n"));
         }
@@ -2239,21 +2596,23 @@ pub fn main() -> void {
             destination,
             truncating,
             operand,
+            ..
         } = &syntax.expressions[argument].kind
         else {
             panic!("expected truncating conversion")
         };
-        assert_eq!(destination.ty, Type::U8);
+        assert_eq!(*destination, Scalar::U8);
         assert!(*truncating);
         let ExpressionKind::Conversion {
             destination,
             truncating,
             operand,
+            ..
         } = &syntax.expressions[*operand].kind
         else {
             panic!("expected checked conversion")
         };
-        assert_eq!(destination.ty, Type::I16);
+        assert_eq!(*destination, Scalar::I16);
         assert!(!*truncating);
         let ExpressionKind::Conversion {
             destination,
@@ -2263,7 +2622,7 @@ pub fn main() -> void {
         else {
             panic!("expected nested checked conversion")
         };
-        assert_eq!(destination.ty, Type::U64);
+        assert_eq!(*destination, Scalar::U64);
         assert!(!*truncating);
 
         for (body, message) in [
@@ -2360,7 +2719,6 @@ pub fn main() -> void {
             "«=» 2;",
             "«)»",
             "x «.»field = 1;",
-            "x «[»0] = 1;",
             "const x = 1 + «;»",
             "exit(-«)»);",
             "var x = (1 + 2«;»",
@@ -2385,7 +2743,7 @@ pub fn main() -> void {
         for name in [
             "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
             "u16", "u32", "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue",
-            "return", "pub", "use",
+            "return", "in", "len", "pub", "use",
         ] {
             for (prefix, suffix) in [
                 ("fn ", "() -> void {}"),
@@ -2400,8 +2758,8 @@ pub fn main() -> void {
 
         for name in [
             "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32",
-            "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue", "return",
-            "pub", "use",
+            "u64", "int", "uint", "bool", "if", "else", "for", "break", "continue", "return", "in",
+            "len", "pub", "use",
         ] {
             for (prefix, suffix) in [
                 ("fn main() -> void { const x = ", "; }"),
@@ -2530,6 +2888,123 @@ pub fn main() -> void {
         ] {
             assert_eq!(
                 parse(&source).unwrap_err().message,
+                "source nesting exceeds compiler limit of 128"
+            );
+        }
+    }
+
+    #[test]
+    fn array_types_literals_indexing_and_iteration_snapshot() {
+        let source = "\
+fn rows(grid: [2][3]int) -> [2]int {
+    var out: [2]int = [0...];
+    for v, i in grid {
+        out[i] = v[0];
+    }
+    return out;
+}
+fn main() -> void {
+    var a: [3]int = [1, 2, 3,];
+    const inferred: [_]int = [0...];
+    const seeded: [4]int = [1, 2, 3, 0...];
+    const board: [2][3]int = [[1...]...];
+    var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+    const r = 0;
+    const c = 1;
+    const cell = grid[r][c];
+    const first = rows(grid)[0];
+    const negated = -a[0];
+    const length = len(a);
+    const trailing = len(a,);
+    grid[r][c] = 7;
+    a[r] += 1;
+    for :outer t in a {
+        continue :outer;
+    }
+    for t, i in a {
+        break;
+    }
+}
+";
+        insta::assert_snapshot!(projected(source));
+    }
+
+    #[test]
+    fn malformed_array_syntax_reports_the_offending_token() {
+        for (marked, message) in [
+            ("const x = [«]»;", "expected an array element"),
+            ("const x = [1,«,»2];", "expected an expression"),
+            (
+                "const x = [1 «2»];",
+                "expected `,` or `]` after array element",
+            ),
+            ("const x = [«...»];", "expected an expression"),
+            ("var x: [3] «=» 1;", "expected a type"),
+            ("var x: [3]«void» = 1;", "expected a type"),
+            (
+                "var x: [_ «+» 1]int = 1;",
+                "expected `]` after array length",
+            ),
+            ("const x = a[«]»;", "expected an expression"),
+            ("a[0 «=» 1;", "expected `]` after index"),
+            (
+                "const x = «len»;",
+                "reserved word cannot be used as an identifier",
+            ),
+            ("const x = len(«)»;", "len requires one argument"),
+            ("const x = len(a, «b»);", "len takes one argument"),
+            (
+                "for v, «in» a {}",
+                "reserved word cannot be used as an identifier",
+            ),
+            ("for v «i» in a {}", "expected `{`"),
+            ("for v, i «a» in b {}", "expected `in`"),
+            (
+                "for «in» a {}",
+                "reserved word cannot be used as an identifier",
+            ),
+            ("for v in «{»}", "expected an expression"),
+        ] {
+            let prefix = "/* 🌿 */ fn main() -> void { ";
+            let start = marked.find('«').unwrap();
+            let end = marked.find('»').unwrap() - '«'.len_utf8();
+            let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, message, "{marked}");
+            assert_eq!(
+                error.span,
+                prefix.len() + start..prefix.len() + end,
+                "{marked}"
+            );
+        }
+    }
+
+    #[test]
+    fn array_nesting_obeys_the_source_limit() {
+        // A function body already holds one level, so 127 more are accepted.
+        let indexes = |count: usize| {
+            format!(
+                "fn main() -> void {{ const x = a{}; }}",
+                "[0]".repeat(count)
+            )
+        };
+        let literals = |count: usize| {
+            format!(
+                "fn main() -> void {{ const x = {}1{}; }}",
+                "[".repeat(count),
+                "]".repeat(count),
+            )
+        };
+        let annotations = |count: usize| {
+            format!(
+                "fn main() -> void {{ var x: {}int = 1; }}",
+                "[1]".repeat(count)
+            )
+        };
+        for build in [indexes, literals, annotations] {
+            parse(&build(127)).unwrap();
+            assert_eq!(
+                parse(&build(128)).unwrap_err().message,
                 "source nesting exceeds compiler limit of 128"
             );
         }

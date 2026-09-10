@@ -14,7 +14,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

@@ -319,6 +319,161 @@ fn branches_and_loops_execute() {
 }
 
 #[test]
+fn arrays_execute() {
+    for (source, expected) in [
+        (include_str!("fixtures/programs/arrays.fern"), 46),
+        // Every whole-array copy is independent of its source.
+        (
+            "var shared: [3]int = [1, 2, 3];
+             fn identity(row: [3]int) -> [3]int { return row; }
+             fn main() -> void {
+                 var local = shared;
+                 local[0] = 10;
+                 var returned = identity(shared);
+                 returned[1] = 20;
+                 exit(shared[0] + shared[1] + local[0] + returned[1]);
+             }",
+            33,
+        ),
+        // An array argument is the value the array held when it was passed.
+        (
+            "var shared: [3]int = [1, 2, 3];
+             fn mutate() -> int { shared[0] = 50; return 0; }
+             fn first(row: [3]int, ignored: int) -> int { return row[0] + ignored; }
+             fn main() -> void { exit(first(shared, mutate()) * 100 + shared[0]); }",
+            150,
+        ),
+        // A target's indices run left to right, then its value.
+        (
+            "var trace = 0;
+             fn mark(digit: int) -> int { trace = trace * 10 + digit; return digit; }
+             fn main() -> void {
+                 var grid: [2][2]int = [[0, 0], [0, 0]];
+                 grid[mark(0)][mark(1)] = mark(2);
+                 exit(trace + grid[0][1]);
+             }",
+            14,
+        ),
+        // A compound assignment evaluates its index once.
+        (
+            "var trace = 0;
+             fn mark(digit: int) -> int { trace = trace * 10 + digit; return digit; }
+             fn main() -> void {
+                 var a: [2]int = [5, 6];
+                 a[mark(1)] += 4;
+                 exit(a[1] + trace);
+             }",
+            11,
+        ),
+        // Equality compares elements, whatever built them.
+        (
+            "fn zero() -> i8 { return 0; }
+             fn main() -> void {
+                 var base = zero();
+                 var computed: [2]i8 = [base - 1, base - 127];
+                 const literal: [2]i8 = [-1, -127];
+                 var flags: [2]bool = [true, false];
+                 const same: [2]bool = [true, false];
+                 var bytes: [3]u8 = [255, 0, 7];
+                 const other: [3]u8 = [255, 0, 8];
+                 var grid: [2][2]int = [[1, 2], [3, 4]];
+                 const twin: [2][2]int = [[1, 2], [3, 4]];
+                 var total = 0;
+                 if computed == literal { total += 1; }
+                 if flags == same { total += 2; }
+                 if bytes != other { total += 4; }
+                 if grid == twin { total += 8; }
+                 exit(total);
+             }",
+            15,
+        ),
+        // A whole-array assignment copies, and `len` is a constant length.
+        (
+            "fn main() -> void {
+                 const source: [3]int = [1, 2, 3];
+                 var target: [len(source)]int = [0...];
+                 target = source;
+                 target[0] = 10;
+                 exit(target[0] + target[2] + source[0] + len(target));
+             }",
+            17,
+        ),
+        // Iteration reads the value the operand held before the first pass.
+        (
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var sum = 0;
+                 for v in a {
+                     a[2] = 90;
+                     sum += v;
+                 }
+                 exit(sum + a[2]);
+             }",
+            96,
+        ),
+        // Both `for … in` forms, over a nested array and over a call result.
+        (
+            "fn pair() -> [3]int { var out: [3]int = [4...]; return out; }
+             fn main() -> void {
+                 var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+                 var sum = 0;
+                 for row, i in grid {
+                     for v in row {
+                         if v == 5 { continue; }
+                         sum += v * (i + 1);
+                     }
+                 }
+                 for t in pair() { sum += t; }
+                 exit(sum);
+             }",
+            38,
+        ),
+        // `len` reads the operand's type, including through an index.
+        (
+            "fn main() -> void {
+                 var a: [4]int = [1...];
+                 const b: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+                 exit(len(a) + len(b) + len(b[0]));
+             }",
+            9,
+        ),
+        // Module-level arrays hold their initial values when `main` starts.
+        (
+            "var counters: [3]int = [7, 8, 9];
+             const limits: [_]u8 = [1, 2];
+             fn main() -> void {
+                 counters[2] = 1;
+                 exit(counters[0] + counters[1] + counters[2] + int(limits[1]));
+             }",
+            18,
+        ),
+        // Copies and array results in a loop reuse their storage rather than
+        // growing the stack once per iteration.
+        (
+            "fn build(seed: int) -> [3]int { var out: [3]int = [seed...]; return out; }
+             fn main() -> void {
+                 var source: [3]int = [1, 2, 3];
+                 var total = 0;
+                 for var i = 0; i < 200000; i += 1 {
+                     var copy = source;
+                     total = copy[0] + build(i)[2] % 7;
+                 }
+                 exit(total);
+             }",
+            3,
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn parameters_calls_and_returns_execute() {
     for source in [
         include_str!("fixtures/programs/parameters_calls_and_returns.fern"),

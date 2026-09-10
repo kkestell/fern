@@ -4,9 +4,11 @@ expression: "project(&sources, &syntax)"
 ---
 // first.fern
 use fmt span=0..8 path=[4..7]
-const base name=15..19 annotation=None span=9..24
+const base name=15..19 span=9..24
   integer 1 span=22..23
 // second.fern
-pub fn helper name=33..39 result=Value(TypeAnnotation { ty: Int, span: 45..48 }) span=30..65
+pub fn helper name=33..39 span=30..65
+  result
+    named int span=45..48
   return span=51..63
     reference base span=58..62

@@ -11,7 +11,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -26,7 +28,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

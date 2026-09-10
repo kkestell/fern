@@ -1,12 +1,13 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::{
-        BinaryOperator, Call, ComparisonOperator, Expression, ExpressionKind, ForHeader, Function,
-        FunctionResult, Import, Label, LogicalOperator, PathComponent, QualifiedName, Statement,
-        StatementKind, Syntax, TopLevelItem, TypeAnnotation, UnaryOperator, integer_parts,
+        AnnotationKind, AssignmentTarget, BinaryOperator, Call, ComparisonOperator, Expression,
+        ExpressionKind, ForHeader, Function, FunctionResult, Import, Label, LogicalOperator,
+        PathComponent, QualifiedName, Statement, StatementKind, Syntax, TopLevelItem,
+        TypeAnnotation, UnaryOperator, integer_parts,
     },
     module::Module,
-    types::Type,
+    types::{Scalar, Type},
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
@@ -14,15 +15,59 @@ use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use std::collections::{HashMap, HashSet};
 
-fn annotation_type(annotation: Option<&TypeAnnotation>) -> Option<Type> {
-    annotation.map(|annotation| annotation.ty)
+/// The length `[_]` takes from the declaration's initializer, which must be an
+/// array literal that states its own length.
+fn inferred_length(
+    syntax: &Syntax,
+    span: &std::ops::Range<usize>,
+    initializer: Option<Idx<Expression>>,
+) -> Result<u64, Diagnostic> {
+    let literal = initializer.map(|id| &syntax.expressions[id].kind);
+    let Some(ExpressionKind::ArrayLiteral { elements, fill }) = literal else {
+        return Err(Diagnostic::new(
+            span.clone(),
+            "`[_]` requires an array-literal initializer",
+        ));
+    };
+    if fill.is_some() {
+        return Err(Diagnostic::new(
+            span.clone(),
+            "`[_]` cannot take a length from a literal with a fill",
+        ));
+    }
+    Ok(u64::try_from(elements.len()).expect("a source file holds fewer elements than u64::MAX"))
+}
+
+/// The value a constant expression folds to. An array literal folds when
+/// every element does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Constant {
+    Integer(BigInt),
+    Array(Vec<Constant>),
+}
+
+impl Constant {
+    /// The integer this constant folded to, or `None` when it folded to an
+    /// array.
+    pub(crate) fn integer(&self) -> Option<&BigInt> {
+        match self {
+            Self::Integer(value) => Some(value),
+            Self::Array(_) => None,
+        }
+    }
+}
+
+impl From<BigInt> for Constant {
+    fn from(value: BigInt) -> Self {
+        Self::Integer(value)
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct Binding {
     pub ty: Type,
     pub mutable: bool,
-    pub constant: Option<BigInt>,
+    pub constant: Option<Constant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +112,21 @@ pub(crate) enum ExpressionValue {
     Call {
         function: Idx<Function>,
     },
+    /// An array literal, whose fill repeats the last element across the
+    /// array's remaining elements.
+    Array {
+        elements: Vec<Idx<Expression>>,
+        fill: bool,
+    },
+    Index {
+        operand: Idx<Expression>,
+        index: Idx<Expression>,
+    },
+    /// `len(a)`, which reads its length from the operand's type and still
+    /// evaluates the operand.
+    Length {
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug)]
@@ -74,7 +134,15 @@ pub(crate) struct CheckedExpression {
     pub ty: Type,
     pub untyped: bool,
     pub value: ExpressionValue,
-    pub constant: Option<BigInt>,
+    pub constant: Option<Constant>,
+}
+
+impl CheckedExpression {
+    /// The integer this expression folded to, or `None` when it did not fold
+    /// or folded to an array.
+    pub(crate) fn integer(&self) -> Option<&BigInt> {
+        self.constant.as_ref().and_then(Constant::integer)
+    }
 }
 
 struct CheckedBinaryOperand {
@@ -88,6 +156,23 @@ pub(crate) struct FunctionSignature {
     pub result: Option<Type>,
 }
 
+/// Where an assignment stores: the binding its indices start from and the type
+/// of the element they reach, which is the binding's own type when it has no
+/// indices.
+#[derive(Debug)]
+pub(crate) struct CheckedTarget {
+    pub binding: Idx<Binding>,
+    pub ty: Type,
+}
+
+/// The bindings a `for … in` statement introduces. They belong to the
+/// statement rather than to a declaration, so they are recorded on their own.
+#[derive(Debug)]
+pub(crate) struct IterationBindings {
+    pub value: Idx<Binding>,
+    pub index: Option<Idx<Binding>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CheckedProgram<'a> {
     pub syntax: &'a Syntax,
@@ -96,7 +181,8 @@ pub(crate) struct CheckedProgram<'a> {
     pub expressions: ArenaMap<Idx<Expression>, CheckedExpression>,
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
     pub bindings: Arena<Binding>,
-    pub assignments: ArenaMap<Idx<Statement>, Idx<Binding>>,
+    pub assignments: ArenaMap<Idx<Statement>, CheckedTarget>,
+    pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,
     pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
     /// Checking state: the module-level functions of the module being checked,
@@ -260,6 +346,7 @@ pub(crate) fn check<'a>(
         declarations: ArenaMap::default(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
+        iterations: ArenaMap::default(),
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
         function_names: HashMap::new(),
@@ -304,7 +391,7 @@ fn entry_point(syntax: &Syntax, root: &Module) -> Result<Idx<Function>, Diagnost
                     "duplicate `main` function",
                 ));
             }
-            check_entry_signature(&syntax.functions[id])?;
+            check_entry_signature(syntax, &syntax.functions[id])?;
             main = Some(id);
         }
     }
@@ -313,16 +400,16 @@ fn entry_point(syntax: &Syntax, root: &Module) -> Result<Idx<Function>, Diagnost
 
 /// The entry point takes nothing and returns nothing. A program leaves through
 /// `exit`, not through a value `main` returns.
-fn check_entry_signature(main: &Function) -> Result<(), Diagnostic> {
+fn check_entry_signature(syntax: &Syntax, main: &Function) -> Result<(), Diagnostic> {
     if let Some(parameter) = main.parameters.first() {
         return Err(Diagnostic::new(
             parameter.name_span.clone(),
             "`main` must not have parameters",
         ));
     }
-    if let FunctionResult::Value(annotation) = &main.result {
+    if let FunctionResult::Value(annotation) = main.result {
         return Err(Diagnostic::new(
-            annotation.span.clone(),
+            syntax.annotations[annotation].span.clone(),
             "`main` must return `void`",
         ));
     }
@@ -330,17 +417,22 @@ fn check_entry_signature(main: &Function) -> Result<(), Diagnostic> {
 }
 
 impl CheckedProgram<'_> {
-    /// Checks one module: its module-level names, its signatures, each of its
-    /// files' imports, its module-level initializers, and its function bodies.
+    /// Checks one module: its module-level names, each of its files' imports,
+    /// its module-level initializers, its signatures, and its function bodies.
     /// Appends the namespace that later modules import from.
+    ///
+    /// Signatures are resolved after the module's initializers because an array
+    /// length in a signature may name a module-level `const`, which only has a
+    /// value once its own initializer is checked.
     fn check_module(&mut self, module: &Module, imports: &[Vec<usize>]) -> Result<(), Diagnostic> {
         let items = self.module_items(module);
         let bindings = self.declare_module_names(&items)?;
         let mut namespace = Namespace::new();
-        let module_scope = self.declare_module_bindings(&items, &mut namespace);
-        self.declare_functions(&items, &mut namespace);
+        let module_scope = self.declare_module_bindings(&items, &mut namespace)?;
+        self.declare_function_names(&items, &mut namespace);
         self.resolve_imports(module, imports, &namespace)?;
         self.check_module_initializers(&bindings, &module_scope)?;
+        self.resolve_signatures(&items, &module_scope)?;
         self.check_function_bodies(&items, &module_scope)?;
         self.check_imports_used(module)?;
         self.namespaces.push(namespace);
@@ -404,7 +496,7 @@ impl CheckedProgram<'_> {
         &mut self,
         items: &[(usize, TopLevelItem)],
         namespace: &mut Namespace,
-    ) -> HashMap<Spur, Idx<Binding>> {
+    ) -> Result<HashMap<Spur, Idx<Binding>>, Diagnostic> {
         let syntax = self.syntax;
         let mut module_scope = HashMap::new();
         for &(_, item) in items {
@@ -415,17 +507,12 @@ impl CheckedProgram<'_> {
             else {
                 continue;
             };
-            let StatementKind::Binding {
-                name,
-                mutable,
-                annotation,
-                ..
-            } = &syntax.statements[statement].kind
+            let StatementKind::Binding { name, mutable, .. } = &syntax.statements[statement].kind
             else {
                 unreachable!("frontend only permits bindings at module level")
             };
             let binding = self.bindings.alloc(Binding {
-                ty: annotation_type(annotation.as_ref()).unwrap_or(Type::Int),
+                ty: Scalar::Int.into(),
                 mutable: *mutable,
                 constant: None,
             });
@@ -439,43 +526,120 @@ impl CheckedProgram<'_> {
                 },
             );
         }
-        module_scope
+        Ok(module_scope)
     }
 
-    /// Records every function's signature, so a call can be checked before the
-    /// called function's body is.
-    fn declare_functions(&mut self, items: &[(usize, TopLevelItem)], namespace: &mut Namespace) {
-        let syntax = self.syntax;
+    /// Puts every function in the module's namespace, so an import can name it
+    /// before its signature is resolved.
+    fn declare_function_names(
+        &mut self,
+        items: &[(usize, TopLevelItem)],
+        namespace: &mut Namespace,
+    ) {
         for &(_, item) in items {
             let TopLevelItem::Function { function, public } = item else {
                 continue;
             };
-            let function_syntax = &syntax.functions[function];
-            let parameters = function_syntax
-                .parameters
-                .iter()
-                .map(|parameter| {
-                    self.bindings.alloc(Binding {
-                        ty: parameter.annotation.ty,
-                        mutable: false,
-                        constant: None,
-                    })
-                })
-                .collect();
-            let result = match &function_syntax.result {
-                FunctionResult::Void => None,
-                FunctionResult::Value(annotation) => Some(annotation.ty),
-            };
-            self.functions
-                .insert(function, FunctionSignature { parameters, result });
             namespace.insert(
-                function_syntax.name,
+                self.syntax.functions[function].name,
                 Declaration {
                     public,
                     kind: DeclarationKind::Function(function),
                 },
             );
         }
+    }
+
+    /// Resolves every function's parameter and result types, so a call can be
+    /// checked before the called function's body is.
+    fn resolve_signatures(
+        &mut self,
+        items: &[(usize, TopLevelItem)],
+        module_scope: &HashMap<Spur, Idx<Binding>>,
+    ) -> Result<(), Diagnostic> {
+        let syntax = self.syntax;
+        let scopes = std::slice::from_ref(module_scope);
+        for &(file, item) in items {
+            let TopLevelItem::Function { function, .. } = item else {
+                continue;
+            };
+            self.file = file;
+            let function_syntax = &syntax.functions[function];
+            let mut parameters = Vec::new();
+            for parameter in &function_syntax.parameters {
+                let ty = self.resolve_annotation(parameter.annotation, scopes, None)?;
+                parameters.push(self.bindings.alloc(Binding {
+                    ty,
+                    mutable: false,
+                    constant: None,
+                }));
+            }
+            let result = match syntax.functions[function].result {
+                FunctionResult::Void => None,
+                FunctionResult::Value(annotation) => {
+                    Some(self.resolve_annotation(annotation, scopes, None)?)
+                }
+            };
+            self.functions
+                .insert(function, FunctionSignature { parameters, result });
+        }
+        Ok(())
+    }
+
+    /// Resolves a written annotation to the type it names. `initializer` is the
+    /// declaration's initializer, which is where a `[_]` length comes from.
+    fn resolve_annotation(
+        &mut self,
+        annotation: Idx<TypeAnnotation>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+        initializer: Option<Idx<Expression>>,
+    ) -> Result<Type, Diagnostic> {
+        let syntax = self.syntax;
+        let written = &syntax.annotations[annotation];
+        match &written.kind {
+            AnnotationKind::Named(scalar) => Ok(Type::Scalar(*scalar)),
+            AnnotationKind::Array { length, element } => {
+                let (length, element) = (*length, *element);
+                let length = match length {
+                    Some(length) => self.array_length(length, scopes)?,
+                    None => inferred_length(syntax, &written.span, initializer)?,
+                };
+                // Only the declaration's own annotation has an initializer, so
+                // a nested `[_]` has nothing to take a length from.
+                let element = self.resolve_annotation(element, scopes, None)?;
+                Ok(Type::Array {
+                    length,
+                    element: Box::new(element),
+                })
+            }
+        }
+    }
+
+    /// Evaluates a written array length, which is a constant `int` of at least
+    /// one.
+    fn array_length(
+        &mut self,
+        length: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<u64, Diagnostic> {
+        let span = self.syntax.expressions[length].span.clone();
+        // A length is resolved before the module's signatures are, so a call
+        // here has no signature to check against. It is never constant anyway.
+        let constant = |span: std::ops::Range<usize>| {
+            Diagnostic::new(span, "array length must be a constant expression")
+        };
+        if let Some(call) = find_call(self.syntax, length) {
+            return Err(constant(self.syntax.expressions[call].span.clone()));
+        }
+        let checked = self.check_expression(length, scopes, Some(Scalar::Int.into()))?;
+        let Some(value) = checked.integer().cloned() else {
+            return Err(constant(span));
+        };
+        self.expressions.insert(length, checked);
+        value
+            .to_u64()
+            .filter(|length| *length >= 1)
+            .ok_or_else(|| Diagnostic::new(span, "array length must be at least 1"))
     }
 
     fn resolve_imports(
@@ -553,8 +717,9 @@ impl CheckedProgram<'_> {
         Ok(())
     }
 
-    /// The module-level bindings each initializer references. References to
-    /// anything else are not part of the module's ordering.
+    /// The module-level bindings each declaration references, in its annotation
+    /// as well as its initializer, since an array length is an expression too.
+    /// References to anything else are not part of the module's ordering.
     fn module_dependencies(
         &self,
         bindings: &ModuleBindings,
@@ -562,11 +727,18 @@ impl CheckedProgram<'_> {
         let syntax = self.syntax;
         let mut dependencies = HashMap::new();
         for &statement in &bindings.statements {
-            let StatementKind::Binding { initializer, .. } = &syntax.statements[statement].kind
+            let StatementKind::Binding {
+                annotation,
+                initializer,
+                ..
+            } = &syntax.statements[statement].kind
             else {
                 unreachable!("frontend only permits bindings at module level")
             };
             let mut references = Vec::new();
+            if let Some(annotation) = annotation {
+                collect_annotation_references(syntax, *annotation, &mut references);
+            }
             collect_references(syntax, *initializer, &mut references);
             dependencies.insert(
                 statement,
@@ -605,27 +777,38 @@ impl CheckedProgram<'_> {
         else {
             unreachable!("frontend only permits bindings at module level")
         };
+        let (mutable, annotation, initializer) = (*mutable, *annotation, *initializer);
         self.file = bindings.files[&statement];
-        let destination = annotation_type(annotation.as_ref());
-        let expression = self.check_expression(
-            *initializer,
-            std::slice::from_ref(module_scope),
-            destination,
-        )?;
+        // Signatures are resolved after this runs, so a call here has no
+        // signature to check against. It is never constant, so report that.
+        if let Some(call) = find_call(syntax, initializer) {
+            return Err(Diagnostic::new(
+                syntax.expressions[call].span.clone(),
+                "module-level initializer must be a constant expression",
+            ));
+        }
+        let scopes = std::slice::from_ref(module_scope);
+        let destination = match annotation {
+            Some(annotation) => {
+                Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
+            }
+            None => None,
+        };
+        let expression = self.check_expression(initializer, scopes, destination)?;
         if expression.constant.is_none() {
             return Err(Diagnostic::new(
-                syntax.expressions[*initializer].span.clone(),
+                syntax.expressions[initializer].span.clone(),
                 "module-level initializer must be a constant expression",
             ));
         }
         let binding = self.declarations[statement];
-        self.bindings[binding].ty = expression.ty;
-        self.bindings[binding].constant = if *mutable {
+        self.bindings[binding].ty = expression.ty.clone();
+        self.bindings[binding].constant = if mutable {
             None
         } else {
             expression.constant.clone()
         };
-        self.expressions.insert(*initializer, expression);
+        self.expressions.insert(initializer, expression);
         Ok(())
     }
 
@@ -648,9 +831,9 @@ impl CheckedProgram<'_> {
                 .map(|(parameter, binding)| (parameter.name, binding))
                 .collect();
             let mut scopes = vec![module_scope.clone(), parameter_scope];
-            let result = self.functions[function].result;
+            let result = self.functions[function].result.clone();
             let body = &syntax.functions[function].body;
-            self.check_body(body, result, &mut scopes, &mut Vec::new())?;
+            self.check_body(body, result.as_ref(), &mut scopes, &mut Vec::new())?;
             if result.is_some() && !body_terminates(syntax, body) {
                 let function = &syntax.functions[function];
                 return Err(Diagnostic::new(
@@ -824,18 +1007,58 @@ fn order_module_bindings(
     Ok(order)
 }
 
+/// The module-level names an annotation's array lengths reference.
+fn collect_annotation_references(
+    syntax: &Syntax,
+    annotation: Idx<TypeAnnotation>,
+    references: &mut Vec<(Spur, std::ops::Range<usize>)>,
+) {
+    let AnnotationKind::Array { length, element } = syntax.annotations[annotation].kind else {
+        return;
+    };
+    if let Some(length) = length {
+        collect_references(syntax, length, references);
+    }
+    collect_annotation_references(syntax, element, references);
+}
+
+/// The unqualified module-level names an expression references. A call's
+/// target names a function rather than a binding, so only its arguments count.
 fn collect_references(
     syntax: &Syntax,
     expression: Idx<Expression>,
     references: &mut Vec<(Spur, std::ops::Range<usize>)>,
 ) {
-    let expression = &syntax.expressions[expression];
-    match &expression.kind {
-        ExpressionKind::Integer(_) | ExpressionKind::Boolean(_) => {}
-        ExpressionKind::Reference(name) if name.qualifier.is_none() => {
+    walk_expression(syntax, expression, &mut |id| {
+        let expression = &syntax.expressions[id];
+        if let ExpressionKind::Reference(name) = &expression.kind
+            && name.qualifier.is_none()
+        {
             references.push((name.name, expression.span.clone()));
         }
-        ExpressionKind::Reference(_) => {}
+    });
+}
+
+/// The first call anywhere in `expression`, in source order.
+fn find_call(syntax: &Syntax, expression: Idx<Expression>) -> Option<Idx<Expression>> {
+    let mut call = None;
+    walk_expression(syntax, expression, &mut |id| {
+        if call.is_none() && matches!(syntax.expressions[id].kind, ExpressionKind::Call(_)) {
+            call = Some(id);
+        }
+    });
+    call
+}
+
+/// Visits `expression` and every sub-expression under it, in source order.
+fn walk_expression(
+    syntax: &Syntax,
+    expression: Idx<Expression>,
+    visit: &mut impl FnMut(Idx<Expression>),
+) {
+    visit(expression);
+    match &syntax.expressions[expression].kind {
+        ExpressionKind::Integer(_) | ExpressionKind::Boolean(_) | ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
             operand: expression,
@@ -848,16 +1071,29 @@ fn collect_references(
         | ExpressionKind::LogicalNot {
             operand: expression,
             ..
-        } => collect_references(syntax, *expression, references),
+        }
+        | ExpressionKind::Length {
+            operand: expression,
+        } => walk_expression(syntax, *expression, visit),
         ExpressionKind::Binary { left, right, .. }
         | ExpressionKind::Comparison { left, right, .. }
-        | ExpressionKind::Logical { left, right, .. } => {
-            collect_references(syntax, *left, references);
-            collect_references(syntax, *right, references);
+        | ExpressionKind::Logical { left, right, .. }
+        | ExpressionKind::Index {
+            operand: left,
+            index: right,
+            ..
+        } => {
+            walk_expression(syntax, *left, visit);
+            walk_expression(syntax, *right, visit);
         }
         ExpressionKind::Call(call) => {
             for &argument in &call.arguments {
-                collect_references(syntax, argument, references);
+                walk_expression(syntax, argument, visit);
+            }
+        }
+        ExpressionKind::ArrayLiteral { elements, .. } => {
+            for &element in elements {
+                walk_expression(syntax, element, visit);
             }
         }
     }
@@ -867,7 +1103,7 @@ impl CheckedProgram<'_> {
     fn check_body(
         &mut self,
         body: &[Idx<Statement>],
-        result: Option<Type>,
+        result: Option<&Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
@@ -882,7 +1118,7 @@ impl CheckedProgram<'_> {
     fn check_statement(
         &mut self,
         statement: Idx<Statement>,
-        result: Option<Type>,
+        result: Option<&Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
@@ -897,16 +1133,15 @@ impl CheckedProgram<'_> {
                 statement,
                 *name,
                 *mutable,
-                annotation.as_ref(),
+                *annotation,
                 *initializer,
                 scopes,
             ),
             StatementKind::Assignment { target, value } => {
-                let binding = self.assignment_target(target, scopes)?;
-                let expression =
-                    self.check_expression(*value, scopes, Some(self.bindings[binding].ty))?;
+                let target = self.assignment_target(target, scopes)?;
+                let expression = self.check_expression(*value, scopes, Some(target.ty.clone()))?;
                 self.expressions.insert(*value, expression);
-                self.assignments.insert(statement, binding);
+                self.assignments.insert(statement, target);
                 Ok(())
             }
             StatementKind::CompoundAssignment {
@@ -924,7 +1159,8 @@ impl CheckedProgram<'_> {
             ),
             StatementKind::Block { body } => self.check_body(body, result, scopes, loops),
             StatementKind::Exit { argument } => {
-                let expression = self.check_expression(*argument, scopes, Some(Type::Int))?;
+                let expression =
+                    self.check_expression(*argument, scopes, Some(Scalar::Int.into()))?;
                 self.expressions.insert(*argument, expression);
                 Ok(())
             }
@@ -940,11 +1176,7 @@ impl CheckedProgram<'_> {
                 }
                 Ok(())
             }
-            StatementKind::For {
-                label,
-                header,
-                body,
-            } => self.check_for(label.as_ref(), header, body, result, scopes, loops),
+            StatementKind::For { .. } => self.check_for(statement, result, scopes, loops),
             StatementKind::Break { label } => {
                 self.check_loop_jump(statement, "break", label.as_ref(), loops)
             }
@@ -965,12 +1197,18 @@ impl CheckedProgram<'_> {
         statement: Idx<Statement>,
         name: Spur,
         mutable: bool,
-        annotation: Option<&TypeAnnotation>,
+        annotation: Option<Idx<TypeAnnotation>>,
         initializer: Idx<Expression>,
         scopes: &mut [HashMap<Spur, Idx<Binding>>],
     ) -> Result<(), Diagnostic> {
-        let expression = self.check_expression(initializer, scopes, annotation_type(annotation))?;
-        let ty = expression.ty;
+        let destination = match annotation {
+            Some(annotation) => {
+                Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
+            }
+            None => None,
+        };
+        let expression = self.check_expression(initializer, scopes, destination)?;
+        let ty = expression.ty.clone();
         let constant = if mutable {
             None
         } else {
@@ -995,17 +1233,17 @@ impl CheckedProgram<'_> {
     fn check_compound_assignment(
         &mut self,
         statement: Idx<Statement>,
-        target: &QualifiedName,
+        target: &AssignmentTarget,
         operator: BinaryOperator,
         operator_span: &std::ops::Range<usize>,
         value: Idx<Expression>,
         scopes: &mut [HashMap<Spur, Idx<Binding>>],
     ) -> Result<(), Diagnostic> {
-        let binding = self.assignment_target(target, scopes)?;
+        let target = self.assignment_target(target, scopes)?;
         let left = CheckedExpression {
-            ty: self.bindings[binding].ty,
+            ty: target.ty.clone(),
             untyped: false,
-            value: ExpressionValue::Reference(binding),
+            value: ExpressionValue::Reference(target.binding),
             constant: None,
         };
         let right = self.infer_expression(value, scopes)?;
@@ -1023,19 +1261,25 @@ impl CheckedProgram<'_> {
             },
         )?;
         self.expressions.insert(value, right.expression);
-        self.assignments.insert(statement, binding);
+        self.assignments.insert(statement, target);
         Ok(())
     }
 
     fn check_for(
         &mut self,
-        label: Option<&Label>,
-        header: &ForHeader,
-        body: &[Idx<Statement>],
-        result: Option<Type>,
+        statement: Idx<Statement>,
+        result: Option<&Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<(), Diagnostic> {
+        let StatementKind::For {
+            label,
+            header,
+            body,
+        } = &self.syntax.statements[statement].kind
+        else {
+            unreachable!("a `for` statement is checked from its own syntax")
+        };
         if let Some(label) = label
             && loops.iter().flatten().any(|name| *name == label.name)
         {
@@ -1047,8 +1291,8 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        let has_header_scope = self.check_for_header(header, result, scopes, loops)?;
-        loops.push(label.map(|label| label.name));
+        let has_header_scope = self.check_for_header(statement, header, result, scopes, loops)?;
+        loops.push(label.as_ref().map(|label| label.name));
         self.check_body(body, result, scopes, loops)?;
         loops.pop();
         if has_header_scope {
@@ -1061,8 +1305,9 @@ impl CheckedProgram<'_> {
     /// bindings its initializer declares.
     fn check_for_header(
         &mut self,
+        statement: Idx<Statement>,
         header: &ForHeader,
-        result: Option<Type>,
+        result: Option<&Type>,
         scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
         loops: &mut Vec<Option<Spur>>,
     ) -> Result<bool, Diagnostic> {
@@ -1083,7 +1328,61 @@ impl CheckedProgram<'_> {
                 self.check_statement(*post, result, scopes, loops)?;
                 Ok(true)
             }
+            ForHeader::Iteration {
+                value,
+                index,
+                operand,
+                ..
+            } => {
+                self.check_iteration_header(statement, *value, index.as_ref(), *operand, scopes)?;
+                Ok(true)
+            }
         }
+    }
+
+    /// Checks `for v in a` and `for v, i in a`, opening the scope that holds
+    /// the loop's bindings. They are immutable and live only inside the loop.
+    fn check_iteration_header(
+        &mut self,
+        statement: Idx<Statement>,
+        value: Spur,
+        index: Option<&(Spur, std::ops::Range<usize>)>,
+        operand: Idx<Expression>,
+        scopes: &mut Vec<HashMap<Spur, Idx<Binding>>>,
+    ) -> Result<(), Diagnostic> {
+        let checked = self.infer_expression(operand, scopes)?;
+        let Type::Array { element, .. } = &checked.ty else {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[operand].span.clone(),
+                format!("`for … in` requires an array, found `{}`", checked.ty),
+            ));
+        };
+        let element = (**element).clone();
+        if let Some((name, span)) = index
+            && *name == value
+        {
+            return Err(Diagnostic::new(
+                span.clone(),
+                "a `for` loop's value and index bindings must have different names",
+            ));
+        }
+        self.expressions.insert(operand, checked);
+        let mut loop_scope = HashMap::new();
+        let mut bind = |program: &mut Self, name: Spur, ty: Type| {
+            let binding = program.bindings.alloc(Binding {
+                ty,
+                mutable: false,
+                constant: None,
+            });
+            loop_scope.insert(name, binding);
+            binding
+        };
+        let value = bind(self, value, element);
+        let index = index.map(|(name, _)| bind(self, *name, Scalar::Int.into()));
+        self.iterations
+            .insert(statement, IterationBindings { value, index });
+        scopes.push(loop_scope);
+        Ok(())
     }
 
     /// Checks that a `break` or `continue` names a loop it is inside.
@@ -1115,12 +1414,10 @@ impl CheckedProgram<'_> {
         Ok(())
     }
 
-    /// Checks that a `return` carries exactly the value its function's result
-    /// needs.
     fn check_return(
         &mut self,
         statement: Idx<Statement>,
-        result: Option<Type>,
+        result: Option<&Type>,
         value: Option<Idx<Expression>>,
         scopes: &mut [HashMap<Spur, Idx<Binding>>],
     ) -> Result<(), Diagnostic> {
@@ -1132,33 +1429,42 @@ impl CheckedProgram<'_> {
             )),
             (Some(result), None) => Err(Diagnostic::new(
                 self.syntax.statements[statement].span.clone(),
-                format!("`return` must supply a value of type `{}`", result.name()),
+                format!("`return` must supply a value of type `{result}`"),
             )),
             (Some(result), Some(value)) => {
-                let expression = self.check_expression(value, scopes, Some(result))?;
+                let expression = self.check_expression(value, scopes, Some(result.clone()))?;
                 self.expressions.insert(value, expression);
                 Ok(())
             }
         }
     }
 
+    /// The binding an assignment stores into, and the type of the element its
+    /// indices reach. An element of a `const` binding is rejected with the
+    /// binding itself, so the mutability check comes first.
     fn assignment_target(
         &mut self,
-        target: &QualifiedName,
+        target: &AssignmentTarget,
         scopes: &[HashMap<Spur, Idx<Binding>>],
-    ) -> Result<Idx<Binding>, Diagnostic> {
-        let binding = self.resolve(target, scopes)?;
-        if self.bindings[binding].mutable {
-            Ok(binding)
-        } else {
-            Err(Diagnostic::new(
-                target.span.clone(),
+    ) -> Result<CheckedTarget, Diagnostic> {
+        let name = &target.name;
+        let binding = self.resolve(name, scopes)?;
+        if !self.bindings[binding].mutable {
+            return Err(Diagnostic::new(
+                name.span.clone(),
                 format!(
                     "cannot assign to immutable binding `{}`",
-                    self.syntax.names.resolve(&target.name)
+                    self.syntax.names.resolve(&name.name)
                 ),
-            ))
+            ));
         }
+        // The indices are checked left to right, the order they are evaluated
+        // in, and each one descends into the element type.
+        let mut ty = self.bindings[binding].ty.clone();
+        for &index in &target.indices {
+            ty = self.check_index_step(&ty, &name.span, index, scopes)?;
+        }
+        Ok(CheckedTarget { binding, ty })
     }
 
     fn check_condition(
@@ -1166,7 +1472,7 @@ impl CheckedProgram<'_> {
         condition: Idx<Expression>,
         scopes: &[HashMap<Spur, Idx<Binding>>],
     ) -> Result<(), Diagnostic> {
-        let expression = self.check_expression(condition, scopes, Some(Type::Bool))?;
+        let expression = self.check_expression(condition, scopes, Some(Scalar::Bool.into()))?;
         self.expressions.insert(condition, expression);
         Ok(())
     }
@@ -1197,7 +1503,7 @@ impl CheckedProgram<'_> {
         }
         for (&argument, &parameter) in call.arguments.iter().zip(&signature.parameters) {
             let expression =
-                self.check_expression(argument, scopes, Some(self.bindings[parameter].ty))?;
+                self.check_expression(argument, scopes, Some(self.bindings[parameter].ty.clone()))?;
             self.expressions.insert(argument, expression);
         }
         if value_context && signature.result.is_none() {
@@ -1378,21 +1684,35 @@ impl CheckedProgram<'_> {
         scopes: &[HashMap<Spur, Idx<Binding>>],
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
+        let syntax = self.syntax;
+        // An array literal is the one expression whose type comes from its
+        // destination rather than from concretizing an inferred type.
+        if matches!(
+            syntax.expressions[id].kind,
+            ExpressionKind::ArrayLiteral { .. }
+        ) {
+            return self.check_array_literal(id, scopes, destination);
+        }
         let mut checked = self.infer_expression(id, scopes)?;
+        let mismatch = |checked: &CheckedExpression, destination: &Type| {
+            Diagnostic::new(
+                syntax.expressions[id].span.clone(),
+                format!(
+                    "cannot implicitly convert `{}` to `{destination}`",
+                    checked.ty
+                ),
+            )
+        };
         if checked.untyped {
-            let destination = destination.unwrap_or(checked.ty);
-            self.concretize(id, &mut checked, destination)?;
+            let destination = destination.unwrap_or_else(|| checked.ty.clone());
+            let Some(scalar) = destination.scalar() else {
+                return Err(mismatch(&checked, &destination));
+            };
+            self.concretize(id, &mut checked, scalar)?;
         } else if let Some(destination) = destination
             && checked.ty != destination
         {
-            return Err(Diagnostic::new(
-                self.syntax.expressions[id].span.clone(),
-                format!(
-                    "cannot implicitly convert `{}` to `{}`",
-                    checked.ty.name(),
-                    destination.name()
-                ),
-            ));
+            return Err(mismatch(&checked, &destination));
         }
         Ok(checked)
     }
@@ -1406,15 +1726,15 @@ impl CheckedProgram<'_> {
         match &expression.kind {
             ExpressionKind::Integer(spelling) => Ok(integer_literal(spelling)),
             ExpressionKind::Boolean(value) => Ok(CheckedExpression {
-                ty: Type::Bool,
+                ty: Scalar::Bool.into(),
                 untyped: true,
                 value: ExpressionValue::Boolean,
-                constant: Some(BigInt::from(*value)),
+                constant: Some(BigInt::from(*value).into()),
             }),
             ExpressionKind::Reference(name) => {
                 let binding = self.resolve(name, scopes)?;
                 Ok(CheckedExpression {
-                    ty: self.bindings[binding].ty,
+                    ty: self.bindings[binding].ty.clone(),
                     untyped: false,
                     value: ExpressionValue::Reference(binding),
                     constant: self.bindings[binding].constant.clone(),
@@ -1452,13 +1772,19 @@ impl CheckedProgram<'_> {
                 destination,
                 truncating,
                 operand,
+                ..
             } => self.infer_conversion(
-                destination.ty,
+                *destination,
                 *truncating,
                 *operand,
                 &expression.span,
                 scopes,
             ),
+            ExpressionKind::ArrayLiteral { .. } => self.check_array_literal(id, scopes, None),
+            ExpressionKind::Index { operand, index, .. } => {
+                self.infer_index(*operand, *index, scopes)
+            }
+            ExpressionKind::Length { operand } => self.infer_length(*operand, scopes),
             ExpressionKind::Call(call) => {
                 let (function, result) = self.check_call(call, scopes, true)?;
                 Ok(CheckedExpression {
@@ -1469,6 +1795,180 @@ impl CheckedProgram<'_> {
                 })
             }
         }
+    }
+
+    /// Checks an array literal. Every element is checked against the array's
+    /// element type, which the destination supplies when there is one and the
+    /// elements themselves supply when there is not.
+    fn check_array_literal(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+        destination: Option<Type>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let span = self.syntax.expressions[id].span.clone();
+        let ExpressionKind::ArrayLiteral { elements, fill } = &self.syntax.expressions[id].kind
+        else {
+            unreachable!("an array literal is checked from its own syntax")
+        };
+        let (elements, fill) = (elements.clone(), fill.clone());
+        let (length, element_type) =
+            self.array_literal_type(&span, scopes, destination, &elements, fill.as_ref())?;
+        let ty = Type::Array {
+            length,
+            element: Box::new(element_type.clone()),
+        };
+        check_element_count(span, &ty, length, elements.len(), fill.is_some())?;
+        let mut checked_elements = Vec::with_capacity(elements.len());
+        for &element in &elements {
+            checked_elements.push(self.check_expression(
+                element,
+                scopes,
+                Some(element_type.clone()),
+            )?);
+        }
+        let constant = fold_elements(&checked_elements, length);
+        let folded = constant.is_some();
+        for (&element, checked) in elements.iter().zip(checked_elements) {
+            self.record_operand(element, checked, folded);
+        }
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::Array {
+                elements,
+                fill: fill.is_some(),
+            },
+            constant,
+        })
+    }
+
+    /// The length and element type an array literal is checked against.
+    fn array_literal_type(
+        &mut self,
+        span: &std::ops::Range<usize>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+        destination: Option<Type>,
+        elements: &[Idx<Expression>],
+        fill: Option<&std::ops::Range<usize>>,
+    ) -> Result<(u64, Type), Diagnostic> {
+        match destination {
+            Some(Type::Array { length, element }) => Ok((length, *element)),
+            Some(destination) => Err(Diagnostic::new(
+                span.clone(),
+                format!("cannot implicitly convert an array literal to `{destination}`"),
+            )),
+            None => {
+                if let Some(fill) = fill {
+                    return Err(Diagnostic::new(
+                        fill.clone(),
+                        "a fill requires a length from context",
+                    ));
+                }
+                let length = u64::try_from(elements.len())
+                    .expect("a source file holds fewer elements than u64::MAX");
+                Ok((length, self.common_element_type(elements, scopes)?))
+            }
+        }
+    }
+
+    /// The one type the elements of a literal with no context must share: the
+    /// type of the first typed element, or the untyped default when every
+    /// element is an untyped constant. The checked elements are discarded, so
+    /// every element goes through the one checking path afterwards.
+    fn common_element_type(
+        &mut self,
+        elements: &[Idx<Expression>],
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<Type, Diagnostic> {
+        let mut default = None;
+        for &element in elements {
+            let checked = self.infer_expression(element, scopes)?;
+            if !checked.untyped {
+                return Ok(checked.ty);
+            }
+            default.get_or_insert(checked.ty);
+        }
+        Ok(default.expect("an array literal has at least one element"))
+    }
+
+    /// Checks one `[ … ]` step and gives the element type it reaches. The
+    /// operand must be an array, and the index must be an `int` that is in
+    /// range whenever it is constant. Index expressions and assignment targets
+    /// share this, so both spell one rule.
+    fn check_index_step(
+        &mut self,
+        operand: &Type,
+        operand_span: &std::ops::Range<usize>,
+        index: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<Type, Diagnostic> {
+        let Type::Array { length, element } = operand else {
+            return Err(Diagnostic::new(
+                operand_span.clone(),
+                format!("cannot index `{operand}`"),
+            ));
+        };
+        let checked = self.check_expression(index, scopes, Some(Scalar::Int.into()))?;
+        if let Some(value) = checked.integer()
+            && value.to_u64().is_none_or(|value| value >= *length)
+        {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[index].span.clone(),
+                format!("index {value} is out of range for `{operand}`"),
+            ));
+        }
+        self.expressions.insert(index, checked);
+        Ok((**element).clone())
+    }
+
+    fn infer_index(
+        &mut self,
+        operand: Idx<Expression>,
+        index: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let checked_operand = self.infer_expression(operand, scopes)?;
+        let span = self.syntax.expressions[operand].span.clone();
+        let element = self.check_index_step(&checked_operand.ty, &span, index, scopes)?;
+        // `a[i]` is never a constant expression, so both sub-expressions keep
+        // their own constants and are still evaluated.
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty: element,
+            untyped: false,
+            value: ExpressionValue::Index { operand, index },
+            constant: None,
+        })
+    }
+
+    fn infer_length(
+        &mut self,
+        operand: Idx<Expression>,
+        scopes: &[HashMap<Spur, Idx<Binding>>],
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let checked_operand = self.infer_expression(operand, scopes)?;
+        let Type::Array { length, .. } = &checked_operand.ty else {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[operand].span.clone(),
+                format!(
+                    "`len` requires an array operand, found `{}`",
+                    checked_operand.ty
+                ),
+            ));
+        };
+        // The length comes from the operand's type, so it folds unless
+        // reaching the type needs a call. The operand is evaluated either way.
+        let constant = find_call(self.syntax, operand)
+            .is_none()
+            .then(|| Constant::Integer(BigInt::from(*length)));
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty: Scalar::Int.into(),
+            untyped: false,
+            value: ExpressionValue::Length { operand },
+            constant,
+        })
     }
 
     /// Records a checked operand. A folded parent owns the constant value, so
@@ -1492,7 +1992,7 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked = self.infer_expression(inner, scopes)?;
         let result = CheckedExpression {
-            ty: checked.ty,
+            ty: checked.ty.clone(),
             untyped: checked.untyped,
             value: ExpressionValue::Grouping { expression: inner },
             constant: checked.constant.clone(),
@@ -1510,18 +2010,14 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let error = |message| Diagnostic::new(operator_span.clone(), message);
-        if !checked_operand.ty.is_integer() {
+        let Some(operand_type) = integer_operand(&checked_operand) else {
             return Err(error(
                 "integer unary operator requires an integer operand".to_string(),
             ));
-        }
-        if operator == UnaryOperator::Negate
-            && !checked_operand.untyped
-            && !checked_operand.ty.signed()
-        {
+        };
+        if operator == UnaryOperator::Negate && !checked_operand.untyped && !operand_type.signed() {
             return Err(error(format!(
-                "unary `-` is not permitted on `{}`",
-                checked_operand.ty.name()
+                "unary `-` is not permitted on `{operand_type}`"
             )));
         }
         if operator == UnaryOperator::WrappingNegate && checked_operand.untyped {
@@ -1529,16 +2025,21 @@ impl CheckedProgram<'_> {
                 "wrapping negation requires a typed operand".to_string(),
             ));
         }
-        let constant = self.evaluate_unary(operator, operator_span.clone(), &checked_operand)?;
+        let constant = evaluate_unary(
+            operator,
+            operator_span.clone(),
+            operand_type,
+            &checked_operand,
+        )?;
         let result = CheckedExpression {
-            ty: checked_operand.ty,
+            ty: checked_operand.ty.clone(),
             untyped: checked_operand.untyped,
             value: ExpressionValue::Unary {
                 operator,
                 operator_span: operator_span.clone(),
                 operand,
             },
-            constant,
+            constant: constant.map(Constant::Integer),
         };
         self.record_operand(operand, checked_operand, result.constant.is_some());
         Ok(result)
@@ -1568,7 +2069,7 @@ impl CheckedProgram<'_> {
             },
         )?;
         let result = CheckedExpression {
-            ty,
+            ty: ty.into(),
             untyped,
             value: ExpressionValue::Binary {
                 operator,
@@ -1576,7 +2077,7 @@ impl CheckedProgram<'_> {
                 left,
                 right,
             },
-            constant,
+            constant: constant.map(Constant::Integer),
         };
         let folded = result.constant.is_some();
         self.record_operand(left, checked_left.expression, folded);
@@ -1595,6 +2096,7 @@ impl CheckedProgram<'_> {
         let mut checked_left = self.infer_expression(left, scopes)?;
         let mut checked_right = self.infer_expression(right, scopes)?;
         self.unify_comparison(
+            operator,
             operator_span,
             (left, &mut checked_left),
             (right, &mut checked_right),
@@ -1607,7 +2109,7 @@ impl CheckedProgram<'_> {
             _ => None,
         };
         let result = CheckedExpression {
-            ty: Type::Bool,
+            ty: Scalar::Bool.into(),
             untyped: constant.is_some(),
             value: ExpressionValue::Comparison {
                 operator,
@@ -1615,7 +2117,7 @@ impl CheckedProgram<'_> {
                 left,
                 right,
             },
-            constant,
+            constant: constant.map(Constant::Integer),
         };
         let folded = result.constant.is_some();
         self.record_operand(left, checked_left, folded);
@@ -1624,28 +2126,47 @@ impl CheckedProgram<'_> {
     }
 
     /// Gives both comparison operands one type. An untyped operand takes the
-    /// type of a typed one; otherwise the two types must already agree.
+    /// type of a typed one; otherwise the two types must already agree. Arrays
+    /// are never untyped, so they only have to agree, and only `==` and `!=`
+    /// reach them.
     fn unify_comparison(
         &mut self,
+        operator: ComparisonOperator,
         operator_span: &std::ops::Range<usize>,
         left: (Idx<Expression>, &mut CheckedExpression),
         right: (Idx<Expression>, &mut CheckedExpression),
     ) -> Result<(), Diagnostic> {
         let (left_id, left) = left;
         let (right_id, right) = right;
-        match (left.untyped, right.untyped) {
-            (false, true) => self.concretize(right_id, right, left.ty),
-            (true, false) => self.concretize(left_id, left, right.ty),
-            _ if left.ty != right.ty => Err(Diagnostic::new(
+        let unified = match (left.ty.scalar(), right.ty.scalar()) {
+            (Some(left_type), Some(right_type)) => match (left.untyped, right.untyped) {
+                (false, true) => return self.concretize(right_id, right, left_type),
+                (true, false) => return self.concretize(left_id, left, right_type),
+                _ => left_type == right_type,
+            },
+            _ => left.ty == right.ty,
+        };
+        if !unified {
+            return Err(Diagnostic::new(
                 operator_span.clone(),
                 format!(
                     "comparison operands have different types `{}` and `{}`",
-                    left.ty.name(),
-                    right.ty.name()
+                    left.ty, right.ty
                 ),
-            )),
-            _ => Ok(()),
+            ));
         }
+        if left.ty.scalar().is_none()
+            && !matches!(
+                operator,
+                ComparisonOperator::Equal | ComparisonOperator::NotEqual
+            )
+        {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                format!("only `==` and `!=` are defined on `{}`", left.ty),
+            ));
+        }
+        Ok(())
     }
 
     fn infer_logical(
@@ -1661,14 +2182,11 @@ impl CheckedProgram<'_> {
         require_boolean(self.syntax, left, &checked_left)?;
         require_boolean(self.syntax, right, &checked_right)?;
         match (checked_left.untyped, checked_right.untyped) {
-            (true, false) => self.concretize(left, &mut checked_left, Type::Bool)?,
-            (false, true) => self.concretize(right, &mut checked_right, Type::Bool)?,
+            (true, false) => self.concretize(left, &mut checked_left, Scalar::Bool)?,
+            (false, true) => self.concretize(right, &mut checked_right, Scalar::Bool)?,
             _ => {}
         }
-        let constant = match (
-            checked_left.constant.as_ref(),
-            checked_right.constant.as_ref(),
-        ) {
+        let constant = match (checked_left.integer(), checked_right.integer()) {
             (Some(left), Some(right)) => Some(BigInt::from(match operator {
                 LogicalOperator::And => constant_boolean(left) && constant_boolean(right),
                 LogicalOperator::Or => constant_boolean(left) || constant_boolean(right),
@@ -1676,7 +2194,7 @@ impl CheckedProgram<'_> {
             _ => None,
         };
         let result = CheckedExpression {
-            ty: Type::Bool,
+            ty: Scalar::Bool.into(),
             untyped: checked_left.untyped && checked_right.untyped,
             value: ExpressionValue::Logical {
                 operator,
@@ -1684,7 +2202,7 @@ impl CheckedProgram<'_> {
                 left,
                 right,
             },
-            constant,
+            constant: constant.map(Constant::Integer),
         };
         let folded = result.constant.is_some();
         self.record_operand(left, checked_left, folded);
@@ -1701,17 +2219,16 @@ impl CheckedProgram<'_> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         require_boolean(self.syntax, operand, &checked_operand)?;
         let constant = checked_operand
-            .constant
-            .as_ref()
+            .integer()
             .map(|value| BigInt::from(!constant_boolean(value)));
         let result = CheckedExpression {
-            ty: Type::Bool,
+            ty: Scalar::Bool.into(),
             untyped: checked_operand.untyped,
             value: ExpressionValue::LogicalNot {
                 operator_span: operator_span.clone(),
                 operand,
             },
-            constant,
+            constant: constant.map(Constant::Integer),
         };
         self.record_operand(operand, checked_operand, result.constant.is_some());
         Ok(result)
@@ -1719,25 +2236,21 @@ impl CheckedProgram<'_> {
 
     fn infer_conversion(
         &mut self,
-        destination: Type,
+        destination: Scalar,
         truncating: bool,
         operand: Idx<Expression>,
         span: &std::ops::Range<usize>,
         scopes: &[HashMap<Spur, Idx<Binding>>],
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_operand = self.infer_expression(operand, scopes)?;
-        if !checked_operand.ty.is_integer() {
+        if integer_operand(&checked_operand).is_none() {
             return Err(Diagnostic::new(
                 span.clone(),
-                format!(
-                    "cannot convert `{}` to `{}`",
-                    checked_operand.ty.name(),
-                    destination.name()
-                ),
+                format!("cannot convert `{}` to `{destination}`", checked_operand.ty),
             ));
         }
         if checked_operand.untyped && (!truncating || checked_operand.constant.is_none()) {
-            let operand_type = if truncating { Type::Int } else { destination };
+            let operand_type = if truncating { Scalar::Int } else { destination };
             self.concretize(operand, &mut checked_operand, operand_type)?;
         }
         let constant = self.convert_constant(&checked_operand, destination, truncating, span)?;
@@ -1751,10 +2264,10 @@ impl CheckedProgram<'_> {
         };
         self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
-            ty: destination,
+            ty: destination.into(),
             untyped: false,
             value,
-            constant,
+            constant: constant.map(Constant::Integer),
         })
     }
 
@@ -1763,11 +2276,11 @@ impl CheckedProgram<'_> {
     fn convert_constant(
         &self,
         operand: &CheckedExpression,
-        destination: Type,
+        destination: Scalar,
         truncating: bool,
         span: &std::ops::Range<usize>,
     ) -> Result<Option<BigInt>, Diagnostic> {
-        let Some(value) = operand.constant.as_ref() else {
+        let Some(value) = operand.integer() else {
             return Ok(None);
         };
         if truncating {
@@ -1776,7 +2289,7 @@ impl CheckedProgram<'_> {
         if !integer_fits(value, destination) {
             return Err(Diagnostic::new(
                 span.clone(),
-                format!("constant conversion to `{}` would trap", destination.name()),
+                format!("constant conversion to `{destination}` would trap"),
             ));
         }
         Ok(Some(value.clone()))
@@ -1793,18 +2306,21 @@ impl CheckedProgram<'_> {
         (
             CheckedBinaryOperand,
             CheckedBinaryOperand,
-            Type,
+            Scalar,
             bool,
             Option<BigInt>,
         ),
         Diagnostic,
     > {
-        if !left.expression.ty.is_integer() || !right.expression.ty.is_integer() {
+        let (Some(mut left_type), Some(right_type)) = (
+            integer_operand(&left.expression),
+            integer_operand(&right.expression),
+        ) else {
             return Err(Diagnostic::new(
                 operator_span.clone(),
                 format!("integer `{spelling}` requires integer operands"),
             ));
-        }
+        };
         let shift = matches!(
             operator,
             BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
@@ -1823,13 +2339,11 @@ impl CheckedProgram<'_> {
         }
         if !shift {
             match (left.expression.untyped, right.expression.untyped) {
-                (false, false) if left.expression.ty != right.expression.ty => {
+                (false, false) if left_type != right_type => {
                     return Err(Diagnostic::new(
                         operator_span.clone(),
                         format!(
-                            "binary operands have different types `{}` and `{}`",
-                            left.expression.ty.name(),
-                            right.expression.ty.name()
+                            "binary operands have different types `{left_type}` and `{right_type}`"
                         ),
                     ));
                 }
@@ -1838,13 +2352,16 @@ impl CheckedProgram<'_> {
                         .id
                         .expect("an untyped right operand has an expression"),
                     &mut right.expression,
-                    left.expression.ty,
+                    left_type,
                 )?,
-                (true, false) => self.concretize(
-                    left.id.expect("an untyped left operand has an expression"),
-                    &mut left.expression,
-                    right.expression.ty,
-                )?,
+                (true, false) => {
+                    self.concretize(
+                        left.id.expect("an untyped left operand has an expression"),
+                        &mut left.expression,
+                        right_type,
+                    )?;
+                    left_type = right_type;
+                }
                 _ => {}
             }
         } else if (left.expression.constant.is_none() || right.expression.constant.is_none())
@@ -1855,15 +2372,15 @@ impl CheckedProgram<'_> {
                     .id
                     .expect("an untyped right operand has an expression"),
                 &mut right.expression,
-                Type::Int,
+                Scalar::Int,
             )?;
         }
         let (ty, untyped) = if shift {
-            (left.expression.ty, left.expression.untyped)
+            (left_type, left.expression.untyped)
         } else if left.expression.untyped {
-            (right.expression.ty, right.expression.untyped)
+            (right_type, right.expression.untyped)
         } else {
-            (left.expression.ty, false)
+            (left_type, false)
         };
         let constant = evaluate_binary(
             operator,
@@ -1880,17 +2397,17 @@ impl CheckedProgram<'_> {
         &mut self,
         id: Idx<Expression>,
         checked: &mut CheckedExpression,
-        destination: Type,
+        destination: Scalar,
     ) -> Result<(), Diagnostic> {
         debug_assert!(checked.untyped);
-        if checked.ty.is_integer() != destination.is_integer() {
+        let ty = checked
+            .ty
+            .scalar()
+            .expect("an untyped expression has a scalar type");
+        if ty.is_integer() != destination.is_integer() {
             return Err(Diagnostic::new(
                 self.syntax.expressions[id].span.clone(),
-                format!(
-                    "cannot implicitly convert `{}` to `{}`",
-                    checked.ty.name(),
-                    destination.name()
-                ),
+                format!("cannot implicitly convert `{ty}` to `{destination}`"),
             ));
         }
         let constant = concretize_value(self.syntax, id, checked, destination)?
@@ -1902,7 +2419,7 @@ impl CheckedProgram<'_> {
     fn concretize_stored(
         &mut self,
         id: Idx<Expression>,
-        destination: Type,
+        destination: Scalar,
     ) -> Result<(), Diagnostic> {
         let Some(constant) =
             concretize_value(self.syntax, id, &mut self.expressions[id], destination)?
@@ -1916,7 +2433,7 @@ impl CheckedProgram<'_> {
     fn concretize_children(
         &mut self,
         id: Idx<Expression>,
-        destination: Type,
+        destination: Scalar,
         constant: bool,
     ) -> Result<(), Diagnostic> {
         let (first, second) = match &self.syntax.expressions[id].kind {
@@ -1929,7 +2446,7 @@ impl CheckedProgram<'_> {
                 if *operator == UnaryOperator::Negate && !destination.signed() {
                     return Err(Diagnostic::new(
                         operator_span.clone(),
-                        format!("unary `-` is not permitted on `{}`", destination.name()),
+                        format!("unary `-` is not permitted on `{destination}`"),
                     ));
                 }
                 (Some(*operand), None)
@@ -1947,39 +2464,84 @@ impl CheckedProgram<'_> {
         }
         Ok(())
     }
+}
 
-    fn evaluate_unary(
-        &self,
-        operator: UnaryOperator,
-        operator_span: std::ops::Range<usize>,
-        operand: &CheckedExpression,
-    ) -> Result<Option<BigInt>, Diagnostic> {
-        let Some(value) = operand.constant.as_ref() else {
-            return Ok(None);
-        };
-        let result = match operator {
-            UnaryOperator::Negate => -value,
-            UnaryOperator::WrappingNegate => truncate_integer(&-value, operand.ty),
-            UnaryOperator::Complement if operand.untyped => !value,
-            UnaryOperator::Complement => truncate_integer(&!value, operand.ty),
-        };
-        if operand.untyped && result.bits() > MAX_UNTYPED_INTEGER_BITS {
-            return Err(Diagnostic::new(
-                operator_span,
-                "constant expression exceeds compiler resource limit",
-            ));
-        }
-        if operator == UnaryOperator::Negate
-            && !operand.untyped
-            && !integer_fits(&result, operand.ty)
-        {
-            return Err(Diagnostic::new(
-                operator_span,
-                format!("constant unary `-` on `{}` would trap", operand.ty.name()),
-            ));
-        }
-        Ok(Some(result))
+/// Checks a literal's element count against the array's length. A fill covers
+/// the remaining elements, so it only bounds the count from above.
+fn check_element_count(
+    span: std::ops::Range<usize>,
+    ty: &Type,
+    length: u64,
+    count: usize,
+    fill: bool,
+) -> Result<(), Diagnostic> {
+    let count = u64::try_from(count).expect("a source file holds fewer elements than u64::MAX");
+    if if fill {
+        count <= length
+    } else {
+        count == length
+    } {
+        return Ok(());
     }
+    let bound = if fill { "at most " } else { "" };
+    Err(Diagnostic::new(
+        span,
+        format!("expected {bound}{length} elements for `{ty}`, found {count}"),
+    ))
+}
+
+/// The value an array literal folds to, which is one constant per element with
+/// the fill repeating the last element. It folds only when every element does.
+fn fold_elements(elements: &[CheckedExpression], length: u64) -> Option<Constant> {
+    let mut values = elements
+        .iter()
+        .map(|element| element.constant.clone())
+        .collect::<Option<Vec<_>>>()?;
+    let last = values
+        .last()
+        .expect("an array literal has at least one element")
+        .clone();
+    values.resize(
+        usize::try_from(length).expect("an array fits in the host's address space"),
+        last,
+    );
+    Some(Constant::Array(values))
+}
+
+/// The scalar type an integer operator requires of its operand, or `None` when
+/// the operand is a `bool` or an array.
+fn integer_operand(checked: &CheckedExpression) -> Option<Scalar> {
+    checked.ty.scalar().filter(|scalar| scalar.is_integer())
+}
+
+fn evaluate_unary(
+    operator: UnaryOperator,
+    operator_span: std::ops::Range<usize>,
+    ty: Scalar,
+    operand: &CheckedExpression,
+) -> Result<Option<BigInt>, Diagnostic> {
+    let Some(value) = operand.integer() else {
+        return Ok(None);
+    };
+    let result = match operator {
+        UnaryOperator::Negate => -value,
+        UnaryOperator::WrappingNegate => truncate_integer(&-value, ty),
+        UnaryOperator::Complement if operand.untyped => !value,
+        UnaryOperator::Complement => truncate_integer(&!value, ty),
+    };
+    if operand.untyped && result.bits() > MAX_UNTYPED_INTEGER_BITS {
+        return Err(Diagnostic::new(
+            operator_span,
+            "constant expression exceeds compiler resource limit",
+        ));
+    }
+    if operator == UnaryOperator::Negate && !operand.untyped && !integer_fits(&result, ty) {
+        return Err(Diagnostic::new(
+            operator_span,
+            format!("constant unary `-` on `{ty}` would trap"),
+        ));
+    }
+    Ok(Some(result))
 }
 
 const MAX_UNTYPED_INTEGER_BITS: u64 = 2_000_000;
@@ -1993,7 +2555,7 @@ const MAX_CONSTANT_SHIFT: usize = 1_000_000;
 fn evaluate_shift(
     operator: BinaryOperator,
     operator_span: &std::ops::Range<usize>,
-    ty: Type,
+    ty: Scalar,
     untyped: bool,
     left: &BigInt,
     right: &BigInt,
@@ -2047,7 +2609,7 @@ fn shift_exceeds_limit(count: usize, left: &BigInt) -> bool {
 
 /// Shifts a typed constant. A count at or past the type's width shifts every
 /// bit out.
-fn shift_typed(operator: BinaryOperator, ty: Type, left: &BigInt, right: &BigInt) -> BigInt {
+fn shift_typed(operator: BinaryOperator, ty: Scalar, left: &BigInt, right: &BigInt) -> BigInt {
     if right >= &BigInt::from(ty.width()) {
         return if operator == BinaryOperator::ShiftRight && ty.signed() {
             sign_fill(left)
@@ -2071,14 +2633,14 @@ fn evaluate_binary(
     operator: BinaryOperator,
     operator_span: std::ops::Range<usize>,
     spelling: &str,
-    ty: Type,
+    ty: Scalar,
     untyped: bool,
     operands: (&CheckedExpression, &CheckedExpression),
 ) -> Result<Option<BigInt>, Diagnostic> {
     let (left, right) = operands;
-    let right_constant = right.constant.as_ref();
+    let right_constant = right.integer();
     reject_constant_divisor(operator, &operator_span, spelling, right_constant)?;
-    let (Some(left), Some(right)) = (left.constant.as_ref(), right_constant) else {
+    let (Some(left), Some(right)) = (left.integer(), right_constant) else {
         return Ok(None);
     };
     let result = fold_binary(operator, &operator_span, ty, untyped, left, right)?;
@@ -2122,7 +2684,7 @@ fn reject_constant_divisor(
 fn fold_binary(
     operator: BinaryOperator,
     operator_span: &std::ops::Range<usize>,
-    ty: Type,
+    ty: Scalar,
     untyped: bool,
     left: &BigInt,
     right: &BigInt,
@@ -2167,7 +2729,7 @@ fn fold_binary(
 fn reject_division_trap(
     spelling: &str,
     operator_span: &std::ops::Range<usize>,
-    ty: Type,
+    ty: Scalar,
     untyped: bool,
     left: &BigInt,
     right: &BigInt,
@@ -2186,7 +2748,7 @@ fn reject_division_trap(
 fn check_constant_range(
     operator: BinaryOperator,
     operator_span: &std::ops::Range<usize>,
-    ty: Type,
+    ty: Scalar,
     untyped: bool,
     result: BigInt,
 ) -> Result<BigInt, Diagnostic> {
@@ -2226,21 +2788,24 @@ fn concretize_value(
     syntax: &Syntax,
     id: Idx<Expression>,
     checked: &mut CheckedExpression,
-    destination: Type,
+    destination: Scalar,
 ) -> Result<Option<bool>, Diagnostic> {
     if !checked.untyped {
         return Ok(None);
     }
-    if checked.ty.is_integer()
+    let ty = checked
+        .ty
+        .scalar()
+        .expect("an untyped expression has a scalar type");
+    if ty.is_integer()
         && checked
-            .constant
-            .as_ref()
+            .integer()
             .is_some_and(|value| !integer_fits(value, destination))
     {
         return Err(out_of_range(syntax, id, destination));
     }
     let constant = checked.constant.is_some();
-    checked.ty = destination;
+    checked.ty = destination.into();
     checked.untyped = false;
     Ok(Some(constant))
 }
@@ -2253,21 +2818,30 @@ fn integer_literal(spelling: &str) -> CheckedExpression {
     let value =
         BigUint::parse_bytes(digits.as_bytes(), base).expect("frontend validated integer digits");
     CheckedExpression {
-        ty: Type::Int,
+        ty: Scalar::Int.into(),
         untyped: true,
         value: ExpressionValue::Integer,
-        constant: Some(BigInt::from(value)),
+        constant: Some(BigInt::from(value).into()),
     }
 }
 
-fn compare_constants(operator: ComparisonOperator, left: &BigInt, right: &BigInt) -> BigInt {
+/// Compares two constant operands. Equality reaches every value type, so an
+/// array folds elementwise; ordering reaches only integers, which is all
+/// checking lets through.
+fn compare_constants(operator: ComparisonOperator, left: &Constant, right: &Constant) -> BigInt {
+    let ordering = || {
+        let message = "ordering compares integer constants";
+        left.integer()
+            .expect(message)
+            .cmp(right.integer().expect(message))
+    };
     BigInt::from(match operator {
         ComparisonOperator::Equal => left == right,
         ComparisonOperator::NotEqual => left != right,
-        ComparisonOperator::Less => left < right,
-        ComparisonOperator::LessEqual => left <= right,
-        ComparisonOperator::Greater => left > right,
-        ComparisonOperator::GreaterEqual => left >= right,
+        ComparisonOperator::Less => ordering().is_lt(),
+        ComparisonOperator::LessEqual => ordering().is_le(),
+        ComparisonOperator::Greater => ordering().is_gt(),
+        ComparisonOperator::GreaterEqual => ordering().is_ge(),
     })
 }
 
@@ -2276,15 +2850,12 @@ fn require_boolean(
     id: Idx<Expression>,
     checked: &CheckedExpression,
 ) -> Result<(), Diagnostic> {
-    if checked.ty == Type::Bool {
+    if checked.ty == Scalar::Bool.into() {
         Ok(())
     } else {
         Err(Diagnostic::new(
             syntax.expressions[id].span.clone(),
-            format!(
-                "logical operand has type `{}`, expected `bool`",
-                checked.ty.name()
-            ),
+            format!("logical operand has type `{}`, expected `bool`", checked.ty),
         ))
     }
 }
@@ -2294,27 +2865,27 @@ fn constant_boolean(value: &BigInt) -> bool {
     value == &BigInt::from(1u8)
 }
 
-fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Type) -> Diagnostic {
+fn out_of_range(syntax: &Syntax, id: Idx<Expression>, destination: Scalar) -> Diagnostic {
     let literal = matches!(syntax.expressions[id].kind, ExpressionKind::Integer(_));
     Diagnostic::new(
         syntax.expressions[id].span.clone(),
         format!(
             "integer {} out of range for `{}`",
             if literal { "literal" } else { "value" },
-            destination.name()
+            destination
         ),
     )
 }
 
-fn is_minimum(value: &BigInt, ty: Type) -> bool {
+fn is_minimum(value: &BigInt, ty: Scalar) -> bool {
     value == &BigInt::from(ty.min())
 }
 
-fn integer_fits(value: &BigInt, ty: Type) -> bool {
+fn integer_fits(value: &BigInt, ty: Scalar) -> bool {
     value >= &BigInt::from(ty.min()) && value <= &BigInt::from(ty.max())
 }
 
-fn integer_from_bits(bits: BigInt, ty: Type) -> BigInt {
+fn integer_from_bits(bits: BigInt, ty: Scalar) -> BigInt {
     if ty.signed() && bits >= (BigInt::from(1u8) << (ty.width() - 1)) {
         bits - (BigInt::from(1u8) << ty.width())
     } else {
@@ -2322,7 +2893,7 @@ fn integer_from_bits(bits: BigInt, ty: Type) -> BigInt {
     }
 }
 
-fn truncate_integer(value: &BigInt, ty: Type) -> BigInt {
+fn truncate_integer(value: &BigInt, ty: Scalar) -> BigInt {
     let modulus = BigInt::from(1u8) << ty.width();
     let bits = ((value % &modulus) + &modulus) % &modulus;
     integer_from_bits(bits, ty)
@@ -2349,6 +2920,46 @@ mod tests {
 
     fn big(value: i128) -> BigInt {
         BigInt::from(value)
+    }
+
+    /// The recorded constant an integer-valued expression or binding folds to.
+    fn folded(value: i128) -> Option<Constant> {
+        Some(Constant::Integer(big(value)))
+    }
+
+    /// The recorded constant an array of integers folds to.
+    fn folded_array(values: &[i128]) -> Option<Constant> {
+        Some(Constant::Array(
+            values
+                .iter()
+                .map(|&value| Constant::Integer(big(value)))
+                .collect(),
+        ))
+    }
+
+    /// The type and recorded constant of every binding of a checked program,
+    /// in the order the bindings were declared.
+    fn checked_bindings(text: &str) -> Vec<(Type, Option<Constant>)> {
+        let syntax = parse(text).unwrap();
+        let checked = check_root(&syntax).unwrap();
+        checked
+            .bindings
+            .iter()
+            .map(|(_, binding)| (binding.ty.clone(), binding.constant.clone()))
+            .collect()
+    }
+
+    /// The value type a scalar spelling names, which is what checking records.
+    fn value_type(scalar: Scalar) -> Type {
+        Type::Scalar(scalar)
+    }
+
+    /// An array type, innermost element type first.
+    fn array_type(length: u64, element: Type) -> Type {
+        Type::Array {
+            length,
+            element: Box::new(element),
+        }
     }
 
     /// A `counter` module beside the `app` root module, with one public
@@ -2399,6 +3010,561 @@ pub fn bump(amount: int) -> int {
         ]);
         assert_eq!(error.message, message, "{marked}");
         assert_eq!(error.span, start..end, "{marked}");
+    }
+
+    #[test]
+    fn annotations_resolve_to_array_types() {
+        // An array annotation only resolves while its value is still rejected,
+        // so each case reads the type back from a rejected initializer.
+        for (source, expected) in [
+            (
+                "var a: [3]int = 1; fn main() -> void {}",
+                array_type(3, value_type(Scalar::Int)),
+            ),
+            (
+                "var a: [2][3]int = 1; fn main() -> void {}",
+                array_type(2, array_type(3, value_type(Scalar::Int))),
+            ),
+            (
+                "const n = 4; var a: [n]u8 = 1; fn main() -> void {}",
+                array_type(4, value_type(Scalar::U8)),
+            ),
+            (
+                "var a: [n]u8 = 1; const n = 4; fn main() -> void {}",
+                array_type(4, value_type(Scalar::U8)),
+            ),
+            (
+                "var a: [1 + 1]bool = 1; fn main() -> void {}",
+                array_type(2, value_type(Scalar::Bool)),
+            ),
+        ] {
+            let error = check_root(&parse(source).unwrap()).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!("cannot implicitly convert `int` to `{expected}`"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_underscore_length_comes_from_an_array_literal_initializer() {
+        assert_eq!(
+            checked_bindings("var a: [_]int = [1, 2, 3]; fn main() -> void {}")[0].0,
+            array_type(3, value_type(Scalar::Int))
+        );
+
+        for marked in [
+            "const a: «[_]int» = 1; fn main() -> void {}",
+            "fn main() -> void { var a: «[_]int» = 1; }",
+        ] {
+            rejects_root(marked, "`[_]` requires an array-literal initializer");
+        }
+        rejects_root(
+            "const a: «[_]int» = [0...]; fn main() -> void {}",
+            "`[_]` cannot take a length from a literal with a fill",
+        );
+        rejects_root(
+            "const a: [_]«[_]int» = [[1, 2]]; fn main() -> void {}",
+            "`[_]` requires an array-literal initializer",
+        );
+        for marked in [
+            "fn f(a: «[_]int») -> void {} fn main() -> void {}",
+            "fn f() -> «[_]int» { return 1; } fn main() -> void {}",
+        ] {
+            rejects_root(marked, "`[_]` requires an array-literal initializer");
+        }
+    }
+
+    #[test]
+    fn an_array_length_is_a_constant_int_of_at_least_one() {
+        for (marked, message) in [
+            (
+                "var a: [«0»]int = 1; fn main() -> void {}",
+                "array length must be at least 1",
+            ),
+            (
+                "var a: [«-1»]int = 1; fn main() -> void {}",
+                "array length must be at least 1",
+            ),
+            (
+                "var n = 3; var a: [«n»]int = 1; fn main() -> void {}",
+                "array length must be a constant expression",
+            ),
+            (
+                "var a: [«true»]int = 1; fn main() -> void {}",
+                "cannot implicitly convert `bool` to `int`",
+            ),
+            (
+                "const n: [«n»]int = 1; fn main() -> void {}",
+                "module-level initializer cycle involving `n`",
+            ),
+        ] {
+            rejects_root(marked, message);
+        }
+        rejects_root(
+            "fn main() -> void { var i = 0; var a: [«i»]int = 1; }",
+            "array length must be a constant expression",
+        );
+        // A call is rejected before signatures are resolved, at module level
+        // and in a function body alike.
+        for marked in [
+            "var a: [«size()»]int = 1; fn size() -> int { return 3; } fn main() -> void {}",
+            "fn size() -> int { return 3; } fn main() -> void { var a: [«size()»]int = 1; }",
+        ] {
+            rejects_root(marked, "array length must be a constant expression");
+        }
+    }
+
+    #[test]
+    fn an_underscore_takes_its_length_from_the_literal_element_count() {
+        for (source, expected) in [
+            ("var a: [_]int = [1, 2, 3]; fn main() -> void {}", 3),
+            (
+                "var a: [_][2]int = [[1, 2], [3, 4]]; fn main() -> void {}",
+                2,
+            ),
+            ("var a: [_]int = [7]; fn main() -> void {}", 1),
+        ] {
+            let syntax = parse(source).unwrap();
+            let StatementKind::Binding { initializer, .. } =
+                &syntax.statements[match syntax.files[0].items[0] {
+                    TopLevelItem::Binding { binding, .. } => binding,
+                    TopLevelItem::Function { .. } => unreachable!("the first item is a binding"),
+                }]
+                .kind
+            else {
+                unreachable!("the first item is a binding")
+            };
+            let length = inferred_length(&syntax, &(0..0), Some(*initializer)).unwrap();
+            assert_eq!(length, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn an_array_literal_takes_its_type_from_context() {
+        for (source, expected) in [
+            (
+                "fn main() -> void { var a: [3]int = [1, 2, 3]; }",
+                array_type(3, value_type(Scalar::Int)),
+            ),
+            (
+                "fn main() -> void { var a: [2]u8 = [0, 255]; }",
+                array_type(2, value_type(Scalar::U8)),
+            ),
+            (
+                "fn main() -> void { var a: [2]bool = [true, false]; }",
+                array_type(2, value_type(Scalar::Bool)),
+            ),
+            (
+                "fn main() -> void { var a: [2][3]int = [[1, 2, 3], [4, 5, 6]]; }",
+                array_type(2, array_type(3, value_type(Scalar::Int))),
+            ),
+        ] {
+            assert_eq!(checked_bindings(source)[0].0, expected, "{source}");
+        }
+        // A parameter, a result, and an assignment target give a literal its
+        // type the same way an annotation does.
+        accepts_source("fn take(a: [2]u8) -> void {} fn main() -> void { take([0, 255]); }");
+        accepts_source("fn make() -> [2]u8 { return [0, 255]; } fn main() -> void {}");
+        accepts_source("fn main() -> void { var a: [2]u8 = [0, 0]; a = [1, 255]; }");
+        // Context reaches the literal itself and no further, so a grouped
+        // literal is checked with none.
+        rejects_root(
+            "fn main() -> void { var a: [2]u8 = «([0, 255])»; }",
+            "cannot implicitly convert `[2]int` to `[2]u8`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: int = «[1, 2]»; }",
+            "cannot implicitly convert an array literal to `int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]u8 = [0, «256»]; }",
+            "integer literal out of range for `u8`",
+        );
+    }
+
+    #[test]
+    fn a_literal_without_context_takes_one_common_element_type() {
+        for (source, expected) in [
+            (
+                "fn main() -> void { var a = [1, 2, 3]; }",
+                array_type(3, value_type(Scalar::Int)),
+            ),
+            (
+                "fn main() -> void { var a = [true, false]; }",
+                array_type(2, value_type(Scalar::Bool)),
+            ),
+            (
+                "fn main() -> void { var x: u8 = 1; var a = [1, x]; }",
+                array_type(2, value_type(Scalar::U8)),
+            ),
+            (
+                "fn main() -> void { var x: u8 = 1; var a = [x, 1]; }",
+                array_type(2, value_type(Scalar::U8)),
+            ),
+            (
+                "fn main() -> void { var a = [[1, 2], [3, 4]]; }",
+                array_type(2, array_type(2, value_type(Scalar::Int))),
+            ),
+        ] {
+            assert_eq!(
+                checked_bindings(source).last().unwrap().0,
+                expected,
+                "{source}"
+            );
+        }
+        rejects_root(
+            "fn main() -> void { var x: u8 = 1; var y: int = 1; var a = [x, «y»]; }",
+            "cannot implicitly convert `int` to `u8`",
+        );
+    }
+
+    #[test]
+    fn an_array_literal_has_one_element_per_array_element() {
+        rejects_root(
+            "fn main() -> void { var a: [3]int = «[1, 2]»; }",
+            "expected 3 elements for `[3]int`, found 2",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = «[1, 2, 3]»; }",
+            "expected 2 elements for `[2]int`, found 3",
+        );
+        rejects_root(
+            "fn take(a: [3]int) -> void {} fn main() -> void { take(«[1, 2]»); }",
+            "expected 3 elements for `[3]int`, found 2",
+        );
+        rejects_root(
+            "fn make() -> [2]int { return «[1, 2, 3]»; } fn main() -> void {}",
+            "expected 2 elements for `[2]int`, found 3",
+        );
+    }
+
+    #[test]
+    fn a_fill_repeats_the_last_element_across_the_remaining_elements() {
+        for (source, expected) in [
+            ("const a: [2]int = [7...]; fn main() -> void {}", vec![7, 7]),
+            (
+                "const a: [8]int = [1, 2, 3, 0...]; fn main() -> void {}",
+                vec![1, 2, 3, 0, 0, 0, 0, 0],
+            ),
+            (
+                "const a: [3]int = [1, 2, 3...]; fn main() -> void {}",
+                vec![1, 2, 3],
+            ),
+        ] {
+            assert_eq!(
+                checked_bindings(source)[0].1,
+                folded_array(&expected),
+                "{source}"
+            );
+        }
+        // A nested fill takes its length from the element type.
+        let row = Constant::Array(vec![Constant::Integer(big(1)); 3]);
+        assert_eq!(
+            checked_bindings("const a: [2][3]u8 = [[1...]...]; fn main() -> void {}")[0].1,
+            Some(Constant::Array(vec![row.clone(), row]))
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = «[1, 2, 3...]»; }",
+            "expected at most 2 elements for `[2]int`, found 3",
+        );
+        rejects_root(
+            "fn main() -> void { var bad = [0«...»]; }",
+            "a fill requires a length from context",
+        );
+    }
+
+    #[test]
+    fn a_module_level_declaration_holds_a_constant_array() {
+        let source = "var counts: [3]int = [1, 2, 3];
+const limits: [2]u8 = [0, 255];
+fn main() -> void {}";
+        assert_eq!(
+            checked_bindings(source),
+            [
+                (array_type(3, value_type(Scalar::Int)), None),
+                (
+                    array_type(2, value_type(Scalar::U8)),
+                    folded_array(&[0, 255])
+                ),
+            ]
+        );
+        // A module-level `var` records no constant on its binding, so the
+        // folded array is read back from the initializer instead.
+        let syntax = parse(source).unwrap();
+        let checked = check_root(&syntax).unwrap();
+        let initializers: Vec<_> = checked
+            .module_bindings
+            .iter()
+            .map(|&statement| match syntax.statements[statement].kind {
+                StatementKind::Binding { initializer, .. } => {
+                    checked.expressions[initializer].constant.clone()
+                }
+                _ => unreachable!("module bindings are binding statements"),
+            })
+            .collect();
+        assert_eq!(
+            initializers,
+            [folded_array(&[1, 2, 3]), folded_array(&[0, 255])]
+        );
+        rejects_root(
+            "var seed = 1; var a: [2]int = «[seed, 2]»; fn main() -> void {}",
+            "module-level initializer must be a constant expression",
+        );
+    }
+
+    #[test]
+    fn a_whole_array_value_requires_an_identical_type() {
+        let bindings = checked_bindings("fn main() -> void { var a: [2]int = [1, 2]; var b = a; }");
+        assert_eq!(bindings[0].0, bindings[1].0);
+        accepts_source(
+            "fn take(a: [2]int) -> [2]int { return a; }
+             fn main() -> void { var a: [2]int = [1, 2]; var b: [2]int = [3, 4]; a = take(b); }",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var b: [2]int = [1, 2]; a = «b»; }",
+            "cannot implicitly convert `[2]int` to `[3]int`",
+        );
+        rejects_root(
+            "fn take(a: [3]int) -> void {}
+fn main() -> void { var b: [2]int = [1, 2]; take(«b»); }",
+            "cannot implicitly convert `[2]int` to `[3]int`",
+        );
+        rejects_root(
+            "fn make() -> [3]int { var b: [2]int = [1, 2]; return «b»; }
+fn main() -> void {}",
+            "cannot implicitly convert `[2]int` to `[3]int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = [1, 2]; var b = a «+» 1; }",
+            "integer `+` requires integer operands",
+        );
+    }
+
+    #[test]
+    fn indexing_an_array_yields_its_element_type() {
+        for (source, expected) in [
+            (
+                "fn main() -> void { var a: [3]int = [1, 2, 3]; var e = a[0]; }",
+                value_type(Scalar::Int),
+            ),
+            (
+                "fn main() -> void { var g: [2][3]u8 = [[1...]...]; var e = g[1]; }",
+                array_type(3, value_type(Scalar::U8)),
+            ),
+            (
+                "fn main() -> void { var g: [2][3]u8 = [[1...]...]; var e = g[1][2]; }",
+                value_type(Scalar::U8),
+            ),
+        ] {
+            assert_eq!(
+                checked_bindings(source).last().unwrap().0,
+                expected,
+                "{source}"
+            );
+        }
+        accepts_source("fn main() -> void { var a: [3]int = [1, 2, 3]; var i = 2; exit(a[i]); }");
+        rejects_root(
+            "fn main() -> void { var x = 1; var e = «x»[0]; }",
+            "cannot index `int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var i: u8 = 1; var e = a[«i»]; }",
+            "cannot implicitly convert `u8` to `int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var e = a[«true»]; }",
+            "cannot implicitly convert `bool` to `int`",
+        );
+    }
+
+    #[test]
+    fn a_constant_index_must_be_in_range_and_never_folds() {
+        accepts_source("fn main() -> void { const a: [3]int = [1, 2, 3]; exit(a[2]); }");
+        rejects_root(
+            "fn main() -> void { const a: [3]int = [1, 2, 3]; exit(a[«3»]); }",
+            "index 3 is out of range for `[3]int`",
+        );
+        rejects_root(
+            "fn main() -> void { const a: [3]int = [1, 2, 3]; exit(a[«-1»]); }",
+            "index -1 is out of range for `[3]int`",
+        );
+        // `a[i]` is never a constant expression, even when the array and the
+        // index both are.
+        rejects_root(
+            "const a: [3]int = [1, 2, 3]; const first = «a[0]»; fn main() -> void {}",
+            "module-level initializer must be a constant expression",
+        );
+    }
+
+    #[test]
+    fn an_element_of_a_mutable_array_may_be_assigned() {
+        accepts_source("fn main() -> void { var a: [3]int = [1, 2, 3]; a[0] = 9; a[1] += 1; }");
+        accepts_source(
+            "fn main() -> void { var g: [2][3]int = [[1...]...]; g[0][1] = 9; g[1] = [4, 5, 6]; }",
+        );
+        rejects_root(
+            "fn main() -> void { const a: [3]int = [1, 2, 3]; «a»[0] = 9; }",
+            "cannot assign to immutable binding `a`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; a[0] = «true»; }",
+            "cannot implicitly convert `bool` to `int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; «a»[0][0] = 9; }",
+            "cannot index `int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; a[«3»] = 9; }",
+            "index 3 is out of range for `[3]int`",
+        );
+        rejects_root(
+            "fn main() -> void { var g: [2][3]int = [[1...]...]; g[0] «+=» 1; }",
+            "integer `+=` requires integer operands",
+        );
+    }
+
+    #[test]
+    fn len_reads_the_length_from_the_operands_type() {
+        for (source, expected) in [
+            (
+                "fn main() -> void { const a: [3]int = [1, 2, 3]; const n = len(a); }",
+                3,
+            ),
+            (
+                "fn main() -> void { var a: [4]u8 = [0...]; const n = len(a); }",
+                4,
+            ),
+            (
+                "fn main() -> void { var g: [2][3]int = [[1...]...]; const n = len(g[0]); }",
+                3,
+            ),
+        ] {
+            assert_eq!(
+                checked_bindings(source).last().unwrap(),
+                &(value_type(Scalar::Int), folded(expected)),
+                "{source}"
+            );
+        }
+        // A folded length is usable wherever a constant expression is.
+        assert_eq!(
+            checked_bindings(
+                "const a: [3]int = [1, 2, 3];
+                 fn main() -> void { var b: [len(a)]u8 = [0...]; }"
+            )[1]
+            .0,
+            array_type(3, value_type(Scalar::U8))
+        );
+        rejects_root(
+            "fn main() -> void { var x = 1; const n = len(«x»); }",
+            "`len` requires an array operand, found `int`",
+        );
+        // Reaching the operand's type through a call means the length does not
+        // fold, because the call is still evaluated.
+        rejects_root(
+            "fn make() -> [3]int { return [1, 2, 3]; }
+const n = len(«make()»);
+fn main() -> void {}",
+            "module-level initializer must be a constant expression",
+        );
+    }
+
+    #[test]
+    fn arrays_compare_for_equality_only() {
+        accepts_source(
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var b: [3]int = [1, 2, 3];
+                 if a == b { exit(1); }
+                 if a != b { exit(2); }
+             }",
+        );
+        for (source, expected) in [
+            (
+                "const a: [3]int = [1, 2, 3]; const same = a == [1, 2, 3]; fn main() -> void {}",
+                folded(1),
+            ),
+            (
+                "const a: [3]int = [1, 2, 3]; const same = a == [1, 2, 4]; fn main() -> void {}",
+                folded(0),
+            ),
+            (
+                "const a: [3]int = [1, 2, 3]; const same = a != [1, 2, 3]; fn main() -> void {}",
+                folded(0),
+            ),
+        ] {
+            assert_eq!(checked_bindings(source)[1].1, expected, "{source}");
+        }
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var b: [3]int = [1, 2, 3];
+             if a «<» b { exit(1); } }",
+            "only `==` and `!=` are defined on `[3]int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var b: [2]int = [1, 2];
+             if a «==» b { exit(1); } }",
+            "comparison operands have different types `[3]int` and `[2]int`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [3]int = [1, 2, 3]; var x = 1;
+             if a «==» x { exit(1); } }",
+            "comparison operands have different types `[3]int` and `int`",
+        );
+    }
+
+    #[test]
+    fn for_in_binds_an_element_and_an_optional_index() {
+        for (source, value, index) in [
+            (
+                "fn main() -> void { var a: [2]u8 = [0...]; for v in a { exit(int(v)); } }",
+                value_type(Scalar::U8),
+                None,
+            ),
+            (
+                "fn main() -> void { var g: [2][3]int = [[1...]...]; for row, i in g { exit(i); } }",
+                array_type(3, value_type(Scalar::Int)),
+                Some(value_type(Scalar::Int)),
+            ),
+        ] {
+            let syntax = parse(source).unwrap();
+            let checked = check_root(&syntax).unwrap();
+            let (_, bindings) = checked.iterations.iter().next().unwrap();
+            assert_eq!(checked.bindings[bindings.value].ty, value, "{source}");
+            assert!(!checked.bindings[bindings.value].mutable, "{source}");
+            assert_eq!(
+                bindings
+                    .index
+                    .map(|binding| checked.bindings[binding].ty.clone()),
+                index,
+                "{source}"
+            );
+        }
+        accepts_source(
+            "fn main() -> void { var g: [2][3]int = [[1...]...];
+             for row in g { for v in row { exit(v); } } }",
+        );
+        // The body may shadow the bindings, and neither outlives the loop.
+        accepts_source(
+            "fn main() -> void { var a: [2]int = [1, 2]; for v in a { const v = 9; exit(v); } }",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = [1, 2]; for v in a {} exit(«v»); }",
+            "unknown binding `v`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = [1, 2]; for v in a { «v» = 9; } }",
+            "cannot assign to immutable binding `v`",
+        );
+        rejects_root(
+            "fn main() -> void { var a: [2]int = [1, 2]; for v, «v» in a {} }",
+            "a `for` loop's value and index bindings must have different names",
+        );
+        rejects_root(
+            "fn main() -> void { var x = 1; for v in «x» {} }",
+            "`for … in` requires an array, found `int`",
+        );
     }
 
     #[test]
@@ -2670,7 +3836,7 @@ pub fn bump(amount: int) -> int {
         assert_ne!(ids[1], ids[2]);
         assert_ne!(ids[0], ids[2]);
         for id in &ids {
-            assert_eq!(checked.bindings[*id].ty, Type::Int);
+            assert_eq!(checked.bindings[*id].ty, value_type(Scalar::Int));
         }
         let facts: Vec<_> = syntax
             .expressions
@@ -2678,7 +3844,7 @@ pub fn bump(amount: int) -> int {
             .map(|(id, _)| &checked.expressions[id])
             .collect();
         assert_eq!(facts.len(), 5);
-        assert!(facts.iter().all(|fact| fact.ty == Type::Int));
+        assert!(facts.iter().all(|fact| fact.ty == value_type(Scalar::Int)));
         assert_eq!(facts[0].value, ExpressionValue::Integer);
         assert_eq!(facts[1].value, ExpressionValue::Reference(ids[0]));
         assert_eq!(facts[2].value, ExpressionValue::Reference(ids[1]));
@@ -2694,7 +3860,11 @@ pub fn bump(amount: int) -> int {
         assert_eq!(ids.len(), 4);
         let mutable: Vec<_> = checked.bindings.iter().map(|(_, b)| b.mutable).collect();
         assert_eq!(mutable, [true, false, true, false]);
-        let targets: Vec<_> = checked.assignments.iter().map(|(_, id)| *id).collect();
+        let targets: Vec<_> = checked
+            .assignments
+            .iter()
+            .map(|(_, target)| target.binding)
+            .collect();
         assert_eq!(targets, [ids[0], ids[2], ids[0]]);
         let references: Vec<_> = checked
             .expressions
@@ -2709,6 +3879,9 @@ pub fn bump(amount: int) -> int {
                 | ExpressionValue::Binary { .. }
                 | ExpressionValue::Comparison { .. }
                 | ExpressionValue::Logical { .. }
+                | ExpressionValue::Array { .. }
+                | ExpressionValue::Index { .. }
+                | ExpressionValue::Length { .. }
                 | ExpressionValue::LogicalNot { .. }
                 | ExpressionValue::Call { .. } => None,
             })
@@ -2828,7 +4001,7 @@ pub fn bump(amount: int) -> int {
             .filter_map(|(_, statement)| match &statement.kind {
                 StatementKind::Return { value: Some(value) } => Some((
                     &text[syntax.expressions[*value].span.clone()],
-                    checked.expressions[*value].ty,
+                    checked.expressions[*value].ty.clone(),
                 )),
                 _ => None,
             })
@@ -2836,11 +4009,11 @@ pub fn bump(amount: int) -> int {
         assert_eq!(
             returned,
             [
-                ("200", Type::U8),
-                ("1 + 2", Type::I64),
-                ("1 < 2", Type::Bool),
-                ("1", Type::Int),
-                ("2", Type::Int),
+                ("200", value_type(Scalar::U8)),
+                ("1 + 2", value_type(Scalar::I64)),
+                ("1 < 2", value_type(Scalar::Bool)),
+                ("1", value_type(Scalar::Int)),
+                ("2", value_type(Scalar::Int)),
             ]
         );
 
@@ -2968,13 +4141,13 @@ pub fn bump(amount: int) -> int {
             checked
                 .bindings
                 .iter()
-                .map(|(_, binding)| (binding.ty, binding.mutable))
+                .map(|(_, binding)| (binding.ty.clone(), binding.mutable))
                 .collect::<Vec<_>>(),
             [
-                (Type::U8, false),
-                (Type::Bool, false),
-                (Type::U8, false),
-                (Type::Bool, false),
+                (value_type(Scalar::U8), false),
+                (value_type(Scalar::Bool), false),
+                (value_type(Scalar::U8), false),
+                (value_type(Scalar::Bool), false),
             ]
         );
 
@@ -3062,9 +4235,13 @@ pub fn bump(amount: int) -> int {
             checked
                 .bindings
                 .iter()
-                .map(|(_, binding)| (binding.ty, binding.mutable))
+                .map(|(_, binding)| (binding.ty.clone(), binding.mutable))
                 .collect::<Vec<_>>(),
-            [(Type::U8, false), (Type::Bool, true), (Type::U8, false)]
+            [
+                (value_type(Scalar::U8), false),
+                (value_type(Scalar::Bool), true),
+                (value_type(Scalar::U8), false),
+            ]
         );
         let initializer = match &syntax.statements[syntax.functions[typed].body[1]].kind {
             StatementKind::Binding { initializer, .. } => *initializer,
@@ -3097,11 +4274,24 @@ pub fn bump(amount: int) -> int {
 
     #[test]
     fn calls_are_not_constant_expressions() {
-        rejects_source(
-            "fn value() -> int { return 1; } const result = value(); fn main() -> void {}",
-            "value()",
-            "module-level initializer must be a constant expression",
-        );
+        // Signatures resolve after module-level initializers, so a call is
+        // reported where it is written rather than where the initializer ends.
+        for (source, marked) in [
+            (
+                "fn value() -> int { return 1; } const result = value(); fn main() -> void {}",
+                "value()",
+            ),
+            (
+                "fn value() -> int { return 1; } const result = 1 + value(); fn main() -> void {}",
+                "value()",
+            ),
+        ] {
+            rejects_source(
+                source,
+                marked,
+                "module-level initializer must be a constant expression",
+            );
+        }
     }
 
     #[test]
@@ -3122,7 +4312,7 @@ pub fn bump(amount: int) -> int {
             checked
                 .bindings
                 .iter()
-                .all(|(_, binding)| binding.ty == Type::Bool)
+                .all(|(_, binding)| binding.ty == value_type(Scalar::Bool))
         );
         assert_eq!(
             checked
@@ -3130,13 +4320,14 @@ pub fn bump(amount: int) -> int {
                 .iter()
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
-            [Some(big(1)), Some(big(1)), None, Some(big(1)), Some(big(0))]
+            [folded(1), folded(1), None, folded(1), folded(0)]
         );
         assert!(
             checked
                 .expressions
                 .iter()
-                .all(|(_, expression)| expression.ty == Type::Bool && !expression.untyped)
+                .all(|(_, expression)| expression.ty == value_type(Scalar::Bool)
+                    && !expression.untyped)
         );
     }
 
@@ -3158,15 +4349,15 @@ pub fn bump(amount: int) -> int {
             checked
                 .bindings
                 .iter()
-                .map(|(_, binding)| (binding.ty, binding.constant.clone()))
+                .map(|(_, binding)| (binding.ty.clone(), binding.constant.clone()))
                 .collect::<Vec<_>>(),
             [
-                (Type::Bool, Some(big(1))),
-                (Type::Bool, Some(big(0))),
-                (Type::Bool, Some(big(1))),
-                (Type::Bool, Some(big(1))),
-                (Type::U8, None),
-                (Type::Bool, None),
+                (value_type(Scalar::Bool), folded(1)),
+                (value_type(Scalar::Bool), folded(0)),
+                (value_type(Scalar::Bool), folded(1)),
+                (value_type(Scalar::Bool), folded(1)),
+                (value_type(Scalar::U8), None),
+                (value_type(Scalar::Bool), None),
             ]
         );
 
@@ -3185,7 +4376,7 @@ pub fn bump(amount: int) -> int {
             let checked = check_root(&syntax).unwrap();
             assert_eq!(
                 checked.bindings.iter().next().unwrap().1.constant,
-                Some(BigInt::from(expected))
+                Some(Constant::Integer(BigInt::from(expected)))
             );
         }
 
@@ -3226,7 +4417,7 @@ pub fn bump(amount: int) -> int {
                 .iter()
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
-            [Some(big(0)), Some(big(1)), Some(big(1)), None, None]
+            [folded(0), folded(1), folded(1), None, None]
         );
         let guarded = match syntax.statements[syntax.functions[checked.main].body[4]].kind {
             StatementKind::Binding { initializer, .. } => initializer,
@@ -3430,28 +4621,29 @@ pub fn bump(amount: int) -> int {
         let types: Vec<_> = checked
             .bindings
             .iter()
-            .map(|(_, binding)| binding.ty)
+            .map(|(_, binding)| binding.ty.clone())
             .collect();
         assert_eq!(
             types,
             [
-                Type::U8,
-                Type::U8,
-                Type::U8,
-                Type::U8,
-                Type::U8,
-                Type::U16,
-                Type::I8,
-                Type::U8,
-                Type::U8,
-                Type::U8,
-                Type::U8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U16,
+                Scalar::I8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U8,
+                Scalar::U8,
             ]
+            .map(value_type)
         );
 
-        for left in Type::ALL_INTEGERS {
+        for left in Scalar::ALL_INTEGERS {
             let left_name = left.name();
-            for right in Type::ALL_INTEGERS {
+            for right in Scalar::ALL_INTEGERS {
                 let right_name = right.name();
                 let body = format!(
                     "var left: {left_name} = 1; var right: {right_name} = 1; const result = left + right;"
@@ -3584,27 +4776,27 @@ pub fn bump(amount: int) -> int {
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
             [
-                Some(big(130)),
-                Some(big(42)),
-                Some(big(-2)),
-                Some(big(-1)),
-                Some(big(-1)),
-                Some(big(12)),
-                Some(big(27)),
-                Some(BigInt::from(1u8) << 40),
-                Some(big(-2)),
-                Some(big(4)),
-                Some(big(255)),
-                Some(big(144)),
-                Some(big(255)),
-                Some(big(128)),
-                Some(big(0)),
-                Some(big(-1)),
-                Some(big(-1)),
-                Some(big(42)),
-                Some(big(1)),
-                Some(big(130)),
-                Some(big(131)),
+                folded(130),
+                folded(42),
+                folded(-2),
+                folded(-1),
+                folded(-1),
+                folded(12),
+                folded(27),
+                Some(Constant::Integer(BigInt::from(1u8) << 40)),
+                folded(-2),
+                folded(4),
+                folded(255),
+                folded(144),
+                folded(255),
+                folded(128),
+                folded(0),
+                folded(-1),
+                folded(-1),
+                folded(42),
+                folded(1),
+                folded(130),
+                folded(131),
                 None,
                 None,
                 None,
@@ -3703,7 +4895,7 @@ pub fn bump(amount: int) -> int {
             .collect();
         assert_eq!(
             expression_constants,
-            [Some(big(3)), Some(big(3)), Some(big(3)), None]
+            [folded(3), folded(3), folded(3), None]
         );
         assert_eq!(
             checked
@@ -3711,7 +4903,7 @@ pub fn bump(amount: int) -> int {
                 .iter()
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
-            [Some(big(3)), None, Some(big(3)), None]
+            [folded(3), None, folded(3), None]
         );
     }
 
@@ -3743,21 +4935,21 @@ pub fn bump(amount: int) -> int {
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
             [
-                Some(big(5)),
-                Some(big(5)),
-                Some(big(4)),
-                Some(big(3)),
-                Some(big(4)),
-                Some(big(4)),
-                Some(big(128)),
-                Some(big(0)),
+                folded(5),
+                folded(5),
+                folded(4),
+                folded(3),
+                folded(4),
+                folded(4),
+                folded(128),
+                folded(0),
                 None,
                 None,
-                Some(big(0)),
-                Some(big(-1)),
-                Some(big(-1)),
-                Some(big(256)),
-                Some(big(1)),
+                folded(0),
+                folded(-1),
+                folded(-1),
+                folded(256),
+                folded(1),
             ]
         );
 
@@ -3802,9 +4994,9 @@ pub fn bump(amount: int) -> int {
             checked
                 .bindings
                 .iter()
-                .map(|(_, binding)| binding.ty)
+                .map(|(_, binding)| binding.ty.clone())
                 .collect::<Vec<_>>(),
-            [Type::Uint, Type::U64, Type::I64, Type::U16]
+            [Scalar::Uint, Scalar::U64, Scalar::I64, Scalar::U16].map(value_type)
         );
         assert!(
             checked
@@ -3819,7 +5011,7 @@ pub fn bump(amount: int) -> int {
             "unary `-` is not permitted on `u8`",
         );
 
-        let too_large = BigInt::from(Type::Int.max()) + 1u8;
+        let too_large = BigInt::from(Scalar::Int.max()) + 1u8;
         rejects(
             &format!("var count: uint = 1; const invalid = u8.truncate({too_large} << count);"),
             &too_large.to_string(),
@@ -3863,7 +5055,7 @@ pub fn bump(amount: int) -> int {
             StatementKind::Binding { initializer, .. } => initializer,
             _ => unreachable!(),
         };
-        assert_eq!(checked.expressions[root].constant, Some(big(21)));
+        assert_eq!(checked.expressions[root].constant, folded(21));
         assert!(
             checked
                 .expressions
@@ -3897,7 +5089,7 @@ pub fn bump(amount: int) -> int {
 
     #[test]
     fn integer_contract_uses_contextual_literals_and_exact_references() {
-        for ty in Type::ALL_INTEGERS {
+        for ty in Scalar::ALL_INTEGERS {
             let name = ty.name();
             let max = u128::from(ty.max());
             for base in [2, 8, 10, 16] {
@@ -3907,12 +5099,17 @@ pub fn bump(amount: int) -> int {
                 ))
                 .unwrap();
                 let checked = check_root(&syntax).unwrap();
-                assert!(checked.bindings.iter().all(|(_, binding)| binding.ty == ty));
+                assert!(
+                    checked
+                        .bindings
+                        .iter()
+                        .all(|(_, binding)| binding.ty == value_type(ty))
+                );
                 assert!(
                     checked
                         .expressions
                         .iter()
-                        .all(|(_, expression)| expression.ty == ty)
+                        .all(|(_, expression)| expression.ty == value_type(ty))
                 );
 
                 let overflow = literal(max + 1, base);
@@ -3924,9 +5121,9 @@ pub fn bump(amount: int) -> int {
             }
         }
 
-        for source in Type::ALL_INTEGERS {
+        for source in Scalar::ALL_INTEGERS {
             let source_name = source.name();
-            for destination in Type::ALL_INTEGERS {
+            for destination in Scalar::ALL_INTEGERS {
                 let destination_name = destination.name();
                 for target in [
                     format!("const target: {destination_name} = source;"),
@@ -3951,7 +5148,7 @@ pub fn bump(amount: int) -> int {
                 }
             }
             let body = format!("const source: {source_name} = 1; exit(source);");
-            if source == Type::Int {
+            if source == Scalar::Int {
                 let syntax = parse(&format!("fn main() -> void {{ {body} }}")).unwrap();
                 check_root(&syntax).unwrap();
             } else {
@@ -3988,10 +5185,10 @@ pub fn bump(amount: int) -> int {
         assert_eq!(
             constants,
             [
-                Some(big(42)),
-                Some(big(42)),
-                Some(big(-1)),
-                Some(big(42)),
+                folded(42),
+                folded(42),
+                folded(-1),
+                folded(42),
                 None,
                 None,
                 None,
@@ -4040,7 +5237,7 @@ pub fn bump(amount: int) -> int {
             let checked = check_root(&syntax).unwrap();
             assert_eq!(
                 checked.bindings.iter().next().unwrap().1.constant,
-                Some(big(255))
+                folded(255)
             );
             rejects(
                 &format!("exit(0); const result = u8.truncate(u64({literal}));"),
@@ -4073,14 +5270,14 @@ pub fn bump(amount: int) -> int {
                 .map(|(_, binding)| binding.constant.clone())
                 .collect::<Vec<_>>(),
             [
-                Some(big(255)),
-                Some(big(255)),
+                folded(255),
+                folded(255),
                 None,
                 None,
                 None,
-                Some(big(-1)),
-                Some(big(-1)),
-                Some(BigInt::from(u64::MAX))
+                folded(-1),
+                folded(-1),
+                Some(Constant::Integer(BigInt::from(u64::MAX)))
             ],
         );
         for body in [
@@ -4100,13 +5297,13 @@ pub fn bump(amount: int) -> int {
 
     #[test]
     fn native_integer_widths_follow_the_host_and_model_both_specified_widths() {
-        assert_eq!(Type::Int.width(), usize::BITS);
-        assert_eq!(Type::Uint.width(), usize::BITS);
+        assert_eq!(Scalar::Int.width(), usize::BITS);
+        assert_eq!(Scalar::Uint.width(), usize::BITS);
         for pointer_width in [32, 64] {
-            assert_eq!(Type::Int.width_on(pointer_width), pointer_width);
-            assert_eq!(Type::Uint.width_on(pointer_width), pointer_width);
-            assert_eq!(Type::I32.width_on(pointer_width), 32);
-            assert_eq!(Type::U64.width_on(pointer_width), 64);
+            assert_eq!(Scalar::Int.width_on(pointer_width), pointer_width);
+            assert_eq!(Scalar::Uint.width_on(pointer_width), pointer_width);
+            assert_eq!(Scalar::I32.width_on(pointer_width), 32);
+            assert_eq!(Scalar::U64.width_on(pointer_width), 64);
         }
     }
 
@@ -4135,14 +5332,14 @@ pub fn bump(amount: int) -> int {
         let counter = checked.declarations[module_statements[0]];
         let base = checked.declarations[module_statements[1]];
         assert!(checked.bindings[counter].mutable);
-        assert_eq!(checked.bindings[counter].ty, Type::Int);
+        assert_eq!(checked.bindings[counter].ty, value_type(Scalar::Int));
         assert_eq!(checked.bindings[counter].constant, None);
-        assert_eq!(checked.bindings[base].constant, Some(big(40)));
+        assert_eq!(checked.bindings[base].constant, folded(40));
         assert!(
             checked
                 .assignments
                 .iter()
-                .any(|(_, target)| *target == counter)
+                .any(|(_, target)| target.binding == counter)
         );
         assert_eq!(checked.bindings.len(), 4);
     }

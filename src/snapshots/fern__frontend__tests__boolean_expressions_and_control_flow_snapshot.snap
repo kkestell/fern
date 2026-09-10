@@ -1,13 +1,15 @@
 ---
 source: src/frontend.rs
-expression: project(&parse(source).unwrap())
+expression: projected(source)
 ---
-fn main name=3..7 result=Void span=0..356
-  var ready name=24..29 annotation=Some(TypeAnnotation { ty: Bool, span: 31..35 }) span=20..43
+fn main name=3..7 span=0..356
+  result void
+  var ready name=24..29 span=20..43
+    named bool span=31..35
     boolean true span=38..42
-  const stopped name=50..57 annotation=None span=44..66
+  const stopped name=50..57 span=44..66
     boolean false span=60..65
-  const result name=73..79 annotation=None span=67..122
+  const result name=73..79 span=67..122
     logical Or operator=104..106 span=82..121
       logical And operator=92..94 span=82..103
         comparison Less operator=88..89 span=82..91
@@ -44,7 +46,8 @@ fn main name=3..7 result=Void span=0..356
       continue label=- label_span=None span=209..218
   for label=rows label_span=Some(226..230) span=221..291
     initializer
-      var i name=235..236 annotation=Some(TypeAnnotation { ty: Int, span: 238..241 }) span=231..246
+      var i name=235..236 span=231..246
+        named int span=238..241
         integer 0 span=244..245
     condition
       comparison Less operator=249..250 span=247..252

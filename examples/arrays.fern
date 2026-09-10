@@ -1,0 +1,39 @@
+var origin: [_]int = [1, 2, 3];
+const palette: [2][3]u8 = [[1, 2, 3], [4, 5, 6]];
+
+fn total(row: [3]int) -> int {
+    var sum = 0;
+    for value in row {
+        sum += value;
+    }
+    return sum;
+}
+
+fn scaled(row: [3]int, factor: int) -> [3]int {
+    var out: [3]int = [0...];
+    for value, index in row {
+        out[index] = value * factor;
+    }
+    return out;
+}
+
+fn main() -> void {
+    var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+
+    var copy = grid;
+    copy[0][0] = 99;
+    if copy == grid {
+        exit(255);
+    }
+
+    var sum = 0;
+    for var row = 0; row < len(grid); row += 1 {
+        sum += total(grid[row]);
+    }
+
+    origin[0] = 4;
+    sum += total(scaled(origin, 2));
+    sum += int(palette[0][2]);
+
+    exit(sum);
+}

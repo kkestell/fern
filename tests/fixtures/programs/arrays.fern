@@ -1,0 +1,33 @@
+const weights: [_]int = [1, 2, 3];
+
+fn weighted(row: [3]int) -> int {
+    var total = 0;
+    for v, i in row {
+        total = total + v * weights[i];
+    }
+    return total;
+}
+
+fn totals(grid: [2][3]int) -> [2]int {
+    var out: [2]int = [0...];
+    for var r = 0; r < len(grid); r = r + 1 {
+        out[r] = weighted(grid[r]);
+    }
+    return out;
+}
+
+fn main() -> void {
+    var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+
+    var copy = grid;
+    copy[0][0] = 99;
+    if copy == grid {
+        exit(255);
+    }
+
+    var sum = 0;
+    for t in totals(grid) {
+        sum = sum + t;
+    }
+    exit(sum); // reports 46
+}

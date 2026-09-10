@@ -20,6 +20,9 @@ The examples form a tour of the currently supported language, grouped by topic:
   three `for` forms, and loop control.
 - [Functions](examples/functions.fern) covers parameters, nested and recursive
   calls, and value and `void` returns.
+- [Arrays](examples/arrays.fern) covers array types, literals and fills,
+  indexing, `len`, array comparison, whole-array copies, and both `for … in`
+  forms.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is

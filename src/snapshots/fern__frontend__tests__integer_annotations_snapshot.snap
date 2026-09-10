@@ -1,55 +1,76 @@
 ---
 source: src/frontend.rs
-expression: project(&parse(&source).unwrap())
+expression: projected(&source)
 ---
-fn main name=14..18 result=Void span=11..660
-  var value name=35..40 annotation=Some(TypeAnnotation { ty: I8, span: 42..44 }) span=31..52
+fn main name=14..18 span=11..660
+  result void
+  var value name=35..40 span=31..52
+    named i8 span=42..44
     integer 0x2A span=47..51
   block span=53..91
-    const copy name=61..65 annotation=Some(TypeAnnotation { ty: I8, span: 78..80 }) span=55..89
+    const copy name=61..65 span=55..89
+      named i8 span=78..80
       reference value span=83..88
-  var value name=96..101 annotation=Some(TypeAnnotation { ty: I16, span: 103..106 }) span=92..114
+  var value name=96..101 span=92..114
+    named i16 span=103..106
     integer 0x2A span=109..113
   block span=115..154
-    const copy name=123..127 annotation=Some(TypeAnnotation { ty: I16, span: 140..143 }) span=117..152
+    const copy name=123..127 span=117..152
+      named i16 span=140..143
       reference value span=146..151
-  var value name=159..164 annotation=Some(TypeAnnotation { ty: I32, span: 166..169 }) span=155..177
+  var value name=159..164 span=155..177
+    named i32 span=166..169
     integer 0x2A span=172..176
   block span=178..217
-    const copy name=186..190 annotation=Some(TypeAnnotation { ty: I32, span: 203..206 }) span=180..215
+    const copy name=186..190 span=180..215
+      named i32 span=203..206
       reference value span=209..214
-  var value name=222..227 annotation=Some(TypeAnnotation { ty: I64, span: 229..232 }) span=218..240
+  var value name=222..227 span=218..240
+    named i64 span=229..232
     integer 0x2A span=235..239
   block span=241..280
-    const copy name=249..253 annotation=Some(TypeAnnotation { ty: I64, span: 266..269 }) span=243..278
+    const copy name=249..253 span=243..278
+      named i64 span=266..269
       reference value span=272..277
-  var value name=285..290 annotation=Some(TypeAnnotation { ty: U8, span: 292..294 }) span=281..302
+  var value name=285..290 span=281..302
+    named u8 span=292..294
     integer 0x2A span=297..301
   block span=303..341
-    const copy name=311..315 annotation=Some(TypeAnnotation { ty: U8, span: 328..330 }) span=305..339
+    const copy name=311..315 span=305..339
+      named u8 span=328..330
       reference value span=333..338
-  var value name=346..351 annotation=Some(TypeAnnotation { ty: U16, span: 353..356 }) span=342..364
+  var value name=346..351 span=342..364
+    named u16 span=353..356
     integer 0x2A span=359..363
   block span=365..404
-    const copy name=373..377 annotation=Some(TypeAnnotation { ty: U16, span: 390..393 }) span=367..402
+    const copy name=373..377 span=367..402
+      named u16 span=390..393
       reference value span=396..401
-  var value name=409..414 annotation=Some(TypeAnnotation { ty: U32, span: 416..419 }) span=405..427
+  var value name=409..414 span=405..427
+    named u32 span=416..419
     integer 0x2A span=422..426
   block span=428..467
-    const copy name=436..440 annotation=Some(TypeAnnotation { ty: U32, span: 453..456 }) span=430..465
+    const copy name=436..440 span=430..465
+      named u32 span=453..456
       reference value span=459..464
-  var value name=472..477 annotation=Some(TypeAnnotation { ty: U64, span: 479..482 }) span=468..490
+  var value name=472..477 span=468..490
+    named u64 span=479..482
     integer 0x2A span=485..489
   block span=491..530
-    const copy name=499..503 annotation=Some(TypeAnnotation { ty: U64, span: 516..519 }) span=493..528
+    const copy name=499..503 span=493..528
+      named u64 span=516..519
       reference value span=522..527
-  var value name=535..540 annotation=Some(TypeAnnotation { ty: Int, span: 542..545 }) span=531..553
+  var value name=535..540 span=531..553
+    named int span=542..545
     integer 0x2A span=548..552
   block span=554..593
-    const copy name=562..566 annotation=Some(TypeAnnotation { ty: Int, span: 579..582 }) span=556..591
+    const copy name=562..566 span=556..591
+      named int span=579..582
       reference value span=585..590
-  var value name=598..603 annotation=Some(TypeAnnotation { ty: Uint, span: 605..609 }) span=594..617
+  var value name=598..603 span=594..617
+    named uint span=605..609
     integer 0x2A span=612..616
   block span=618..658
-    const copy name=626..630 annotation=Some(TypeAnnotation { ty: Uint, span: 643..647 }) span=620..656
+    const copy name=626..630 span=620..656
+      named uint span=643..647
       reference value span=650..655

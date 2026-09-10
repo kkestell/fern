@@ -11,7 +11,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -22,7 +24,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -35,7 +39,9 @@ Program {
                     span: Some(
                         127..129,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: NotEqual,
                         left: Value(
@@ -51,7 +57,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -62,7 +70,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -75,7 +85,9 @@ Program {
                     span: Some(
                         138..139,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Divide,
                         form: Infix,
@@ -94,7 +106,9 @@ Program {
                     span: Some(
                         148..149,
                     ),
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Comparison {
                         operator: Greater,
                         left: Value(
@@ -110,7 +124,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Bool,
+                    ty: Scalar(
+                        Bool,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -125,10 +141,18 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
-                    Bool,
-                    Bool,
-                    Bool,
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Bool,
+                    ),
+                    Scalar(
+                        Bool,
+                    ),
+                    Scalar(
+                        Bool,
+                    ),
                 ],
                 blocks: [
                     Block {

@@ -5,8 +5,12 @@ expression: lowered_tree(MODULE_TREE).program()
 Program {
     globals: [
         Global {
-            ty: Int,
-            value: 0,
+            ty: Scalar(
+                Int,
+            ),
+            values: [
+                0,
+            ],
         },
     ],
     functions: [
@@ -16,17 +20,23 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -39,7 +49,9 @@ Program {
                     span: Some(
                         141..142,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -58,7 +70,9 @@ Program {
                     span: Some(
                         148..149,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Subtract,
                         form: Infix,
@@ -153,7 +167,9 @@ Program {
         Function {
             parameters: 0,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [],
             flow: ControlFlow {
@@ -179,12 +195,16 @@ Program {
         Function {
             parameters: 1,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -195,7 +215,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -206,14 +228,18 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: CallResult,
                 },
                 Value {
                     span: Some(
                         339..340,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -231,7 +257,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Global(
                             GlobalId(
@@ -246,7 +274,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {
@@ -349,12 +379,16 @@ Program {
         Function {
             parameters: 1,
             result: Some(
-                Int,
+                Scalar(
+                    Int,
+                ),
             ),
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -367,7 +401,9 @@ Program {
                     span: Some(
                         510..511,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Multiply,
                         form: Infix,
@@ -388,7 +424,9 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

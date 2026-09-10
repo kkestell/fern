@@ -11,7 +11,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -22,7 +24,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -35,7 +39,9 @@ Program {
                     span: Some(
                         100..101,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Add,
                         form: Infix,
@@ -53,7 +59,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -64,7 +72,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -77,7 +87,9 @@ Program {
                     span: Some(
                         124..125,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Subtract,
                         form: Infix,
@@ -95,7 +107,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -106,7 +120,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -119,7 +135,9 @@ Program {
                     span: Some(
                         164..165,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Multiply,
                         form: Infix,
@@ -137,7 +155,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -148,7 +168,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -161,7 +183,9 @@ Program {
                     span: Some(
                         186..187,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Divide,
                         form: Infix,
@@ -179,7 +203,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -190,7 +216,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -203,7 +231,9 @@ Program {
                     span: Some(
                         211..212,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Remainder,
                         form: Infix,
@@ -221,7 +251,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -232,7 +264,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -245,7 +279,9 @@ Program {
                     span: Some(
                         255..257,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: WrappingAdd,
                         form: Infix,
@@ -263,7 +299,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -274,7 +312,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -287,7 +327,9 @@ Program {
                     span: Some(
                         289..291,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: WrappingSubtract,
                         form: Infix,
@@ -305,7 +347,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -316,7 +360,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -329,7 +375,9 @@ Program {
                     span: Some(
                         339..341,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: WrappingMultiply,
                         form: Infix,
@@ -347,7 +395,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -360,7 +410,9 @@ Program {
                     span: Some(
                         376..377,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Unary {
                         operator: Negate,
                         operand: Value(
@@ -372,7 +424,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -385,7 +439,9 @@ Program {
                     span: Some(
                         404..406,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Unary {
                         operator: WrappingNegate,
                         operand: Value(
@@ -397,7 +453,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -410,7 +468,9 @@ Program {
                     span: Some(
                         428..429,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Unary {
                         operator: Complement,
                         operand: Value(
@@ -422,7 +482,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -433,7 +495,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -446,7 +510,9 @@ Program {
                     span: Some(
                         462..463,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: And,
                         form: Infix,
@@ -464,7 +530,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -475,7 +543,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -488,7 +558,9 @@ Program {
                     span: Some(
                         487..488,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Unary {
                         operator: Complement,
                         operand: Value(
@@ -502,7 +574,9 @@ Program {
                     span: Some(
                         485..486,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: And,
                         form: Infix,
@@ -520,7 +594,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -531,7 +607,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -544,7 +622,9 @@ Program {
                     span: Some(
                         521..522,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Xor,
                         form: Infix,
@@ -562,7 +642,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -573,7 +655,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -586,7 +670,9 @@ Program {
                     span: Some(
                         539..540,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: Or,
                         form: Infix,
@@ -604,7 +690,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -615,7 +703,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -628,7 +718,9 @@ Program {
                     span: Some(
                         581..583,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: ShiftLeft,
                         form: Infix,
@@ -646,7 +738,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -657,7 +751,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -670,7 +766,9 @@ Program {
                     span: Some(
                         609..611,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Binary {
                         operator: ShiftRight,
                         form: Infix,
@@ -688,7 +786,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -703,25 +803,63 @@ Program {
                     0,
                 ),
                 locals: [
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
-                    Int,
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
                 ],
                 blocks: [
                     Block {

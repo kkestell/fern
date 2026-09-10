@@ -1,0 +1,149 @@
+---
+source: src/frontend.rs
+expression: projected(source)
+---
+fn rows name=3..7 span=0..136
+  parameter grid name=8..12
+    array span=14..23
+      length
+        integer 2 span=15..16
+      element
+        array span=17..23
+          length
+            integer 3 span=18..19
+          element
+            named int span=20..23
+  result
+    array span=28..34
+      length
+        integer 2 span=29..30
+      element
+        named int span=31..34
+  var out name=45..48 span=41..66
+    array span=50..56
+      length
+        integer 2 span=51..52
+      element
+        named int span=53..56
+    array literal fill=Some(61..64) span=59..65
+      integer 0 span=60..61
+  for label=- label_span=None span=71..118
+    iteration value=v index=i index_span=Some(78..79)
+      reference grid span=83..87
+    body
+      assign out name=98..101 span=98..112
+        index
+          reference i span=102..103
+        index span=107..111
+          reference v span=107..108
+          integer 0 span=109..110
+  return span=123..134
+    reference out span=130..133
+fn main name=140..144 span=137..674
+  result void
+  var a name=165..166 span=161..188
+    array span=168..174
+      length
+        integer 3 span=169..170
+      element
+        named int span=171..174
+    array literal fill=None span=177..187
+      integer 1 span=178..179
+      integer 2 span=181..182
+      integer 3 span=184..185
+  const inferred name=199..207 span=193..225
+    array span=209..215
+      inferred length
+      element
+        named int span=212..215
+    array literal fill=Some(220..223) span=218..224
+      integer 0 span=219..220
+  const seeded name=236..242 span=230..269
+    array span=244..250
+      length
+        integer 4 span=245..246
+      element
+        named int span=247..250
+    array literal fill=Some(264..267) span=253..268
+      integer 1 span=254..255
+      integer 2 span=257..258
+      integer 3 span=260..261
+      integer 0 span=263..264
+  const board name=280..285 span=274..311
+    array span=287..296
+      length
+        integer 2 span=288..289
+      element
+        array span=290..296
+          length
+            integer 3 span=291..292
+          element
+            named int span=293..296
+    array literal fill=Some(306..309) span=299..310
+      array literal fill=Some(302..305) span=300..306
+        integer 1 span=301..302
+  var grid name=320..324 span=316..361
+    array span=326..335
+      length
+        integer 2 span=327..328
+      element
+        array span=329..335
+          length
+            integer 3 span=330..331
+          element
+            named int span=332..335
+    array literal fill=None span=338..360
+      array literal fill=None span=339..348
+        integer 1 span=340..341
+        integer 2 span=343..344
+        integer 3 span=346..347
+      array literal fill=None span=350..359
+        integer 4 span=351..352
+        integer 5 span=354..355
+        integer 6 span=357..358
+  const r name=372..373 span=366..378
+    integer 0 span=376..377
+  const c name=389..390 span=383..395
+    integer 1 span=393..394
+  const cell name=406..410 span=400..424
+    index span=413..423
+      index span=413..420
+        reference grid span=413..417
+        reference r span=418..419
+      reference c span=421..422
+  const first name=435..440 span=429..457
+    index span=443..456
+      call rows target=443..447 left_paren=447..448 right_paren=452..453 span=443..453
+        reference grid span=448..452
+      integer 0 span=454..455
+  const negated name=468..475 span=462..484
+    unary Negate operator=478..479 span=478..483
+      index span=479..483
+        reference a span=479..480
+        integer 0 span=481..482
+  const length name=495..501 span=489..511
+    len span=504..510
+      reference a span=508..509
+  const trailing name=522..530 span=516..541
+    len span=533..540
+      reference a span=537..538
+  assign grid name=546..550 span=546..561
+    index
+      reference r span=551..552
+    index
+      reference c span=554..555
+    integer 7 span=559..560
+  compound assign a Add= name=566..567 operator=571..573 span=566..576
+    index
+      reference r span=568..569
+    integer 1 span=574..575
+  for label=outer label_span=Some(586..591) span=581..631
+    iteration value=t index=- index_span=None
+      reference a span=597..598
+    body
+      continue label=outer label_span=Some(619..624) span=609..625
+  for label=- label_span=None span=636..672
+    iteration value=t index=i index_span=Some(643..644)
+      reference a span=648..649
+    body
+      break label=- label_span=None span=660..666

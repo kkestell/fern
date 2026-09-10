@@ -11,7 +11,9 @@ Program {
             values: [
                 Value {
                     span: None,
-                    ty: I8,
+                    ty: Scalar(
+                        I8,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -24,7 +26,9 @@ Program {
                     span: Some(
                         70..80,
                     ),
-                    ty: I16,
+                    ty: Scalar(
+                        I16,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -36,7 +40,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: I16,
+                    ty: Scalar(
+                        I16,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -49,7 +55,9 @@ Program {
                     span: Some(
                         109..120,
                     ),
-                    ty: I64,
+                    ty: Scalar(
+                        I64,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -61,7 +69,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: U8,
+                    ty: Scalar(
+                        U8,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -74,7 +84,9 @@ Program {
                     span: Some(
                         182..195,
                     ),
-                    ty: U64,
+                    ty: Scalar(
+                        U64,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -86,7 +98,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -99,7 +113,9 @@ Program {
                     span: Some(
                         226..237,
                     ),
-                    ty: I32,
+                    ty: Scalar(
+                        I32,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -111,7 +127,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: I32,
+                    ty: Scalar(
+                        I32,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -124,7 +142,9 @@ Program {
                     span: Some(
                         266..276,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -136,7 +156,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: Uint,
+                    ty: Scalar(
+                        Uint,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -149,7 +171,9 @@ Program {
                     span: Some(
                         321..327,
                     ),
-                    ty: U32,
+                    ty: Scalar(
+                        U32,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -161,7 +185,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: U32,
+                    ty: Scalar(
+                        U32,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -174,7 +200,9 @@ Program {
                     span: Some(
                         338..346,
                     ),
-                    ty: Uint,
+                    ty: Scalar(
+                        Uint,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -186,7 +214,9 @@ Program {
                 },
                 Value {
                     span: None,
-                    ty: I8,
+                    ty: Scalar(
+                        I8,
+                    ),
                     kind: Load(
                         Local(
                             LocalId(
@@ -199,7 +229,9 @@ Program {
                     span: Some(
                         369..379,
                     ),
-                    ty: Int,
+                    ty: Scalar(
+                        Int,
+                    ),
                     kind: Convert {
                         operand: Value(
                             ValueId(
@@ -215,17 +247,39 @@ Program {
                     0,
                 ),
                 locals: [
-                    I8,
-                    I16,
-                    I64,
-                    U8,
-                    U64,
-                    Int,
-                    I32,
-                    Int,
-                    Uint,
-                    U32,
-                    Uint,
+                    Scalar(
+                        I8,
+                    ),
+                    Scalar(
+                        I16,
+                    ),
+                    Scalar(
+                        I64,
+                    ),
+                    Scalar(
+                        U8,
+                    ),
+                    Scalar(
+                        U64,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        I32,
+                    ),
+                    Scalar(
+                        Int,
+                    ),
+                    Scalar(
+                        Uint,
+                    ),
+                    Scalar(
+                        U32,
+                    ),
+                    Scalar(
+                        Uint,
+                    ),
                 ],
                 blocks: [
                     Block {

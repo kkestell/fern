@@ -1,11 +1,12 @@
 use crate::{
     CompileError,
     frontend::{
-        BinaryOperator, ComparisonOperator, Expression, ExpressionKind, ForHeader,
-        Function as SyntaxFunction, LogicalOperator, Statement, StatementKind, UnaryOperator,
+        AssignmentTarget, BinaryOperator, ComparisonOperator, Expression, ExpressionKind,
+        ForHeader, Function as SyntaxFunction, LogicalOperator, Statement, StatementKind,
+        UnaryOperator,
     },
-    semantic::{Binding, CheckedProgram, ExpressionValue},
-    types::Type,
+    semantic::{Binding, CheckedProgram, Constant, ExpressionValue},
+    types::{Scalar, Type},
 };
 use la_arena::Idx;
 use lasso::Spur;
@@ -29,20 +30,39 @@ pub(crate) struct BlockId(pub usize);
 
 /// A storage location a load reads and a store writes. Locals live for one call
 /// of one function; globals are the module-level `var` bindings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Place {
     Local(LocalId),
     Global(GlobalId),
+    /// `base[index]`. The span is the one the bounds-check trap reports, so
+    /// every access through this place checks its index.
+    Element {
+        base: Box<Place>,
+        index: Operand,
+        span: std::ops::Range<usize>,
+    },
+}
+
+impl Place {
+    /// Storing through an element place writes inside its root, which is how
+    /// an array local is initialized.
+    fn root_local(&self) -> Option<LocalId> {
+        match self {
+            Self::Local(local) => Some(*local),
+            Self::Global(_) => None,
+            Self::Element { base, .. } => base.root_local(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Operand {
     // i128 holds both the signed minima and the full u64 range without bit reinterpretation.
-    Integer { value: i128, ty: Type },
+    Integer { value: i128, ty: Scalar },
     Value(ValueId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Load(Place),
     /// The result of the `Instruction::Call` that defines it. The call carries
@@ -122,7 +142,6 @@ pub(crate) enum Terminator {
 }
 
 impl Terminator {
-    /// The blocks control can reach from this terminator.
     fn targets(&self) -> Vec<BlockId> {
         match self {
             Self::Jump { target } => vec![*target],
@@ -155,7 +174,9 @@ pub(crate) struct ControlFlow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
-    pub value: i128,
+    /// Its scalars in memory order: one for a scalar global, one per element
+    /// for an array global.
+    pub values: Vec<i128>,
 }
 
 #[derive(Debug)]
@@ -186,7 +207,7 @@ impl VerifiedProgram {
     }
 }
 
-fn verify_integer(value: i128, ty: Type) -> Result<Type, CompileError> {
+fn verify_integer(value: i128, ty: Scalar) -> Result<Scalar, CompileError> {
     if value < ty.min() || value > i128::from(ty.max()) {
         return Err(CompileError::new(format!(
             "internal compiler error: IR integer {value} out of range for {ty:?}"
@@ -195,31 +216,74 @@ fn verify_integer(value: i128, ty: Type) -> Result<Type, CompileError> {
     Ok(ty)
 }
 
+/// The IR defines arithmetic, conversions, and branching on scalars only.
+fn scalar(ty: &Type) -> Result<Scalar, CompileError> {
+    ty.scalar().ok_or_else(|| {
+        CompileError::new(format!(
+            "internal compiler error: IR uses `{ty}` where a scalar is required"
+        ))
+    })
+}
+
 fn valid_value(
     value: &Value,
-    mut operand_type: impl FnMut(Operand) -> Result<Type, CompileError>,
-    mut place_type: impl FnMut(Place) -> Result<Type, CompileError>,
+    operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
+    place_type: &impl Fn(&Place) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
-    Ok(match value.kind {
+    Ok(match &value.kind {
         ValueKind::Load(place) => place_type(place)? == value.ty && value.span.is_none(),
         // The defining call checks the result type against the callee's
         // signature, and owns the span the call reports.
         ValueKind::CallResult => value.span.is_none(),
+        ValueKind::Comparison {
+            operator,
+            left,
+            right,
+        } => {
+            let left = operand_type(*left)?;
+            value.span.is_some()
+                && value.ty == Scalar::Bool.into()
+                && left == operand_type(*right)?
+                && (operator.is_equality() || left.scalar().is_some())
+        }
+        ValueKind::LogicalNot { operand } => {
+            value.span.is_some()
+                && value.ty == Scalar::Bool.into()
+                && operand_type(*operand)? == Scalar::Bool.into()
+        }
+        ValueKind::Convert { .. } | ValueKind::Unary { .. } | ValueKind::Binary { .. } => {
+            valid_integer_operation(value, operand_type)?
+        }
+    })
+}
+
+/// The value kinds defined only on integers, whose result and operands are all
+/// non-`bool` scalars.
+fn valid_integer_operation(
+    value: &Value,
+    operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
+) -> Result<bool, CompileError> {
+    let operand = |operand| scalar(&operand_type(operand)?);
+    let ty = scalar(&value.ty)?;
+    Ok(match &value.kind {
         ValueKind::Convert {
-            operand,
+            operand: source,
             truncating,
         } => {
-            let source = operand_type(operand)?;
-            source != Type::Bool
-                && value.ty != Type::Bool
-                && (truncating || source.all_values_fit(value.ty) || value.span.is_some())
+            let source = operand(*source)?;
+            source.is_integer()
+                && ty.is_integer()
+                && (*truncating || source.all_values_fit(ty) || value.span.is_some())
         }
-        ValueKind::Unary { operator, operand } => {
-            let source = operand_type(operand)?;
+        ValueKind::Unary {
+            operator,
+            operand: source,
+        } => {
+            let source = operand(*source)?;
             value.span.is_some()
-                && source == value.ty
-                && source != Type::Bool
-                && (operator != UnaryOperator::Negate || source.signed())
+                && source == ty
+                && source.is_integer()
+                && (*operator != UnaryOperator::Negate || source.signed())
         }
         ValueKind::Binary {
             operator,
@@ -227,25 +291,14 @@ fn valid_value(
             right,
             ..
         } => {
-            let left = operand_type(left)?;
-            let right = operand_type(right)?;
+            let (left, right) = (operand(*left)?, operand(*right)?);
             value.span.is_some()
-                && left == value.ty
-                && left != Type::Bool
-                && right != Type::Bool
-                && (matches!(
-                    operator,
-                    BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
-                ) || right == left)
+                && left == ty
+                && left.is_integer()
+                && right.is_integer()
+                && (operator.is_shift() || right == left)
         }
-        ValueKind::Comparison { left, right, .. } => {
-            let left = operand_type(left)?;
-            let right = operand_type(right)?;
-            value.span.is_some() && value.ty == Type::Bool && left == right
-        }
-        ValueKind::LogicalNot { operand } => {
-            value.span.is_some() && value.ty == Type::Bool && operand_type(operand)? == Type::Bool
-        }
+        _ => unreachable!("an integer operation is a conversion, a unary, or a binary value"),
     })
 }
 
@@ -260,9 +313,8 @@ struct Definition {
 impl Program {
     pub(crate) fn verify(self) -> Result<VerifiedProgram, CompileError> {
         for (id, global) in self.globals.iter().enumerate() {
-            verify_integer(global.value, global.ty).map_err(|error| {
-                CompileError::new(format!("{error} (IR global {id} initial value)"))
-            })?;
+            verify_global(global)
+                .map_err(|error| CompileError::new(format!("{error} (IR global {id})")))?;
         }
         let main = self.function(self.main)?;
         if main.parameters != 0 || main.result.is_some() {
@@ -287,19 +339,41 @@ impl Program {
         })
     }
 
-    fn place_type(&self, flow: &ControlFlow, place: Place) -> Result<Type, CompileError> {
+    fn place_type(
+        &self,
+        flow: &ControlFlow,
+        place: &Place,
+        operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
+    ) -> Result<Type, CompileError> {
         match place {
-            Place::Local(LocalId(id)) => flow.locals.get(id).copied().ok_or_else(|| {
+            Place::Local(LocalId(id)) => flow.locals.get(*id).cloned().ok_or_else(|| {
                 CompileError::new(format!(
                     "internal compiler error: IR uses unknown local {id}"
                 ))
             }),
-            Place::Global(GlobalId(id)) => {
-                self.globals.get(id).map(|global| global.ty).ok_or_else(|| {
+            Place::Global(GlobalId(id)) => self
+                .globals
+                .get(*id)
+                .map(|global| global.ty.clone())
+                .ok_or_else(|| {
                     CompileError::new(format!(
                         "internal compiler error: IR uses unknown global {id}"
                     ))
-                })
+                }),
+            Place::Element { base, index, .. } => {
+                let base = self.place_type(flow, base, operand_type)?;
+                let Type::Array { element, .. } = base else {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR indexes `{base}`"
+                    )));
+                };
+                let index = operand_type(*index)?;
+                if index != Scalar::Int.into() {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR index has type `{index}`, expected `int`"
+                    )));
+                }
+                Ok(*element)
             }
         }
     }
@@ -370,7 +444,8 @@ impl Program {
         match instruction {
             Instruction::Value(ValueId(id)) => {
                 let value = &function.values[*id];
-                if let ValueKind::Load(Place::Local(LocalId(local))) = value.kind
+                if let ValueKind::Load(place) = &value.kind
+                    && let Some(LocalId(local)) = place.root_local()
                     && local < flow.locals.len()
                     && !initialized.contains(local)
                 {
@@ -378,20 +453,21 @@ impl Program {
                         "internal compiler error: IR loads uninitialized local {local}"
                     )));
                 }
-                if !valid_value(value, operand_type, |place| self.place_type(flow, place))? {
+                let place_type = |place: &Place| self.place_type(flow, place, &operand_type);
+                if !valid_value(value, &operand_type, &place_type)? {
                     return Err(invalid_value(*id, value));
                 }
                 Ok(())
             }
             Instruction::Store { place, operand } => {
-                let destination = self.place_type(flow, *place)?;
+                let destination = self.place_type(flow, place, &operand_type)?;
                 let source = operand_type(*operand)?;
                 if source != destination {
                     return Err(CompileError::new(format!(
-                        "internal compiler error: IR store has type {source:?}, expected {destination:?}"
+                        "internal compiler error: IR store has type `{source}`, expected `{destination}`"
                     )));
                 }
-                if let Place::Local(local) = place {
+                if let Some(local) = place.root_local() {
                     initialized.insert(local.0);
                 }
                 Ok(())
@@ -401,7 +477,7 @@ impl Program {
                 function: callee,
                 arguments,
                 ..
-            } => self.verify_call(function, *callee, arguments, *result, operand_type),
+            } => self.verify_call(function, *callee, arguments, *result, &operand_type),
         }
     }
 
@@ -422,7 +498,7 @@ impl Program {
         }
         match &block.terminator {
             Terminator::Branch { condition, .. } => {
-                if operand_type(*condition)? != Type::Bool {
+                if operand_type(*condition)? != Scalar::Bool.into() {
                     return Err(CompileError::new(
                         "internal compiler error: IR branch requires bool",
                     ));
@@ -430,14 +506,16 @@ impl Program {
                 Ok(())
             }
             Terminator::Exit { status, .. } => {
-                if operand_type(*status)? != Type::Int {
+                if operand_type(*status)? != Scalar::Int.into() {
                     return Err(CompileError::new(
                         "internal compiler error: IR exit requires int",
                     ));
                 }
                 Ok(())
             }
-            Terminator::Return { value } => verify_return(function.result, *value, operand_type),
+            Terminator::Return { value } => {
+                verify_return(function.result.as_ref(), *value, &operand_type)
+            }
             Terminator::Jump { .. } | Terminator::Unreachable => Ok(()),
         }
     }
@@ -448,7 +526,7 @@ impl Program {
         callee: FunctionId,
         arguments: &[Operand],
         result: Option<ValueId>,
-        mut operand_type: impl FnMut(Operand) -> Result<Type, CompileError>,
+        operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     ) -> Result<(), CompileError> {
         let target = self.function(callee)?;
         if arguments.len() != target.parameters {
@@ -461,14 +539,14 @@ impl Program {
         }
         for (index, &argument) in arguments.iter().enumerate() {
             let source = operand_type(argument)?;
-            let parameter = target.flow.locals[index];
-            if source != parameter {
+            let parameter = &target.flow.locals[index];
+            if source != *parameter {
                 return Err(CompileError::new(format!(
-                    "internal compiler error: IR call argument {index} has type {source:?}, expected {parameter:?}"
+                    "internal compiler error: IR call argument {index} has type `{source}`, expected `{parameter}`"
                 )));
             }
         }
-        match (target.result, result) {
+        match (target.result.as_ref(), result) {
             (None, None) => {}
             (None, Some(_)) => Err(CompileError::new(format!(
                 "internal compiler error: IR call defines a result for void function {}",
@@ -479,10 +557,10 @@ impl Program {
                 callee.0
             )))?,
             (Some(expected), Some(ValueId(id))) => {
-                let defined = caller.values[id].ty;
-                if defined != expected {
+                let defined = &caller.values[id].ty;
+                if *defined != *expected {
                     return Err(CompileError::new(format!(
-                        "internal compiler error: IR call result has type {defined:?}, expected {expected:?}"
+                        "internal compiler error: IR call result has type `{defined}`, expected `{expected}`"
                     )));
                 }
             }
@@ -577,7 +655,6 @@ fn initialized_locals(function: &Function, reachable: &[bool]) -> Vec<LocalSet> 
     }
 }
 
-/// The blocks that can reach each block.
 fn block_predecessors(flow: &ControlFlow) -> Vec<Vec<usize>> {
     let mut predecessors = vec![Vec::new(); flow.blocks.len()];
     for (block_index, block) in flow.blocks.iter().enumerate() {
@@ -590,17 +667,14 @@ fn block_predecessors(flow: &ControlFlow) -> Vec<Vec<usize>> {
     predecessors
 }
 
-/// The locals each block stores to.
 fn local_stores(flow: &ControlFlow, locals: usize) -> Vec<LocalSet> {
     flow.blocks
         .iter()
         .map(|block| {
             let mut stored = LocalSet::empty(locals);
             for instruction in &block.instructions {
-                if let Instruction::Store {
-                    place: Place::Local(local),
-                    ..
-                } = instruction
+                if let Instruction::Store { place, .. } = instruction
+                    && let Some(local) = place.root_local()
                 {
                     stored.insert(local.0);
                 }
@@ -608,6 +682,21 @@ fn local_stores(flow: &ControlFlow, locals: usize) -> Vec<LocalSet> {
             stored
         })
         .collect()
+}
+
+fn verify_global(global: &Global) -> Result<(), CompileError> {
+    let expected = global.ty.element_count();
+    let found = global.values.len() as u64;
+    if found != expected {
+        return Err(CompileError::new(format!(
+            "internal compiler error: IR global of type `{}` holds {found} values, expected {expected}",
+            global.ty
+        )));
+    }
+    for &value in &global.values {
+        verify_integer(value, global.ty.leaf())?;
+    }
+    Ok(())
 }
 
 fn invalid_value(index: usize, value: &Value) -> CompileError {
@@ -720,11 +809,10 @@ fn record_definition(
     Ok(())
 }
 
-/// Checks that a return carries exactly the value its function's result needs.
 fn verify_return(
-    result: Option<Type>,
+    result: Option<&Type>,
     value: Option<Operand>,
-    mut operand_type: impl FnMut(Operand) -> Result<Type, CompileError>,
+    operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
 ) -> Result<(), CompileError> {
     match (result, value) {
         (None, None) => Ok(()),
@@ -736,9 +824,9 @@ fn verify_return(
         )),
         (Some(result), Some(value)) => {
             let source = operand_type(value)?;
-            if source != result {
+            if source != *result {
                 return Err(CompileError::new(format!(
-                    "internal compiler error: IR returns {source:?}, expected {result:?}"
+                    "internal compiler error: IR returns `{source}`, expected `{result}`"
                 )));
             }
             Ok(())
@@ -754,7 +842,7 @@ fn flow_operand_type(
     position: usize,
 ) -> Result<Type, CompileError> {
     match operand {
-        Operand::Integer { value, ty } => verify_integer(value, ty),
+        Operand::Integer { value, ty } => verify_integer(value, ty).map(Type::from),
         Operand::Value(ValueId(id)) => {
             let Some(definition) = definitions.get(id) else {
                 return Err(CompileError::new(format!(
@@ -766,7 +854,7 @@ fn flow_operand_type(
                     "internal compiler error: IR value {id} is not defined earlier in block {block}"
                 )));
             }
-            Ok(values[id].ty)
+            Ok(values[id].ty.clone())
         }
     }
 }
@@ -800,16 +888,18 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
         else {
             unreachable!("module bindings are binding statements")
         };
-        let value = checked.expressions[*initializer]
-            .constant
-            .as_ref()
-            .expect("module-level initializers are constant expressions")
-            .to_i128()
-            .expect("concrete Fern value fits in the IR representation");
+        let mut values = Vec::new();
+        flatten(
+            checked.expressions[*initializer]
+                .constant
+                .as_ref()
+                .expect("module-level initializers are constant expressions"),
+            &mut values,
+        );
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
         globals.push(Global {
-            ty: checked.bindings[binding].ty,
-            value,
+            ty: checked.bindings[binding].ty.clone(),
+            values,
         });
     }
 
@@ -835,11 +925,11 @@ fn lower_function(
     let mut builder = FlowBuilder::new();
     let mut bindings = module_places.clone();
     for &parameter in &signature.parameters {
-        let local = builder.local(checked.bindings[parameter].ty);
+        let local = builder.local(checked.bindings[parameter].ty.clone());
         bindings.insert(parameter, Place::Local(local));
     }
     let parameters = signature.parameters.len();
-    let result = signature.result;
+    let result = signature.result.clone();
     let terminated = lower_flow_body(
         checked,
         &checked.syntax.functions[id].body,
@@ -855,8 +945,24 @@ fn lower_function(
     builder.finish(parameters, result)
 }
 
-fn integer(value: i128, ty: Type) -> Operand {
+fn integer(value: i128, ty: Scalar) -> Operand {
     Operand::Integer { value, ty }
+}
+
+/// The scalars a constant holds, in memory order.
+fn flatten(constant: &Constant, values: &mut Vec<i128>) {
+    match constant {
+        Constant::Integer(value) => values.push(
+            value
+                .to_i128()
+                .expect("concrete Fern value fits in the IR representation"),
+        ),
+        Constant::Array(elements) => {
+            for element in elements {
+                flatten(element, values);
+            }
+        }
+    }
 }
 
 struct BuildingBlock {
@@ -1001,7 +1107,7 @@ fn lower_flow_binding(
         return;
     }
     let operand = lower_flow_operand(checked, *initializer, bindings, builder);
-    let local = builder.local(checked.bindings[binding].ty);
+    let local = builder.local(checked.bindings[binding].ty.clone());
     builder.store(Place::Local(local), operand);
     bindings.insert(binding, Place::Local(local));
 }
@@ -1033,23 +1139,25 @@ fn lower_flow_statement(
             lower_flow_binding(checked, statement, bindings, builder);
             false
         }
-        StatementKind::Assignment { value, .. } => {
+        StatementKind::Assignment { target, value } => {
+            let mut place = lower_target(checked, statement, target, bindings, builder);
             let operand = lower_flow_operand(checked, *value, bindings, builder);
-            builder.store(bindings[&checked.assignments[statement]], operand);
+            let place = place.read(builder);
+            builder.store(place, operand);
             false
         }
         StatementKind::CompoundAssignment {
+            target,
             operator,
             operator_span,
             value,
-            ..
         } => {
-            let binding = checked.assignments[statement];
-            let place = bindings[&binding];
-            let ty = checked.bindings[binding].ty;
-            let left_operand = load_place(builder, place, ty);
+            let mut held = lower_target(checked, statement, target, bindings, builder);
+            let ty = checked.assignments[statement].ty.clone();
+            let place = held.read(builder);
+            let left_operand = load_place(builder, place, ty.clone());
             let (left, right) =
-                lower_second_operand(checked, left_operand, ty, *value, bindings, builder);
+                lower_second_operand(checked, left_operand, ty.clone(), *value, bindings, builder);
             let result = builder.value(Value {
                 span: Some(operator_span.clone()),
                 ty,
@@ -1060,6 +1168,7 @@ fn lower_flow_statement(
                     right,
                 },
             });
+            let place = held.read(builder);
             builder.store(place, result);
             false
         }
@@ -1098,20 +1207,8 @@ fn lower_flow_statement(
             loops,
             builder,
         ),
-        StatementKind::For {
-            label,
-            header,
-            body,
-        } => {
-            lower_for(
-                checked,
-                label.as_ref().map(|label| label.name),
-                header,
-                body,
-                bindings,
-                loops,
-                builder,
-            );
+        StatementKind::For { .. } => {
+            lower_for(checked, statement, bindings, loops, builder);
             false
         }
         StatementKind::Break { label } | StatementKind::Continue { label } => {
@@ -1130,6 +1227,25 @@ fn lower_flow_statement(
     }
 }
 
+/// The place an assignment target names, with its indices lowered left to
+/// right before the value.
+fn lower_target(
+    checked: &CheckedProgram<'_>,
+    statement: Idx<Statement>,
+    target: &AssignmentTarget,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> HeldPlace {
+    let root = bindings[&checked.assignments[statement].binding].clone();
+    let mut indices = Vec::with_capacity(target.indices.len());
+    for &index in &target.indices {
+        let span = checked.syntax.expressions[index].span.clone();
+        let operand = lower_flow_operand(checked, index, bindings, builder);
+        indices.push((hold_operand(builder, operand, Scalar::Int.into()), span));
+    }
+    HeldPlace { root, indices }
+}
+
 /// Lowers arguments left to right, holding each so a later argument that splits
 /// blocks cannot leave an earlier one unreadable in the call's block.
 fn lower_call(
@@ -1142,20 +1258,43 @@ fn lower_call(
 ) -> Option<Operand> {
     let mut held = Vec::with_capacity(arguments.len());
     for &argument in arguments {
-        let ty = checked.expressions[argument].ty;
+        let ty = checked.expressions[argument].ty.clone();
         let operand = lower_flow_operand(checked, argument, bindings, builder);
         held.push(hold_operand(builder, operand, ty));
     }
     let arguments = held
-        .into_iter()
+        .iter_mut()
         .map(|operand| operand.read(builder))
         .collect();
     builder.call(
         function_id(function),
         arguments,
-        checked.functions[function].result,
+        checked.functions[function].result.clone(),
         span,
     )
+}
+
+fn lower_call_expression(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    let ExpressionValue::Call { function } = &checked.expressions[id].value else {
+        unreachable!("a call expression is lowered from its own value")
+    };
+    let ExpressionKind::Call(call) = &checked.syntax.expressions[id].kind else {
+        unreachable!("a checked call expression is a call")
+    };
+    lower_call(
+        checked,
+        *function,
+        &call.arguments,
+        checked.syntax.expressions[id].span.clone(),
+        bindings,
+        builder,
+    )
+    .expect("a call used as a value returns one")
 }
 
 fn lower_if(
@@ -1194,18 +1333,99 @@ fn lower_if(
     then_terminated && else_terminated
 }
 
-fn lower_for(
+/// A `for … in` loop's storage: the array it walks, captured once before the
+/// first iteration, and the counter driving it.
+struct Iteration {
+    array: Place,
+    length: u64,
+    element: Type,
+    counter: LocalId,
+    value: LocalId,
+    span: std::ops::Range<usize>,
+}
+
+impl Iteration {
+    fn counter(&self, builder: &mut FlowBuilder) -> Operand {
+        load_place(builder, Place::Local(self.counter), Scalar::Int.into())
+    }
+
+    fn condition(&self, builder: &mut FlowBuilder) -> Operand {
+        let counter = self.counter(builder);
+        builder.value(Value {
+            span: Some(self.span.clone()),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Less,
+                left: counter,
+                right: integer(i128::from(self.length), Scalar::Int),
+            },
+        })
+    }
+
+    /// Binds the value to a copy of the element the counter reaches.
+    fn bind(&self, builder: &mut FlowBuilder) {
+        let index = self.counter(builder);
+        let element = Place::Element {
+            base: Box::new(self.array.clone()),
+            index,
+            span: self.span.clone(),
+        };
+        let operand = load_place(builder, element, self.element.clone());
+        builder.store(Place::Local(self.value), operand);
+    }
+
+    fn advance(&self, builder: &mut FlowBuilder) {
+        let counter = self.counter(builder);
+        let next = builder.value(Value {
+            span: Some(self.span.clone()),
+            ty: Scalar::Int.into(),
+            kind: ValueKind::Binary {
+                operator: BinaryOperator::Add,
+                form: BinaryForm::Infix,
+                left: counter,
+                right: integer(1, Scalar::Int),
+            },
+        });
+        builder.store(Place::Local(self.counter), next);
+    }
+}
+
+/// What a loop's condition block tests and its post block does.
+enum LoopKind {
+    Clauses {
+        condition: Option<Idx<Expression>>,
+        post: Option<Idx<Statement>>,
+    },
+    Iteration(Iteration),
+}
+
+impl LoopKind {
+    fn has_post(&self) -> bool {
+        match self {
+            Self::Clauses { post, .. } => post.is_some(),
+            Self::Iteration(_) => true,
+        }
+    }
+}
+
+/// Lowers whatever a loop header does before its first iteration.
+fn lower_for_header(
     checked: &CheckedProgram<'_>,
-    label: Option<Spur>,
+    statement: Idx<Statement>,
     header: &ForHeader,
-    body: &[Idx<Statement>],
     bindings: &mut HashMap<Idx<Binding>, Place>,
     loops: &[LoopTarget],
     builder: &mut FlowBuilder,
-) {
-    let (condition, post) = match header {
-        ForHeader::Infinite => (None, None),
-        ForHeader::Condition(condition) => (Some(*condition), None),
+) -> LoopKind {
+    match header {
+        ForHeader::Infinite => LoopKind::Clauses {
+            condition: None,
+            post: None,
+        },
+        ForHeader::Condition(condition) => LoopKind::Clauses {
+            condition: Some(*condition),
+            post: None,
+        },
         ForHeader::ThreeClause {
             initializer,
             condition,
@@ -1218,23 +1438,94 @@ fn lower_for(
                 loops,
                 builder
             ));
-            (Some(*condition), Some(*post))
+            LoopKind::Clauses {
+                condition: Some(*condition),
+                post: Some(*post),
+            }
         }
+        ForHeader::Iteration { operand, .. } => {
+            LoopKind::Iteration(capture(checked, statement, *operand, bindings, builder))
+        }
+    }
+}
+
+/// Copies the array a `for … in` walks into a local, so assigning to the
+/// original inside the body cannot change the remaining iterations.
+fn capture(
+    checked: &CheckedProgram<'_>,
+    statement: Idx<Statement>,
+    operand: Idx<Expression>,
+    bindings: &mut HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> Iteration {
+    let ty = checked.expressions[operand].ty.clone();
+    let Type::Array { length, element } = &ty else {
+        unreachable!("checking requires an array operand for `for … in`")
     };
+    let span = checked.syntax.expressions[operand].span.clone();
+    let source = lower_array_place(checked, operand, bindings, builder);
+    let loaded = load_place(builder, source, ty.clone());
+    let array = Place::Local(builder.local(ty.clone()));
+    builder.store(array.clone(), loaded);
+
+    let counter = builder.local(Scalar::Int.into());
+    builder.store(Place::Local(counter), integer(0, Scalar::Int));
+    let element = (**element).clone();
+    let value = builder.local(element.clone());
+
+    let iteration = &checked.iterations[statement];
+    bindings.insert(iteration.value, Place::Local(value));
+    // The index binding is immutable, so reading the counter directly is the
+    // same as reading a copy taken at the top of the body.
+    if let Some(index) = iteration.index {
+        bindings.insert(index, Place::Local(counter));
+    }
+    Iteration {
+        array,
+        length: *length,
+        element,
+        counter,
+        value,
+        span,
+    }
+}
+
+fn lower_for(
+    checked: &CheckedProgram<'_>,
+    statement: Idx<Statement>,
+    bindings: &mut HashMap<Idx<Binding>, Place>,
+    loops: &[LoopTarget],
+    builder: &mut FlowBuilder,
+) {
+    let StatementKind::For {
+        label,
+        header,
+        body,
+    } = &checked.syntax.statements[statement].kind
+    else {
+        unreachable!("a `for` statement is lowered from its own syntax")
+    };
+    let label = label.as_ref().map(|label| label.name);
+    let kind = lower_for_header(checked, statement, header, bindings, loops, builder);
 
     let condition_block = builder.block();
     let body_block = builder.block();
-    let post_block = post.map(|_| builder.block());
+    let post_block = kind.has_post().then(|| builder.block());
     let after_block = builder.block();
     builder.terminate(Terminator::Jump {
         target: condition_block,
     });
 
     builder.select(condition_block);
+    let condition = match &kind {
+        LoopKind::Clauses { condition, .. } => {
+            condition.map(|condition| lower_flow_operand(checked, condition, bindings, builder))
+        }
+        LoopKind::Iteration(iteration) => Some(iteration.condition(builder)),
+    };
     if let Some(condition) = condition {
-        let operand = lower_flow_operand(checked, condition, bindings, builder);
         builder.terminate(Terminator::Branch {
-            condition: operand,
+            condition,
             then_target: body_block,
             else_target: after_block,
         });
@@ -1249,22 +1540,41 @@ fn lower_for(
         continue_target: post_block.unwrap_or(condition_block),
     });
     builder.select(body_block);
+    if let LoopKind::Iteration(iteration) = &kind {
+        iteration.bind(builder);
+    }
     if !lower_flow_body(checked, body, bindings, &nested_loops, builder) {
         builder.terminate(Terminator::Jump {
             target: post_block.unwrap_or(condition_block),
         });
     }
 
-    if let (Some(post), Some(post_block)) = (post, post_block) {
+    if let Some(post_block) = post_block {
         builder.select(post_block);
-        assert!(!lower_flow_statement(
-            checked, post, bindings, loops, builder
-        ));
+        lower_for_post(checked, &kind, bindings, loops, builder);
         builder.terminate(Terminator::Jump {
             target: condition_block,
         });
     }
     builder.select(after_block);
+}
+
+fn lower_for_post(
+    checked: &CheckedProgram<'_>,
+    kind: &LoopKind,
+    bindings: &mut HashMap<Idx<Binding>, Place>,
+    loops: &[LoopTarget],
+    builder: &mut FlowBuilder,
+) {
+    match kind {
+        LoopKind::Clauses { post, .. } => {
+            let post = post.expect("a post block exists only for a post clause");
+            assert!(!lower_flow_statement(
+                checked, post, bindings, loops, builder
+            ));
+        }
+        LoopKind::Iteration(iteration) => iteration.advance(builder),
+    }
 }
 
 fn loop_target(loops: &[LoopTarget], label: Option<Spur>) -> &LoopTarget {
@@ -1275,6 +1585,186 @@ fn loop_target(loops: &[LoopTarget], label: Option<Spur>) -> &LoopTarget {
         .expect("semantic checking resolves loop targets")
 }
 
+fn element_at(base: &Place, index: u64, span: &std::ops::Range<usize>) -> Place {
+    Place::Element {
+        base: Box::new(base.clone()),
+        index: integer(i128::from(index), Scalar::Int),
+        span: span.clone(),
+    }
+}
+
+/// Stores a folded array into `place`, one scalar per element.
+fn store_constant(
+    builder: &mut FlowBuilder,
+    place: &Place,
+    ty: &Type,
+    constant: &Constant,
+    span: &std::ops::Range<usize>,
+) {
+    match (ty, constant) {
+        (Type::Scalar(scalar), Constant::Integer(value)) => {
+            let value = value
+                .to_i128()
+                .expect("concrete Fern value fits in the IR representation");
+            builder.store(place.clone(), integer(value, *scalar));
+        }
+        (Type::Array { element, .. }, Constant::Array(elements)) => {
+            for (index, value) in elements.iter().enumerate() {
+                let index = u64::try_from(index).expect("an array fits in the address space");
+                store_constant(
+                    builder,
+                    &element_at(place, index, span),
+                    element,
+                    value,
+                    span,
+                );
+            }
+        }
+        _ => unreachable!("a folded constant has the shape of its type"),
+    }
+}
+
+/// Stores an array literal's elements into `place`. A fill evaluates its last
+/// element once and copies that value into every remaining element.
+fn store_elements(
+    checked: &CheckedProgram<'_>,
+    place: &Place,
+    id: Idx<Expression>,
+    elements: &[Idx<Expression>],
+    fill: bool,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) {
+    let Type::Array { length, .. } = &checked.expressions[id].ty else {
+        unreachable!("an array literal has an array type")
+    };
+    let span = &checked.syntax.expressions[id].span.clone();
+    let mut last = None;
+    for (index, &element) in elements.iter().enumerate() {
+        let index = u64::try_from(index).expect("an array fits in the address space");
+        let operand = lower_flow_operand(checked, element, bindings, builder);
+        builder.store(element_at(place, index, span), operand);
+        last = Some(operand);
+    }
+    if !fill {
+        return;
+    }
+    let last = last.expect("a fill follows at least one element");
+    let filled = u64::try_from(elements.len()).expect("an array fits in the address space");
+    for index in filled..*length {
+        builder.store(element_at(place, index, span), last);
+    }
+}
+
+/// The place holding an array-typed expression. An expression with no storage
+/// of its own materializes into a fresh local.
+fn lower_array_place(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> Place {
+    let expression = &checked.expressions[id];
+    let ty = &expression.ty;
+    if let Some(constant) = expression.constant.as_ref() {
+        lower_folded_effects(checked, id, bindings, builder);
+        let place = Place::Local(builder.local(ty.clone()));
+        let span = &checked.syntax.expressions[id].span.clone();
+        store_constant(builder, &place, ty, constant, span);
+        return place;
+    }
+    match &expression.value {
+        ExpressionValue::Reference(binding) => bindings[binding].clone(),
+        ExpressionValue::Grouping { expression } => {
+            lower_array_place(checked, *expression, bindings, builder)
+        }
+        ExpressionValue::Index { .. } => element_place(checked, id, bindings, builder),
+        ExpressionValue::Array { elements, fill } => {
+            let place = Place::Local(builder.local(ty.clone()));
+            store_elements(checked, &place, id, elements, *fill, bindings, builder);
+            place
+        }
+        ExpressionValue::Call { .. } => {
+            let operand = lower_call_expression(checked, id, bindings, builder);
+            let place = Place::Local(builder.local(ty.clone()));
+            builder.store(place.clone(), operand);
+            place
+        }
+        _ => unreachable!("an array value is a reference, a literal, an element, or a call"),
+    }
+}
+
+fn element_place(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> Place {
+    let ExpressionValue::Index { operand, index } = &checked.expressions[id].value else {
+        unreachable!("an element place is lowered from an index expression")
+    };
+    let base = lower_array_place(checked, *operand, bindings, builder);
+    let span = checked.syntax.expressions[*index].span.clone();
+    let index = lower_flow_operand(checked, *index, bindings, builder);
+    Place::Element {
+        base: Box::new(base),
+        index,
+        span,
+    }
+}
+
+/// The length `len(operand)` reads from its operand's type. The operand is
+/// still evaluated, so a trap inside it still happens.
+fn lower_length(
+    checked: &CheckedProgram<'_>,
+    operand: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    let Type::Array { length, .. } = checked.expressions[operand].ty else {
+        unreachable!("checking requires an array operand for `len`")
+    };
+    lower_flow_operand(checked, operand, bindings, builder);
+    integer(i128::from(length), Scalar::Int)
+}
+
+/// Lowers the evaluation a folded expression still owes. `len` reads its
+/// length from its operand's type, so it folds while the operand still runs;
+/// every other sub-expression of a folded constant folded too and has nothing
+/// left to evaluate.
+fn lower_folded_effects(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &HashMap<Idx<Binding>, Place>,
+    builder: &mut FlowBuilder,
+) {
+    let mut operands = Vec::new();
+    match &checked.expressions[id].value {
+        ExpressionValue::Length { operand } => {
+            lower_flow_operand(checked, *operand, bindings, builder);
+            return;
+        }
+        ExpressionValue::Grouping { expression } => operands.push(*expression),
+        ExpressionValue::Conversion { operand, .. }
+        | ExpressionValue::Unary { operand, .. }
+        | ExpressionValue::LogicalNot { operand, .. } => operands.push(*operand),
+        ExpressionValue::Binary { left, right, .. }
+        | ExpressionValue::Comparison { left, right, .. }
+        | ExpressionValue::Logical { left, right, .. } => operands.extend([*left, *right]),
+        ExpressionValue::Array { elements, .. } => operands.extend(elements),
+        // A call and an index never fold, so a folded expression only reaches
+        // them under a `len`, and the rest hold no sub-expression at all.
+        ExpressionValue::Integer
+        | ExpressionValue::Boolean
+        | ExpressionValue::Reference(_)
+        | ExpressionValue::Call { .. }
+        | ExpressionValue::Index { .. } => {}
+    }
+    for operand in operands {
+        lower_folded_effects(checked, operand, bindings, builder);
+    }
+}
+
 fn lower_flow_operand(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
@@ -1282,21 +1772,35 @@ fn lower_flow_operand(
     builder: &mut FlowBuilder,
 ) -> Operand {
     let expression = &checked.expressions[id];
+    let Some(scalar) = expression.ty.scalar() else {
+        let place = lower_array_place(checked, id, bindings, builder);
+        return load_place(builder, place, expression.ty.clone());
+    };
+    let ty: Type = scalar.into();
     if let Some(constant) = expression.constant.as_ref() {
+        lower_folded_effects(checked, id, bindings, builder);
         return integer(
             constant
+                .integer()
+                .expect("a scalar expression folds to an integer")
                 .to_i128()
                 .expect("concrete Fern value fits in the IR representation"),
-            expression.ty,
+            scalar,
         );
     }
     match &expression.value {
         ExpressionValue::Integer | ExpressionValue::Boolean => {
             unreachable!("literal expressions are constant")
         }
-        ExpressionValue::Reference(binding) => {
-            load_place(builder, bindings[binding], expression.ty)
+        ExpressionValue::Array { .. } => unreachable!("an array literal has an array type"),
+        // A `len` reaches here only when its operand holds a call, which is
+        // what stops it from folding.
+        ExpressionValue::Length { operand } => lower_length(checked, *operand, bindings, builder),
+        ExpressionValue::Index { .. } => {
+            let place = element_place(checked, id, bindings, builder);
+            load_place(builder, place, ty)
         }
+        ExpressionValue::Reference(binding) => load_place(builder, bindings[binding].clone(), ty),
         ExpressionValue::Grouping { expression } => {
             lower_flow_operand(checked, *expression, bindings, builder)
         }
@@ -1307,7 +1811,7 @@ fn lower_flow_operand(
             let operand = lower_flow_operand(checked, *operand, bindings, builder);
             builder.value(Value {
                 span: Some(checked.syntax.expressions[id].span.clone()),
-                ty: expression.ty,
+                ty,
                 kind: ValueKind::Convert {
                     operand,
                     truncating: *truncating,
@@ -1322,7 +1826,7 @@ fn lower_flow_operand(
             let operand = lower_flow_operand(checked, *operand, bindings, builder);
             builder.value(Value {
                 span: Some(operator_span.clone()),
-                ty: expression.ty,
+                ty,
                 kind: ValueKind::Unary {
                     operator: *operator,
                     operand,
@@ -1339,14 +1843,14 @@ fn lower_flow_operand(
             let (left, right) = lower_second_operand(
                 checked,
                 left_operand,
-                checked.expressions[*left].ty,
+                checked.expressions[*left].ty.clone(),
                 *right,
                 bindings,
                 builder,
             );
             builder.value(Value {
                 span: Some(operator_span.clone()),
-                ty: expression.ty,
+                ty,
                 kind: ValueKind::Binary {
                     operator: *operator,
                     form: BinaryForm::Infix,
@@ -1365,14 +1869,14 @@ fn lower_flow_operand(
             let (left, right) = lower_second_operand(
                 checked,
                 left_operand,
-                checked.expressions[*left].ty,
+                checked.expressions[*left].ty.clone(),
                 *right,
                 bindings,
                 builder,
             );
             builder.value(Value {
                 span: Some(operator_span.clone()),
-                ty: Type::Bool,
+                ty: Scalar::Bool.into(),
                 kind: ValueKind::Comparison {
                     operator: *operator,
                     left,
@@ -1387,7 +1891,7 @@ fn lower_flow_operand(
             let operand = lower_flow_operand(checked, *operand, bindings, builder);
             builder.value(Value {
                 span: Some(operator_span.clone()),
-                ty: Type::Bool,
+                ty: Scalar::Bool.into(),
                 kind: ValueKind::LogicalNot { operand },
             })
         }
@@ -1397,30 +1901,19 @@ fn lower_flow_operand(
             right,
             ..
         } => lower_logical(checked, *operator, *left, *right, bindings, builder),
-        ExpressionValue::Call { function } => {
-            let ExpressionKind::Call(call) = &checked.syntax.expressions[id].kind else {
-                unreachable!("a checked call expression is a call")
-            };
-            lower_call(
-                checked,
-                *function,
-                &call.arguments,
-                checked.syntax.expressions[id].span.clone(),
-                bindings,
-                builder,
-            )
-            .expect("a call used as a value returns one")
-        }
+        ExpressionValue::Call { .. } => lower_call_expression(checked, id, bindings, builder),
     }
 }
 
-/// An already-lowered operand and the block that produced it. Lowering the
-/// operands that follow it can split blocks, and a value is readable only in
-/// the block defining it, so reading it later goes through a local.
+/// An already-lowered operand and the block that produced it. Lowering what
+/// follows it can split blocks, and a value is readable only in the block
+/// defining it, so reading it elsewhere goes through a local. However often it
+/// is read, it spills at most once.
 struct HeldOperand {
     operand: Operand,
     block: BlockId,
     ty: Type,
+    spill: Option<LocalId>,
 }
 
 fn hold_operand(builder: &FlowBuilder, operand: Operand, ty: Type) -> HeldOperand {
@@ -1428,21 +1921,46 @@ fn hold_operand(builder: &FlowBuilder, operand: Operand, ty: Type) -> HeldOperan
         operand,
         block: builder.current,
         ty,
+        spill: None,
     }
 }
 
 impl HeldOperand {
-    /// Reads the operand in the builder's current block, routing a value
-    /// through a local when lowering has moved on to another block.
-    fn read(self, builder: &mut FlowBuilder) -> Operand {
-        match self.operand {
-            Operand::Value(_) if self.block != builder.current => {
-                let local = builder.local(self.ty);
-                builder.store_in(self.block, Place::Local(local), self.operand);
-                load_place(builder, Place::Local(local), self.ty)
-            }
-            operand => operand,
+    fn read(&mut self, builder: &mut FlowBuilder) -> Operand {
+        if !matches!(self.operand, Operand::Value(_)) || self.block == builder.current {
+            return self.operand;
         }
+        let local = match self.spill {
+            Some(local) => local,
+            None => {
+                let local = builder.local(self.ty.clone());
+                builder.store_in(self.block, Place::Local(local), self.operand);
+                self.spill = Some(local);
+                local
+            }
+        };
+        load_place(builder, Place::Local(local), self.ty.clone())
+    }
+}
+
+/// An assignment target whose indices were lowered before the value stored
+/// through it, so the place is rebuilt in whichever block the store lands in.
+struct HeldPlace {
+    root: Place,
+    indices: Vec<(HeldOperand, std::ops::Range<usize>)>,
+}
+
+impl HeldPlace {
+    fn read(&mut self, builder: &mut FlowBuilder) -> Place {
+        let mut place = self.root.clone();
+        for (index, span) in &mut self.indices {
+            place = Place::Element {
+                base: Box::new(place),
+                index: index.read(builder),
+                span: span.clone(),
+            };
+        }
+        place
     }
 }
 
@@ -1456,7 +1974,7 @@ fn lower_second_operand(
     bindings: &HashMap<Idx<Binding>, Place>,
     builder: &mut FlowBuilder,
 ) -> (Operand, Operand) {
-    let held_left = hold_operand(builder, left, left_type);
+    let mut held_left = hold_operand(builder, left, left_type);
     let right = lower_flow_operand(checked, right, bindings, builder);
     (held_left.read(builder), right)
 }
@@ -1481,7 +1999,7 @@ fn lower_logical(
     let right_block = builder.block();
     let short_block = builder.block();
     let join_block = builder.block();
-    let result = builder.local(Type::Bool);
+    let result = builder.local(Scalar::Bool.into());
     let (then_target, else_target, short_value) = match operator {
         LogicalOperator::And => (right_block, short_block, 0),
         LogicalOperator::Or => (short_block, right_block, 1),
@@ -1493,7 +2011,7 @@ fn lower_logical(
     });
 
     builder.select(short_block);
-    builder.store(Place::Local(result), integer(short_value, Type::Bool));
+    builder.store(Place::Local(result), integer(short_value, Scalar::Bool));
     builder.terminate(Terminator::Jump { target: join_block });
 
     builder.select(right_block);
@@ -1502,7 +2020,7 @@ fn lower_logical(
     builder.terminate(Terminator::Jump { target: join_block });
 
     builder.select(join_block);
-    load_place(builder, Place::Local(result), Type::Bool)
+    load_place(builder, Place::Local(result), Scalar::Bool.into())
 }
 
 #[cfg(test)]
@@ -1510,14 +2028,14 @@ mod tests {
     use super::*;
     use crate::{frontend, semantic};
 
-    fn integer(value: i128, ty: Type) -> Operand {
+    fn integer(value: i128, ty: Scalar) -> Operand {
         Operand::Integer { value, ty }
     }
 
-    fn convert(operand: Operand, ty: Type) -> Value {
+    fn convert(operand: Operand, ty: Scalar) -> Value {
         Value {
             span: None,
-            ty,
+            ty: ty.into(),
             kind: ValueKind::Convert {
                 operand,
                 truncating: false,
@@ -1606,10 +2124,47 @@ mod tests {
             .collect()
     }
 
+    fn array(length: u64, element: Type) -> Type {
+        Type::Array {
+            length,
+            element: Box::new(element),
+        }
+    }
+
+    fn element(base: Place, index: Operand) -> Place {
+        Place::Element {
+            base: Box::new(base),
+            index,
+            span: 0..1,
+        }
+    }
+
+    /// Spells a place the way a test reads it: `local0[1]`, `global2`.
+    fn describe(place: &Place) -> String {
+        match place {
+            Place::Local(LocalId(id)) => format!("local{id}"),
+            Place::Global(GlobalId(id)) => format!("global{id}"),
+            Place::Element { base, index, .. } => {
+                let index = match index {
+                    Operand::Integer { value, .. } => value.to_string(),
+                    Operand::Value(ValueId(id)) => format!("v{id}"),
+                };
+                format!("{}[{index}]", describe(base))
+            }
+        }
+    }
+
+    fn stored_places(function: &Function) -> Vec<String> {
+        stores(function)
+            .iter()
+            .map(|(place, _)| describe(place))
+            .collect()
+    }
+
     fn stores(function: &Function) -> Vec<(Place, Operand)> {
         instructions(function)
             .filter_map(|instruction| match instruction {
-                Instruction::Store { place, operand } => Some((*place, *operand)),
+                Instruction::Store { place, operand } => Some((place.clone(), *operand)),
                 _ => None,
             })
             .collect()
@@ -1619,11 +2174,630 @@ mod tests {
         function
             .values
             .iter()
-            .filter_map(|value| match value.kind {
-                ValueKind::Load(place) => Some(place),
+            .filter_map(|value| match &value.kind {
+                ValueKind::Load(place) => Some(place.clone()),
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn array_globals_hold_their_elements_in_memory_order() {
+        let program = lowered(
+            "var row: [3]int = [1, 2, 3];
+             var grid: [2][2]u8 = [[1, 2], [3, 4]];
+             var count = 7;
+             fn main() -> void { exit(count); }",
+        );
+        assert_eq!(
+            program.program().globals,
+            vec![
+                Global {
+                    ty: array(3, Scalar::Int.into()),
+                    values: vec![1, 2, 3],
+                },
+                Global {
+                    ty: array(2, array(2, Scalar::U8.into())),
+                    values: vec![1, 2, 3, 4],
+                },
+                Global {
+                    ty: Scalar::Int.into(),
+                    values: vec![7],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_array_literal_stores_each_element_and_a_fill_repeats_the_last_one() {
+        let program = lowered(
+            "fn side() -> int { return 4; }
+             fn main() -> void { var a: [4]int = [1, side()...]; exit(a[3]); }",
+        );
+        let main = main_of(&program);
+        assert_eq!(
+            stored_places(main),
+            ["local0[0]", "local0[1]", "local0[2]", "local0[3]", "local1"]
+        );
+        // The fill evaluates its element once and copies that value.
+        assert_eq!(call_targets(main), [FunctionId(0)]);
+        let filled: Vec<_> = stores(main)[1..4].iter().map(|(_, value)| *value).collect();
+        assert_eq!(filled, [filled[0]; 3]);
+    }
+
+    #[test]
+    fn a_nested_literal_stores_each_row_through_the_outer_element_place() {
+        // A folded literal writes its leaves straight through nested places.
+        let folded = lowered(
+            "fn main() -> void { var grid: [2][2]int = [[1, 2], [3, 4]]; exit(grid[0][0]); }",
+        );
+        assert_eq!(
+            stored_places(main_of(&folded)),
+            [
+                "local0[0][0]",
+                "local0[0][1]",
+                "local0[1][0]",
+                "local0[1][1]",
+                "local1",
+            ]
+        );
+
+        // A row that is not constant is built on its own and copied in.
+        let runtime = lowered(
+            "fn side() -> int { return 4; }
+             fn main() -> void {
+                 var grid: [2][2]int = [[1, 2], [3, side()]];
+                 exit(grid[0][0]);
+             }",
+        );
+        assert_eq!(
+            stored_places(main_of(&runtime)),
+            [
+                "local1[0]",
+                "local1[1]",
+                "local0[0]",
+                "local2[0]",
+                "local2[1]",
+                "local0[1]",
+                "local3",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_constant_array_materializes_into_a_local_at_each_use() {
+        let program = lowered(
+            "const a: [2]int = [10, 20];
+             fn main() -> void { var i = 1; exit(a[i] + a[0]); }",
+        );
+        let main = main_of(&program);
+        // Two uses of the folded array, each filled elementwise before its read.
+        assert_eq!(
+            stored_places(main),
+            ["local0", "local1[0]", "local1[1]", "local2[0]", "local2[1]"]
+        );
+    }
+
+    #[test]
+    fn assigning_a_whole_array_copies_it() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var b = a;
+                 b[0] = 99;
+                 exit(a[0]);
+             }",
+        );
+        let main = main_of(&program);
+        assert_eq!(
+            stored_places(main),
+            [
+                "local0[0]",
+                "local0[1]",
+                "local0[2]",
+                "local1",
+                "local2",
+                "local2[0]"
+            ]
+        );
+        // `b` is its own array, so writing an element of it leaves `a` alone.
+        let copy = stores(main)[4].1;
+        assert_eq!(
+            main.values[match copy {
+                Operand::Value(ValueId(id)) => id,
+                _ => panic!("a whole-array copy reads a place"),
+            }]
+            .kind,
+            ValueKind::Load(Place::Local(LocalId(1)))
+        );
+    }
+
+    #[test]
+    fn indexing_carries_each_index_span_for_its_bounds_check() {
+        let text = "fn main() -> void {
+             var grid: [2][2]int = [[1, 2], [3, 4]];
+             var row = 1;
+             exit(grid[row][0]);
+         }";
+        let program = lowered(text);
+        let load = loads(main_of(&program))
+            .into_iter()
+            .find(|place| matches!(place, Place::Element { base, .. } if matches!(**base, Place::Element { .. })))
+            .expect("`grid[row][0]` loads through two element places");
+        let Place::Element {
+            base, span: inner, ..
+        } = &load
+        else {
+            unreachable!("the load reaches an element")
+        };
+        let Place::Element { span: outer, .. } = &**base else {
+            unreachable!("its base reaches an element")
+        };
+        assert_eq!(&text[outer.clone()], "row");
+        assert_eq!(&text[inner.clone()], "0");
+    }
+
+    #[test]
+    fn an_element_assignment_lowers_its_index_before_the_value() {
+        let program = lowered(
+            "fn side() -> int { return 1; }
+             fn main() -> void {
+                 var a: [2]int = [0, 0];
+                 var i = 0;
+                 a[i] = side();
+                 exit(a[0]);
+             }",
+        );
+        let main = main_of(&program);
+        let instructions = &main.flow.blocks[0].instructions;
+        let call = instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Instruction::Call { .. }))
+            .expect("the value is a call");
+        let stored = instructions
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Store {
+                        place: Place::Element { .. },
+                        operand: Operand::Value(_),
+                    }
+                )
+            })
+            .expect("the assignment stores through an element place");
+        let Instruction::Store {
+            place: Place::Element { index, .. },
+            ..
+        } = &instructions[stored]
+        else {
+            unreachable!("the store reaches an element")
+        };
+        let Operand::Value(ValueId(index)) = index else {
+            unreachable!("the index is a runtime value")
+        };
+        let index = instructions
+            .iter()
+            .position(|instruction| *instruction == Instruction::Value(ValueId(*index)))
+            .expect("the index is defined in the block");
+        assert!(index < call, "the index is evaluated before the value");
+    }
+
+    #[test]
+    fn a_compound_element_assignment_evaluates_its_index_once() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [2]int = [1, 2];
+                 var i = 1;
+                 a[i] += 3;
+                 exit(a[i]);
+             }",
+        );
+        let main = main_of(&program);
+        // The one index value is reused by the read and by the write, so the
+        // target's indices are evaluated once.
+        let runtime = |place: &Place| {
+            matches!(
+                place,
+                Place::Element {
+                    index: Operand::Value(_),
+                    ..
+                }
+            )
+        };
+        let read = loads(main)
+            .into_iter()
+            .find(runtime)
+            .expect("the compound assignment reads its element");
+        let written = stores(main)
+            .into_iter()
+            .map(|(place, _)| place)
+            .find(runtime)
+            .expect("the compound assignment writes its element");
+        assert_eq!(read, written);
+    }
+
+    #[test]
+    fn len_folds_to_the_length_while_its_operand_still_runs() {
+        let folded = lowered("fn main() -> void { var a: [3]int = [1, 2, 3]; exit(len(a)); }");
+        let main = main_of(&folded);
+        assert_eq!(
+            main.flow.blocks[0].terminator,
+            Terminator::Exit {
+                status: integer(3, Scalar::Int),
+            }
+        );
+
+        let called = lowered(
+            "fn make() -> [2]int { return [1, 2]; }
+             fn main() -> void { exit(len(make())); }",
+        );
+        let main = main_of(&called);
+        assert_eq!(call_targets(main), [FunctionId(0)]);
+        assert_eq!(
+            main.flow.blocks[0].terminator,
+            Terminator::Exit {
+                status: integer(2, Scalar::Int),
+            }
+        );
+
+        let indexed = lowered(
+            "fn main() -> void {
+                 var grid: [2][2]int = [[1, 2], [3, 4]];
+                 var row = 1;
+                 exit(len(grid[row]));
+             }",
+        );
+        let main = main_of(&indexed);
+        assert!(
+            loads(main)
+                .iter()
+                .any(|place| matches!(place, Place::Element { .. })),
+            "the operand's bounds-checked access still happens"
+        );
+
+        let inside_a_fold = lowered(
+            "fn main() -> void {
+                 var grid: [2][2]int = [[1, 2], [3, 4]];
+                 var row = 1;
+                 exit(len(grid[row]) + 1);
+             }",
+        );
+        let main = main_of(&inside_a_fold);
+        assert_eq!(
+            main.flow.blocks[0].terminator,
+            Terminator::Exit {
+                status: integer(3, Scalar::Int),
+            }
+        );
+        assert!(
+            loads(main)
+                .iter()
+                .any(|place| matches!(place, Place::Element { .. })),
+            "an operator that folds the length does not swallow the operand"
+        );
+    }
+
+    #[test]
+    fn for_in_walks_a_copy_of_the_array_taken_once() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var total = 0;
+                 for v in a {
+                     a[0] = 0;
+                     total = total + v;
+                 }
+                 exit(total);
+             }",
+        );
+        let main = main_of(&program);
+        // Only two whole-array values exist: the literal into `a`, and `a` into
+        // the copy the loop walks.
+        let copies = main
+            .values
+            .iter()
+            .filter(|value| matches!(value.ty, Type::Array { .. }))
+            .count();
+        assert_eq!(copies, 2);
+    }
+
+    #[test]
+    fn the_index_binding_reads_the_loop_counter() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [2]int = [5, 6];
+                 var last = 0;
+                 for v, i in a { last = i; }
+                 exit(last);
+             }",
+        );
+        // The literal, `a`, `last`, the copy the loop walks, the counter, and
+        // `v`. The index binding is the counter rather than a seventh local.
+        assert_eq!(
+            main_of(&program).flow.locals,
+            [
+                array(2, Scalar::Int.into()),
+                array(2, Scalar::Int.into()),
+                Scalar::Int.into(),
+                array(2, Scalar::Int.into()),
+                Scalar::Int.into(),
+                Scalar::Int.into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn continue_inside_for_in_advances_to_the_next_element() {
+        let program = lowered(
+            "fn main() -> void {
+                 var a: [3]int = [1, 2, 3];
+                 var total = 0;
+                 for v in a {
+                     if v == 2 { continue; }
+                     total = total + v;
+                 }
+                 exit(total);
+             }",
+        );
+        let main = main_of(&program);
+        let post = main
+            .flow
+            .blocks
+            .iter()
+            .position(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Value(ValueId(id))
+                            if matches!(
+                                main.values[*id].kind,
+                                ValueKind::Binary {
+                                    right: Operand::Integer { value: 1, .. },
+                                    ..
+                                }
+                            )
+                    )
+                })
+            })
+            .expect("the loop increments its counter");
+        let reaching = main
+            .flow
+            .blocks
+            .iter()
+            .filter(|block| block.terminator.targets().contains(&BlockId(post)))
+            .count();
+        assert_eq!(reaching, 2, "the body and its `continue` both increment");
+    }
+
+    #[test]
+    fn arrays_pass_through_parameters_arguments_and_results() {
+        let program = lowered(
+            "fn first(row: [2]int) -> int { return row[0]; }
+             fn swapped(row: [2]int) -> [2]int { return [row[1], row[0]]; }
+             fn main() -> void { var a: [2]int = [1, 2]; exit(first(swapped(a))); }",
+        );
+        let functions = &program.program().functions;
+        let row = array(2, Scalar::Int.into());
+        assert_eq!(functions[0].flow.locals[0], row);
+        assert_eq!(functions[1].result, Some(row.clone()));
+        let main = main_of(&program);
+        assert_eq!(call_targets(main), [FunctionId(1), FunctionId(0)]);
+        // The inner call's array result lands in a local before it is passed on.
+        assert_eq!(main.flow.locals[2], row);
+    }
+
+    #[test]
+    fn verification_rejects_invalid_array_places() {
+        let row = array(2, Scalar::Int.into());
+        let load = |ty: Type, place| Value {
+            span: None,
+            ty,
+            kind: ValueKind::Load(place),
+        };
+        for (values, locals, initialize, expected) in [
+            (
+                vec![load(
+                    Scalar::Int.into(),
+                    element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                )],
+                vec![Type::from(Scalar::Int)],
+                Place::Local(LocalId(0)),
+                "IR indexes `int`",
+            ),
+            (
+                vec![load(
+                    Scalar::Int.into(),
+                    element(Place::Local(LocalId(0)), integer(0, Scalar::U8)),
+                )],
+                vec![row.clone()],
+                element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                "IR index has type `u8`",
+            ),
+            (
+                vec![load(
+                    Scalar::U8.into(),
+                    element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                )],
+                vec![row.clone()],
+                element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                "invalid IR value",
+            ),
+        ] {
+            let blocks = vec![Block {
+                instructions: vec![
+                    Instruction::Store {
+                        place: initialize,
+                        operand: integer(0, Scalar::Int),
+                    },
+                    Instruction::Value(ValueId(0)),
+                ],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }];
+            let error = one_function(main_function(values, locals, blocks))
+                .verify()
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn verification_rejects_array_values_outside_copies_and_equality() {
+        let row = array(2, Scalar::Int.into());
+        let operation = |kind| Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind,
+        };
+        let load = Value {
+            span: None,
+            ty: row.clone(),
+            kind: ValueKind::Load(Place::Local(LocalId(0))),
+        };
+        let rows = Operand::Value(ValueId(0));
+        for (values, expected) in [
+            (
+                vec![
+                    load.clone(),
+                    operation(ValueKind::Comparison {
+                        operator: ComparisonOperator::Less,
+                        left: rows,
+                        right: rows,
+                    }),
+                ],
+                "invalid IR value",
+            ),
+            (
+                vec![
+                    load.clone(),
+                    Value {
+                        span: Some(0..1),
+                        ty: row.clone(),
+                        kind: ValueKind::Binary {
+                            operator: BinaryOperator::Add,
+                            form: BinaryForm::Infix,
+                            left: rows,
+                            right: rows,
+                        },
+                    },
+                ],
+                "where a scalar is required",
+            ),
+        ] {
+            let blocks = vec![Block {
+                instructions: vec![
+                    Instruction::Store {
+                        place: element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                        operand: integer(0, Scalar::Int),
+                    },
+                    Instruction::Value(ValueId(0)),
+                    Instruction::Value(ValueId(1)),
+                ],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }];
+            let error = one_function(main_function(values, vec![row.clone()], blocks))
+                .verify()
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+
+        // Equality on identical array types is the one array operation.
+        let equality = vec![
+            load,
+            operation(ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: rows,
+                right: rows,
+            }),
+        ];
+        let blocks = vec![Block {
+            instructions: vec![
+                Instruction::Store {
+                    place: element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                    operand: integer(0, Scalar::Int),
+                },
+                Instruction::Value(ValueId(0)),
+                Instruction::Value(ValueId(1)),
+            ],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }];
+        one_function(main_function(equality, vec![row], blocks))
+            .verify()
+            .unwrap();
+    }
+
+    #[test]
+    fn verification_rejects_a_copy_between_different_array_types() {
+        let function = main_function(
+            vec![Value {
+                span: None,
+                ty: array(3, Scalar::Int.into()),
+                kind: ValueKind::Load(Place::Local(LocalId(1))),
+            }],
+            vec![array(2, Scalar::Int.into()), array(3, Scalar::Int.into())],
+            vec![Block {
+                instructions: vec![
+                    Instruction::Store {
+                        place: element(Place::Local(LocalId(1)), integer(0, Scalar::Int)),
+                        operand: integer(0, Scalar::Int),
+                    },
+                    Instruction::Value(ValueId(0)),
+                    Instruction::Store {
+                        place: Place::Local(LocalId(0)),
+                        operand: Operand::Value(ValueId(0)),
+                    },
+                ],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }],
+        );
+        let error = one_function(function).verify().unwrap_err();
+        assert!(
+            error.to_string().contains("IR store has type `[3]int`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn verification_checks_a_globals_values_against_its_type() {
+        for (ty, values, expected) in [
+            (
+                array(2, Scalar::Int.into()),
+                vec![1],
+                "holds 1 values, expected 2",
+            ),
+            (
+                array(2, array(2, Scalar::Int.into())),
+                vec![1, 2, 3, 4, 5],
+                "holds 5 values, expected 4",
+            ),
+            (
+                array(2, Scalar::U8.into()),
+                vec![0, 256],
+                "IR integer 256 out of range",
+            ),
+        ] {
+            let mut program = one_function(main_function(
+                vec![],
+                vec![],
+                vec![Block {
+                    instructions: vec![],
+                    terminator: Terminator::Exit {
+                        status: integer(0, Scalar::Int),
+                    },
+                }],
+            ));
+            program.globals = vec![Global { ty, values }];
+            let error = program.verify().unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -1744,8 +2918,8 @@ mod tests {
         assert_eq!(
             program.program().globals,
             vec![Global {
-                ty: Type::Int,
-                value: 40,
+                ty: Scalar::Int.into(),
+                values: vec![40],
             }]
         );
         insta::assert_debug_snapshot!("module_bindings", program.program());
@@ -1783,8 +2957,11 @@ mod tests {
         );
         let pick = &program.program().functions[0];
         assert_eq!(pick.parameters, 2);
-        assert_eq!(pick.result, Some(Type::I64));
-        assert_eq!(pick.flow.locals[..2], [Type::U8, Type::I64]);
+        assert_eq!(pick.result, Some(Scalar::I64.into()));
+        assert_eq!(
+            pick.flow.locals[..2],
+            [Type::from(Scalar::U8), Scalar::I64.into()]
+        );
         assert!(matches!(
             pick.flow.blocks[0].terminator,
             Terminator::Return {
@@ -1837,6 +3014,46 @@ mod tests {
              }",
         );
         insta::assert_debug_snapshot!("functions", program.program());
+    }
+
+    #[test]
+    fn lowers_the_arrays_milestone_program() {
+        let program = lowered(
+            "const weights: [_]int = [1, 2, 3];
+
+             fn weighted(row: [3]int) -> int {
+                 var total = 0;
+                 for v, i in row {
+                     total = total + v * weights[i];
+                 }
+                 return total;
+             }
+
+             fn totals(grid: [2][3]int) -> [2]int {
+                 var out: [2]int = [0...];
+                 for var r = 0; r < len(grid); r = r + 1 {
+                     out[r] = weighted(grid[r]);
+                 }
+                 return out;
+             }
+
+             fn main() -> void {
+                 var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
+
+                 var copy = grid;
+                 copy[0][0] = 99;
+                 if copy == grid {
+                     exit(255);
+                 }
+
+                 var sum = 0;
+                 for t in totals(grid) {
+                     sum = sum + t;
+                 }
+                 exit(sum);
+             }",
+        );
+        insta::assert_debug_snapshot!("arrays", program.program());
     }
 
     /// The milestone example's module tree, with `app` as the root module.
@@ -1916,8 +3133,8 @@ fn main() -> void {
         assert_eq!(
             program.globals,
             vec![Global {
-                ty: Type::Int,
-                value: 0,
+                ty: Scalar::Int.into(),
+                values: vec![0],
             }]
         );
 
@@ -1928,19 +3145,19 @@ fn main() -> void {
         assert_eq!(
             stores(main),
             [(
-                value,
+                value.clone(),
                 Operand::Integer {
                     value: 1,
-                    ty: Type::Int,
+                    ty: Scalar::Int,
                 }
             )]
         );
-        assert_eq!(loads(main), [value]);
+        assert_eq!(loads(main), std::slice::from_ref(&value));
 
         // `value = value + amount` in the callee reads the same global and its
         // own parameter local.
         let bump = &program.functions[2];
-        assert_eq!(loads(bump), [value, Place::Local(LocalId(0))]);
+        assert_eq!(loads(bump), [value.clone(), Place::Local(LocalId(0))]);
         assert_eq!(stores(bump).len(), 1);
         assert_eq!(stores(bump)[0].0, value);
     }
@@ -1969,7 +3186,7 @@ fn main() -> void {
             Terminator::Return {
                 value: Some(Operand::Integer {
                     value: 7,
-                    ty: Type::Int,
+                    ty: Scalar::Int,
                 })
             }
         );
@@ -2002,7 +3219,7 @@ fn main() -> void {
                 Place::Global(GlobalId(0)),
                 Operand::Integer {
                     value: 255,
-                    ty: Type::Int,
+                    ty: Scalar::Int,
                 }
             )]
         );
@@ -2034,14 +3251,14 @@ fn main() -> void {
         assert_eq!(
             program.globals,
             vec![Global {
-                ty: Type::Int,
-                value: 0,
+                ty: Scalar::Int.into(),
+                values: vec![0],
             }]
         );
 
         // `shared` loads once, so both dependents address the same storage.
         let add = &program.functions[1];
-        assert_eq!(loads(add), [total]);
+        assert_eq!(loads(add), std::slice::from_ref(&total));
         assert_eq!(stores(add).len(), 1);
         assert_eq!(stores(add)[0].0, total);
         assert_eq!(loads(&program.functions[2]), [total]);
@@ -2069,12 +3286,12 @@ fn main() -> void {
             program.globals,
             vec![
                 Global {
-                    ty: Type::Int,
-                    value: 2,
+                    ty: Scalar::Int.into(),
+                    values: vec![2],
                 },
                 Global {
-                    ty: Type::Int,
-                    value: 6,
+                    ty: Scalar::Int.into(),
+                    values: vec![6],
                 },
             ]
         );
@@ -2119,7 +3336,7 @@ fn main() -> void {
         // is held in a local and read back where the call runs.
         let block = &main.flow.blocks[block_index];
         let mut locals = Vec::new();
-        for (argument, ty) in arguments.iter().zip([Type::Int, Type::Bool]) {
+        for (argument, ty) in arguments.iter().zip([Scalar::Int, Scalar::Bool]) {
             let Operand::Value(id) = argument else {
                 panic!("an argument read in the call's block is a value")
             };
@@ -2127,7 +3344,11 @@ fn main() -> void {
                 block.instructions.contains(&Instruction::Value(*id)),
                 "the argument is defined in the call's block"
             );
-            assert_eq!(main.values[id.0].ty, ty, "arguments keep source order");
+            assert_eq!(
+                main.values[id.0].ty,
+                Type::from(ty),
+                "arguments keep source order"
+            );
             let ValueKind::Load(Place::Local(local)) = main.values[id.0].kind else {
                 panic!("an argument held across a split is loaded from its local")
             };
@@ -2173,20 +3394,22 @@ fn main() -> void {
             .expect("the call is lowered");
         let ValueId(id) = result.expect("a value call defines its result");
         assert_eq!(main.values[id].kind, ValueKind::CallResult);
-        assert_eq!(main.values[id].ty, Type::Int);
+        assert_eq!(main.values[id].ty, Type::from(Scalar::Int));
     }
 
     #[test]
     fn verification_rejects_invalid_references() {
         for values in [
-            vec![convert(Operand::Value(ValueId(usize::MAX)), Type::Int)],
+            vec![convert(Operand::Value(ValueId(usize::MAX)), Scalar::Int)],
             vec![
-                convert(Operand::Value(ValueId(1)), Type::Int),
-                convert(integer(42, Type::Int), Type::Int),
+                convert(Operand::Value(ValueId(1)), Scalar::Int),
+                convert(integer(42, Scalar::Int), Scalar::Int),
             ],
-            vec![convert(Operand::Value(ValueId(0)), Type::Int)],
+            vec![convert(Operand::Value(ValueId(0)), Scalar::Int)],
         ] {
-            let error = program(values, integer(0, Type::Int)).verify().unwrap_err();
+            let error = program(values, integer(0, Scalar::Int))
+                .verify()
+                .unwrap_err();
             assert!(
                 error.to_string().contains("undefined value")
                     || error.to_string().contains("not defined earlier")
@@ -2201,7 +3424,7 @@ fn main() -> void {
         }
         assert!(
             program(
-                vec![convert(integer(42, Type::Int), Type::Int)],
+                vec![convert(integer(42, Scalar::Int), Scalar::Int)],
                 Operand::Value(ValueId(1)),
             )
             .verify()
@@ -2212,14 +3435,14 @@ fn main() -> void {
     #[test]
     fn verification_accepts_constants_conversions_and_exits() {
         for exit in [
-            integer(-1, Type::Int),
+            integer(-1, Scalar::Int),
             Operand::Value(ValueId(0)),
             Operand::Value(ValueId(1)),
         ] {
             program(
                 vec![
-                    convert(integer(i128::from(i32::MIN), Type::Int), Type::Int),
-                    convert(Operand::Value(ValueId(0)), Type::Int),
+                    convert(integer(i128::from(i32::MIN), Scalar::Int), Scalar::Int),
+                    convert(Operand::Value(ValueId(0)), Scalar::Int),
                 ],
                 exit,
             )
@@ -2228,8 +3451,8 @@ fn main() -> void {
         }
     }
 
-    fn ranges() -> [(Type, i128, i128); 10] {
-        Type::ALL_INTEGERS.map(|ty| (ty, ty.min(), i128::from(ty.max())))
+    fn ranges() -> [(Scalar, i128, i128); 10] {
+        Scalar::ALL_INTEGERS.map(|ty| (ty, ty.min(), i128::from(ty.max())))
     }
 
     #[test]
@@ -2241,21 +3464,24 @@ fn main() -> void {
                         convert(integer(value, ty), ty),
                         convert(Operand::Value(ValueId(0)), ty),
                     ],
-                    integer(0, Type::Int),
+                    integer(0, Scalar::Int),
                 )
                 .verify()
                 .unwrap();
             }
             for value in [i128::MIN, min - 1, max + 1, i128::MAX] {
-                let error = program(vec![convert(integer(value, ty), ty)], integer(0, Type::Int))
-                    .verify()
-                    .unwrap_err();
+                let error = program(
+                    vec![convert(integer(value, ty), ty)],
+                    integer(0, Scalar::Int),
+                )
+                .verify()
+                .unwrap_err();
                 assert!(error.to_string().contains("out of range"));
             }
             assert!(
                 program(
-                    vec![convert(integer(0, ty), Type::Bool)],
-                    integer(0, Type::Int),
+                    vec![convert(integer(0, ty), Scalar::Bool)],
+                    integer(0, Scalar::Int),
                 )
                 .verify()
                 .is_err()
@@ -2277,14 +3503,14 @@ fn main() -> void {
                                     convert(integer(value, source), source),
                                     Value {
                                         span,
-                                        ty: destination,
+                                        ty: destination.into(),
                                         kind: ValueKind::Convert {
                                             operand,
                                             truncating: false,
                                         },
                                     },
                                 ],
-                                integer(0, Type::Int),
+                                integer(0, Scalar::Int),
                             )
                             .verify();
                             assert_eq!(
@@ -2301,12 +3527,12 @@ fn main() -> void {
                     program(vec![convert(integer(0, source), source)], exit)
                         .verify()
                         .is_ok(),
-                    source == Type::Int
+                    source == Scalar::Int
                 );
             }
         }
         for operand in [
-            integer(128, Type::I8),
+            integer(128, Scalar::I8),
             Operand::Value(ValueId(0)),
             Operand::Value(ValueId(usize::MAX)),
         ] {
@@ -2314,23 +3540,27 @@ fn main() -> void {
                 program(
                     vec![Value {
                         span: None,
-                        ty: Type::Int,
+                        ty: Scalar::Int.into(),
                         kind: ValueKind::Convert {
                             operand,
                             truncating: false,
                         }
                     }],
-                    integer(0, Type::Int),
+                    integer(0, Scalar::Int),
                 )
                 .verify()
                 .is_err()
             );
         }
         for value in [
-            -(1i128 << (Type::Int.width() - 1)) - 1,
-            i128::from(Type::Int.max()) + 1,
+            -(1i128 << (Scalar::Int.width() - 1)) - 1,
+            i128::from(Scalar::Int.max()) + 1,
         ] {
-            assert!(program(vec![], integer(value, Type::Int)).verify().is_err());
+            assert!(
+                program(vec![], integer(value, Scalar::Int))
+                    .verify()
+                    .is_err()
+            );
         }
     }
 
@@ -2338,17 +3568,17 @@ fn main() -> void {
     fn verification_accepts_checked_conversion_operands() {
         program(
             vec![
-                convert(integer(42, Type::U8), Type::U8),
+                convert(integer(42, Scalar::U8), Scalar::U8),
                 Value {
                     span: None,
-                    ty: Type::U64,
+                    ty: Scalar::U64.into(),
                     kind: ValueKind::Convert {
                         operand: Operand::Value(ValueId(0)),
                         truncating: false,
                     },
                 },
             ],
-            integer(0, Type::Int),
+            integer(0, Scalar::Int),
         )
         .verify()
         .unwrap();
@@ -2398,7 +3628,7 @@ fn main() -> void {
         for (id, spelling) in [(2, "+"), (6, "-"), (7, "*")] {
             let start = text.find(&format!(" {spelling} ")).unwrap() + 1;
             assert_eq!(values[id].span, Some(start..start + spelling.len()));
-            assert_eq!(values[id].ty, Type::Int);
+            assert_eq!(values[id].ty, Type::from(Scalar::Int));
         }
         assert!(matches!(
             main.flow.blocks.last().unwrap().terminator,
@@ -2418,11 +3648,11 @@ fn main() -> void {
             ValueKind::Binary {
                 operator: BinaryOperator::ShiftLeft,
                 form: BinaryForm::Infix,
-                left: integer(1, Type::U64),
+                left: integer(1, Scalar::U64),
                 right: Operand::Value(ValueId(0)),
             }
         );
-        assert_eq!(values[1].ty, Type::U64);
+        assert_eq!(values[1].ty, Type::from(Scalar::U64));
         assert_eq!(
             values[3].kind,
             ValueKind::Binary {
@@ -2432,7 +3662,7 @@ fn main() -> void {
                 right: Operand::Value(ValueId(2)),
             }
         );
-        assert_eq!(values[3].ty, Type::U64);
+        assert_eq!(values[3].ty, Type::from(Scalar::U64));
     }
 
     #[test]
@@ -2447,26 +3677,26 @@ fn main() -> void {
             ValueKind::Binary {
                 operator: BinaryOperator::ShiftLeft,
                 form: BinaryForm::Infix,
-                left: integer(3, Type::U64),
+                left: integer(3, Scalar::U64),
                 right: Operand::Value(ValueId(0)),
             }
         );
-        assert_eq!(values[1].ty, Type::U64);
+        assert_eq!(values[1].ty, Type::from(Scalar::U64));
     }
 
     #[test]
     fn verification_checks_operation_shapes_and_accepts_independent_shift_counts() {
-        let operation = |ty, kind| Value {
+        let operation = |ty: Scalar, kind| Value {
             span: Some(0..1),
-            ty,
+            ty: ty.into(),
             kind,
         };
         program(
             vec![
-                convert(integer(1, Type::U8), Type::U8),
-                convert(integer(1, Type::U16), Type::U16),
+                convert(integer(1, Scalar::U8), Scalar::U8),
+                convert(integer(1, Scalar::U16), Scalar::U16),
                 operation(
-                    Type::U8,
+                    Scalar::U8,
                     ValueKind::Binary {
                         operator: BinaryOperator::ShiftLeft,
                         form: BinaryForm::Infix,
@@ -2475,48 +3705,48 @@ fn main() -> void {
                     },
                 ),
             ],
-            integer(0, Type::Int),
+            integer(0, Scalar::Int),
         )
         .verify()
         .unwrap();
 
         for value in [
             operation(
-                Type::U8,
+                Scalar::U8,
                 ValueKind::Unary {
                     operator: UnaryOperator::Negate,
-                    operand: integer(1, Type::U8),
+                    operand: integer(1, Scalar::U8),
                 },
             ),
             operation(
-                Type::U16,
+                Scalar::U16,
                 ValueKind::Unary {
                     operator: UnaryOperator::Complement,
-                    operand: integer(1, Type::U8),
+                    operand: integer(1, Scalar::U8),
                 },
             ),
             operation(
-                Type::U8,
+                Scalar::U8,
                 ValueKind::Binary {
                     operator: BinaryOperator::Add,
                     form: BinaryForm::Infix,
-                    left: integer(1, Type::U8),
-                    right: integer(1, Type::U16),
+                    left: integer(1, Scalar::U8),
+                    right: integer(1, Scalar::U16),
                 },
             ),
             Value {
                 span: None,
-                ty: Type::U8,
+                ty: Scalar::U8.into(),
                 kind: ValueKind::Binary {
                     operator: BinaryOperator::Add,
                     form: BinaryForm::Infix,
-                    left: integer(1, Type::U8),
-                    right: integer(1, Type::U8),
+                    left: integer(1, Scalar::U8),
+                    right: integer(1, Scalar::U8),
                 },
             },
         ] {
             assert!(
-                program(vec![value], integer(0, Type::Int))
+                program(vec![value], integer(0, Scalar::Int))
                     .verify()
                     .unwrap_err()
                     .to_string()
@@ -2575,7 +3805,7 @@ fn main() -> void {
             vec![Block {
                 instructions: vec![],
                 terminator: Terminator::Branch {
-                    condition: integer(1, Type::Int),
+                    condition: integer(1, Scalar::Int),
                     then_target: BlockId(0),
                     else_target: BlockId(0),
                 },
@@ -2602,33 +3832,33 @@ fn main() -> void {
     fn verification_rejects_loads_before_definite_initialization() {
         let load = || Value {
             span: None,
-            ty: Type::Int,
+            ty: Scalar::Int.into(),
             kind: ValueKind::Load(Place::Local(LocalId(0))),
         };
         let same_block = main_function(
             vec![load()],
-            vec![Type::Int],
+            vec![Scalar::Int.into()],
             vec![Block {
                 instructions: vec![
                     Instruction::Value(ValueId(0)),
                     Instruction::Store {
                         place: Place::Local(LocalId(0)),
-                        operand: integer(1, Type::Int),
+                        operand: integer(1, Scalar::Int),
                     },
                 ],
                 terminator: Terminator::Exit {
-                    status: integer(0, Type::Int),
+                    status: integer(0, Scalar::Int),
                 },
             }],
         );
         let missing_path = main_function(
             vec![load()],
-            vec![Type::Int],
+            vec![Scalar::Int.into()],
             vec![
                 Block {
                     instructions: vec![],
                     terminator: Terminator::Branch {
-                        condition: integer(1, Type::Bool),
+                        condition: integer(1, Scalar::Bool),
                         then_target: BlockId(1),
                         else_target: BlockId(2),
                     },
@@ -2636,7 +3866,7 @@ fn main() -> void {
                 Block {
                     instructions: vec![Instruction::Store {
                         place: Place::Local(LocalId(0)),
-                        operand: integer(1, Type::Int),
+                        operand: integer(1, Scalar::Int),
                     }],
                     terminator: Terminator::Jump { target: BlockId(3) },
                 },
@@ -2647,7 +3877,7 @@ fn main() -> void {
                 Block {
                     instructions: vec![Instruction::Value(ValueId(0))],
                     terminator: Terminator::Exit {
-                        status: integer(0, Type::Int),
+                        status: integer(0, Scalar::Int),
                     },
                 },
             ],
@@ -2662,15 +3892,15 @@ fn main() -> void {
     fn arguments_initialize_the_parameters_before_the_entry_block() {
         let reads_parameter = Function {
             parameters: 1,
-            result: Some(Type::Int),
+            result: Some(Scalar::Int.into()),
             values: vec![Value {
                 span: None,
-                ty: Type::Int,
+                ty: Scalar::Int.into(),
                 kind: ValueKind::Load(Place::Local(LocalId(0))),
             }],
             flow: ControlFlow {
                 entry: BlockId(0),
-                locals: vec![Type::Int],
+                locals: vec![Scalar::Int.into()],
                 blocks: vec![Block {
                     instructions: vec![Instruction::Value(ValueId(0))],
                     terminator: Terminator::Return {
@@ -2699,7 +3929,7 @@ fn main() -> void {
                     vec![Block {
                         instructions,
                         terminator: Terminator::Exit {
-                            status: integer(0, Type::Int),
+                            status: integer(0, Scalar::Int),
                         },
                     }],
                 ),
@@ -2709,14 +3939,14 @@ fn main() -> void {
         }
     }
 
-    fn callee(parameters: Vec<Type>, result: Option<Type>) -> Function {
+    fn callee(parameters: Vec<Scalar>, result: Option<Scalar>) -> Function {
         Function {
             parameters: parameters.len(),
-            result,
+            result: result.map(Type::from),
             values: vec![],
             flow: ControlFlow {
                 entry: BlockId(0),
-                locals: parameters,
+                locals: parameters.into_iter().map(Type::from).collect(),
                 blocks: vec![Block {
                     instructions: vec![],
                     terminator: Terminator::Return {
@@ -2736,10 +3966,10 @@ fn main() -> void {
         }
     }
 
-    fn call_result(ty: Type) -> Value {
+    fn call_result(ty: Scalar) -> Value {
         Value {
             span: None,
-            ty,
+            ty: ty.into(),
             kind: ValueKind::CallResult,
         }
     }
@@ -2748,12 +3978,12 @@ fn main() -> void {
     fn verification_checks_call_targets_arity_and_argument_types() {
         // A well-formed call to a two-parameter function.
         two_functions(
-            callee(vec![Type::U8, Type::Int], None),
+            callee(vec![Scalar::U8, Scalar::Int], None),
             vec![],
             vec![call(
                 None,
                 1,
-                vec![integer(1, Type::U8), integer(2, Type::Int)],
+                vec![integer(1, Scalar::U8), integer(2, Scalar::Int)],
             )],
         )
         .verify()
@@ -2762,7 +3992,7 @@ fn main() -> void {
         for (instruction, expected) in [
             (call(None, 7, vec![]), "unknown function 7"),
             (
-                call(None, 1, vec![integer(1, Type::U8)]),
+                call(None, 1, vec![integer(1, Scalar::U8)]),
                 "passes 1 argument",
             ),
             (
@@ -2770,20 +4000,24 @@ fn main() -> void {
                     None,
                     1,
                     vec![
-                        integer(1, Type::U8),
-                        integer(2, Type::Int),
-                        integer(3, Type::Int),
+                        integer(1, Scalar::U8),
+                        integer(2, Scalar::Int),
+                        integer(3, Scalar::Int),
                     ],
                 ),
                 "passes 3 arguments",
             ),
             (
-                call(None, 1, vec![integer(1, Type::Int), integer(2, Type::Int)]),
+                call(
+                    None,
+                    1,
+                    vec![integer(1, Scalar::Int), integer(2, Scalar::Int)],
+                ),
                 "argument 0 has type",
             ),
         ] {
             let error = two_functions(
-                callee(vec![Type::U8, Type::Int], None),
+                callee(vec![Scalar::U8, Scalar::Int], None),
                 vec![],
                 vec![instruction],
             )
@@ -2797,7 +4031,7 @@ fn main() -> void {
     fn verification_checks_every_signature_before_any_call() {
         // The callee promises two parameters but names only one local, so the
         // caller's argument check has no parameter type to read.
-        let mut short_of_locals = callee(vec![Type::Int], None);
+        let mut short_of_locals = callee(vec![Scalar::Int], None);
         short_of_locals.parameters = 2;
         let error = two_functions(
             short_of_locals,
@@ -2805,7 +4039,7 @@ fn main() -> void {
             vec![call(
                 None,
                 1,
-                vec![integer(1, Type::Int), integer(2, Type::Int)],
+                vec![integer(1, Scalar::Int), integer(2, Scalar::Int)],
             )],
         )
         .verify()
@@ -2825,8 +4059,8 @@ fn main() -> void {
             .verify()
             .unwrap();
         two_functions(
-            callee(vec![], Some(Type::Int)),
-            vec![call_result(Type::Int)],
+            callee(vec![], Some(Scalar::Int)),
+            vec![call_result(Scalar::Int)],
             vec![call(Some(ValueId(0)), 1, vec![])],
         )
         .verify()
@@ -2834,7 +4068,7 @@ fn main() -> void {
 
         let error = two_functions(
             callee(vec![], None),
-            vec![call_result(Type::Int)],
+            vec![call_result(Scalar::Int)],
             vec![call(Some(ValueId(0)), 1, vec![])],
         )
         .verify()
@@ -2846,7 +4080,7 @@ fn main() -> void {
         );
 
         let error = two_functions(
-            callee(vec![], Some(Type::Int)),
+            callee(vec![], Some(Scalar::Int)),
             vec![],
             vec![call(None, 1, vec![])],
         )
@@ -2855,8 +4089,8 @@ fn main() -> void {
         assert!(error.to_string().contains("discards the result"));
 
         let error = two_functions(
-            callee(vec![], Some(Type::Int)),
-            vec![call_result(Type::U8)],
+            callee(vec![], Some(Scalar::Int)),
+            vec![call_result(Scalar::U8)],
             vec![call(Some(ValueId(0)), 1, vec![])],
         )
         .verify()
@@ -2868,12 +4102,12 @@ fn main() -> void {
     fn verification_ties_call_results_to_their_defining_call() {
         // A `CallResult` value that no call defines.
         let error = one_function(main_function(
-            vec![call_result(Type::Int)],
+            vec![call_result(Scalar::Int)],
             vec![],
             vec![Block {
                 instructions: vec![Instruction::Value(ValueId(0))],
                 terminator: Terminator::Exit {
-                    status: integer(0, Type::Int),
+                    status: integer(0, Scalar::Int),
                 },
             }],
         ))
@@ -2887,8 +4121,8 @@ fn main() -> void {
 
         // A call defining a value that is not a `CallResult`.
         let error = two_functions(
-            callee(vec![], Some(Type::Int)),
-            vec![convert(integer(1, Type::Int), Type::Int)],
+            callee(vec![], Some(Scalar::Int)),
+            vec![convert(integer(1, Scalar::Int), Scalar::Int)],
             vec![call(Some(ValueId(0)), 1, vec![])],
         )
         .verify()
@@ -2923,22 +4157,22 @@ fn main() -> void {
             .verify()
         };
         returning(None, None).unwrap();
-        returning(Some(Type::Int), Some(integer(0, Type::Int))).unwrap();
+        returning(Some(Scalar::Int.into()), Some(integer(0, Scalar::Int))).unwrap();
 
         for (result, value, expected) in [
             (
                 None,
-                Some(integer(0, Type::Int)),
+                Some(integer(0, Scalar::Int)),
                 "returns a value from a void function",
             ),
-            (Some(Type::Int), None, "return is missing its value"),
+            (Some(Scalar::Int), None, "return is missing its value"),
             (
-                Some(Type::Int),
-                Some(integer(0, Type::U8)),
+                Some(Scalar::Int),
+                Some(integer(0, Scalar::U8)),
                 "internal compiler error: IR returns",
             ),
         ] {
-            let error = returning(result, value).unwrap_err();
+            let error = returning(result.map(Type::from), value).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
     }
@@ -2948,7 +4182,7 @@ fn main() -> void {
         let error = two_functions(
             Function {
                 parameters: 0,
-                result: Some(Type::Int),
+                result: Some(Scalar::Int.into()),
                 values: vec![],
                 flow: ControlFlow {
                     entry: BlockId(0),
@@ -2975,7 +4209,7 @@ fn main() -> void {
             values: vec![],
             flow: ControlFlow {
                 entry: BlockId(0),
-                locals: vec![Type::Int],
+                locals: vec![Scalar::Int.into()],
                 blocks: vec![Block {
                     instructions: vec![],
                     terminator: Terminator::Return { value: None },
@@ -2994,18 +4228,18 @@ fn main() -> void {
                 vec![Block {
                     instructions: vec![Instruction::Store {
                         place: Place::Global(GlobalId(0)),
-                        operand: integer(1, Type::Int),
+                        operand: integer(1, Scalar::Int),
                     }],
                     terminator: Terminator::Exit {
-                        status: integer(0, Type::Int),
+                        status: integer(0, Scalar::Int),
                     },
                 }],
             )],
             main: FunctionId(0),
         };
         stores_to_global(vec![Global {
-            ty: Type::Int,
-            value: 0,
+            ty: Scalar::Int.into(),
+            values: vec![0],
         }])
         .verify()
         .unwrap();
@@ -3014,8 +4248,8 @@ fn main() -> void {
         assert!(error.to_string().contains("unknown global 0"));
 
         let error = stores_to_global(vec![Global {
-            ty: Type::U8,
-            value: 0,
+            ty: Scalar::U8.into(),
+            values: vec![0],
         }])
         .verify()
         .unwrap_err();
@@ -3023,8 +4257,8 @@ fn main() -> void {
 
         let error = Program {
             globals: vec![Global {
-                ty: Type::U8,
-                value: 256,
+                ty: Scalar::U8.into(),
+                values: vec![256],
             }],
             functions: vec![main_function(
                 vec![],
@@ -3032,7 +4266,7 @@ fn main() -> void {
                 vec![Block {
                     instructions: vec![],
                     terminator: Terminator::Exit {
-                        status: integer(0, Type::Int),
+                        status: integer(0, Scalar::Int),
                     },
                 }],
             )],

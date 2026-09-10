@@ -131,7 +131,7 @@ Expected exit status: 46. Completion fixture:
 
 ### Tasks
 
-- [ ] **Parse array syntax**
+- [x] **Parse array syntax**
 
   - Make a type annotation a syntax node so `[N]T`, `[_]T`, and nested array
     types carry an element type and an unevaluated length expression.
@@ -140,7 +140,7 @@ Expected exit status: 46. Completion fixture:
   - Bind indexing, calls, conversions, and `len` more tightly than any operator,
     and cover valid forms and malformed source in parser tests and snapshots.
 
-- [ ] **Represent array types across the compiler**
+- [x] **Represent array types across the compiler**
 
   - Replace the scalar `Type` with a representation that names array types,
     compares them structurally, and spells them in diagnostics, and carry it
@@ -150,7 +150,7 @@ Expected exit status: 46. Completion fixture:
     non-constant length, a `void` element type, and `[_]` outside a declaration
     with an array-literal initializer.
 
-- [ ] **Check array values and literals**
+- [x] **Check array values and literals**
 
   - Type array literals from context and, without context, from a single common
     element type, checking element count against the length and diagnosing fill
@@ -160,7 +160,7 @@ Expected exit status: 46. Completion fixture:
   - Check that initialization, assignment, argument passing, and return of a
     whole array require identical types and copy the value.
 
-- [ ] **Check indexing, length, comparison, and iteration**
+- [x] **Check indexing, length, comparison, and iteration**
 
   - Check that an index has type `int` or is an untyped constant that fits,
     reject an out-of-range constant index, and treat `a[i]` as never constant.
@@ -172,7 +172,7 @@ Expected exit status: 46. Completion fixture:
   - Check both `for … in` forms: an array operand, distinct immutable bindings
     scoped to the body and rebound each iteration, and an `int` index binding.
 
-- [ ] **Represent arrays in Fern IR**
+- [x] **Represent arrays in Fern IR**
 
   - Give arrays addressable storage for locals, parameters, results, and
     globals, with element places, whole-array copies, and constant aggregate
@@ -184,7 +184,7 @@ Expected exit status: 46. Completion fixture:
   - Verify element types, index types, place types, and copy sizes, with IR
     tests and snapshots covering nested arrays and aggregate calls.
 
-- [ ] **Compile and execute array programs**
+- [x] **Compile and execute array programs**
 
   - Emit native aggregate storage, element addressing, whole-array copies,
     aggregate arguments and results, and bounds-check traps for the verified IR.

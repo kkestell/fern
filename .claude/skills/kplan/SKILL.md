@@ -32,9 +32,9 @@ This skill produces an implementation plan. It never implements the plan.
      decisions. Its absence is not a blocker.
    - Reference those sources from the plan. Do not restate their contents.
 4. Confirm that the source documents settle the proposed work.
-   - If required product behavior is missing or ambiguous, stop and identify the
-     decision the user must resolve with `kspec`. Do not modify the
-     specification from this skill.
+   - If required product behavior is missing or ambiguous, invoke `kspec` to
+     resolve it, then resume this workflow from the updated specification. Do
+     not modify the specification directly from this skill.
    - If the work is absent from or conflicts with the roadmap, stop and identify
      the scope or ordering decision the user must resolve with `kroadmap`. Do
      not modify the roadmap from this skill.

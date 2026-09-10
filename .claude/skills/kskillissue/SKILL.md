@@ -1,6 +1,6 @@
 ---
 name: kskillissue
-description: Diagnose and fix a `k*` skill that made an agent behave badly, then commit, push, and reinstall it. Use when the user reports that an agent did something wrong and suspects the skill it was following — "the skill told it to", "kwork skipped the review", "kplan wrote the plan to the wrong place", "that's a skill issue". Works on the source checkout of the skills repo, not the installed copy.
+description: Diagnose and fix a `k*` skill that made an agent behave badly, then commit, push, and reinstall it. Use when the user reports that an agent did something wrong and suspects the skill it was following — "the skill told it to", "kwork skipped the review", "kplan wrote the plan to the wrong place", "that's a skill issue". Works on the skill's checked-in source, not a generated installed copy.
 argument-hint: "[what the agent did wrong — and which skill, if you know]"
 ---
 
@@ -23,20 +23,26 @@ argument-hint: "[what the agent did wrong — and which skill, if you know]"
 
 ### Phase 2 — Find the source
 
-5. Locate the checkout. Try `~/src/skills` first and confirm it is the right
-   one: `git -C ~/src/skills remote -v` names `kkestell/skills`, and the tree
-   has `profiles.py` and `skills/`. If it is not there, search the usual
-   development directories before asking the user.
-6. Edit the repo copy only. Installed skills live in `~/.agents/skills/<name>`,
-   symlinked from `~/.claude/skills/<name>`; every sync overwrites them.
-7. Confirm the suspect skill is in this repo under
-   `skills/<group>/<name>`. If the behavior came from a built-in agent skill, a
-   plugin skill, `AGENTS.md`, or the user's `CLAUDE.md`, say where it actually
-   comes from and stop.
+5. Locate the source checkout.
+   - If the current repository tracks `.claude/skills/<name>`, that directory is
+     the source. Its `.agents/skills/<name>` entry may be a repository-local
+     symlink to it.
+   - Otherwise try `~/src/skills` first and confirm it is the shared source:
+     `git -C ~/src/skills remote -v` names `kkestell/skills`, and the tree has
+     `profiles.py` and `skills/`. If it is not there, search the usual
+     development directories before asking the user.
+6. Edit the checked-in source only. A generated copy or symlink target outside
+   the source checkout is installation state and will be overwritten by sync.
+7. Confirm the suspect skill is either the tracked repository skill or is in
+   the shared source under `skills/<group>/<name>`. If the behavior came from a
+   built-in agent skill, a plugin skill, `AGENTS.md`, or the user's
+   `CLAUDE.md`, say where it actually comes from and stop.
 
 ### Phase 3 — Diagnose
 
-8. Compare the installed copy against the source:
+8. Compare the active copy against the source. For a repository skill, inspect
+   `.agents/skills/<name>` and confirm that it resolves to the tracked
+   `.claude/skills/<name>`. For a shared skill, run:
 
    ```bash
    diff -ru ~/.agents/skills/<name> skills/<group>/<name>
@@ -96,12 +102,14 @@ argument-hint: "[what the agent did wrong — and which skill, if you know]"
 
 ### Phase 7 — Reinstall
 
-23. Run `./profiles.py sync-skills core,ext --claude --codex` from the repo
-    root. Pass a different set of harness flags only when the user names one;
-    never infer harnesses from which configuration directories happen to exist
-    on the machine.
-24. Confirm the install landed — re-run the `diff -ru` from step 8 and see it
-    come back clean.
+23. Install from the kind of source selected in step 5.
+    - For a repository skill, confirm `.agents/skills/<name>` resolves to the
+      tracked `.claude/skills/<name>`; no profile sync is needed.
+    - For a shared skill, run
+      `./profiles.py sync-skills core,ext --claude --codex` from the source root.
+      Pass different harness flags only when the user names them.
+24. Confirm the active copy matches the source using the same comparison as
+    step 8.
 
 ### Phase 8 — Report
 

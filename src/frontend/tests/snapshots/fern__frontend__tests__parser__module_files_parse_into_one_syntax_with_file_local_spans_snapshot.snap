@@ -9,6 +9,6 @@ const base name=15..19 span=9..24
 // second.fern
 pub fn helper name=33..39 span=30..65
   result
-    named int span=45..48
+    scalar int span=45..48
   return span=51..63
     reference base span=58..62

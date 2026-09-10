@@ -3,6 +3,7 @@ source: src/ir/tests/lower.rs
 expression: lowered_tree(MODULE_TREE).program()
 ---
 Program {
+    structs: [],
     globals: [
         Global {
             ty: Scalar(

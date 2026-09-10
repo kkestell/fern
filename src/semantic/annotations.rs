@@ -5,7 +5,7 @@ use crate::{
     frontend::syntax::{
         AnnotationKind, Expression, ExpressionKind, Syntax, TypeAnnotation, find_call,
     },
-    types::{Scalar, Type},
+    types::{Scalar, StructId, Type},
 };
 
 use la_arena::Idx;
@@ -48,7 +48,12 @@ impl CheckedProgram<'_> {
         let syntax = self.syntax;
         let written = &syntax.annotations[annotation];
         match &written.kind {
-            AnnotationKind::Named(scalar) => Ok(Type::Scalar(*scalar)),
+            AnnotationKind::Scalar(scalar) => Ok(Type::Scalar(*scalar)),
+            AnnotationKind::Named(name) => {
+                let id = self.resolve_type_name(name, scopes)?;
+                self.resolve_struct_fields(id, &written.span, scopes)?;
+                Ok(self.struct_type(id))
+            }
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
                 let length = match length {
@@ -64,6 +69,54 @@ impl CheckedProgram<'_> {
                 })
             }
         }
+    }
+
+    /// Resolves one struct's field types, which happens the first time the
+    /// program names the type. A struct reached again while it is resolving
+    /// would contain itself and so would have no finite size.
+    pub(super) fn resolve_struct_fields(
+        &mut self,
+        id: StructId,
+        span: &std::ops::Range<usize>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<(), Diagnostic> {
+        match self.structs[id.0].state {
+            FieldState::Resolved => return Ok(()),
+            FieldState::Resolving => {
+                return Err(Diagnostic::new(
+                    span.clone(),
+                    format!("recursive struct type `{}`", self.struct_type(id)),
+                ));
+            }
+            FieldState::Unresolved => {}
+        }
+        self.structs[id.0].state = FieldState::Resolving;
+        // Field annotations resolve against the imports of the file the
+        // struct is declared in, which is not always the file being checked.
+        let outer = std::mem::replace(&mut self.file, self.structs[id.0].file);
+        let syntax = self.syntax;
+        let declaration = self.structs[id.0].declaration;
+        for field in &syntax.structs[declaration].fields {
+            if self.structs[id.0].ordinals.contains_key(&field.name) {
+                return Err(Diagnostic::new(
+                    field.name_span.clone(),
+                    format!(
+                        "duplicate field name `{}`",
+                        syntax.names.resolve(&field.name)
+                    ),
+                ));
+            }
+            let ty = self.resolve_annotation(field.annotation, scopes, None)?;
+            let ordinal = self.structs[id.0].fields.len();
+            self.structs[id.0].ordinals.insert(field.name, ordinal);
+            self.structs[id.0].fields.push(CheckedField {
+                name: field.name,
+                ty,
+            });
+        }
+        self.structs[id.0].state = FieldState::Resolved;
+        self.file = outer;
+        Ok(())
     }
 
     /// Evaluates a written array length, which is a constant `int` of at least

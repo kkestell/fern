@@ -976,3 +976,292 @@ fn floating_values_pass_through_calls_and_returns() {
         "cannot implicitly convert `f64` to `int`",
     );
 }
+
+/// One checked struct literal: its written initializers as `(field position,
+/// source text)` in source order, then the positions of the fields a `...`
+/// filled.
+type CheckedLiteral<'a> = (Vec<(usize, &'a str)>, Vec<usize>);
+
+/// Every struct literal of a checked program, in the order they were checked.
+fn checked_struct_literals(source: &str) -> Vec<CheckedLiteral<'_>> {
+    let syntax = parse(source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    checked
+        .expressions
+        .iter()
+        .filter_map(|(_, expression)| match &expression.value {
+            ExpressionValue::Struct {
+                initializers,
+                filled,
+                ..
+            } => Some((
+                initializers
+                    .iter()
+                    .map(|&(ordinal, value)| {
+                        (ordinal, &source[syntax.expressions[value].span.clone()])
+                    })
+                    .collect(),
+                filled.iter().map(|&(ordinal, _)| ordinal).collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_struct_literal_takes_the_type_it_names() {
+    assert_eq!(
+        checked_bindings(
+            "type Point struct { x: int, y: u8 }
+             const p = Point { x = 1, y = 2 };
+             fn main() -> void {}"
+        )[0],
+        (
+            struct_type(0, "Point"),
+            Some(Constant::Struct(vec![
+                Constant::Integer(big(1)),
+                Constant::Integer(big(2)),
+            ]))
+        )
+    );
+    // A literal is checked against its own type, so a destination of another
+    // struct type is a mismatch rather than a differently checked literal.
+    rejects_source(
+        "type Point struct { x: int }
+         type Line struct { x: int }
+         fn main() -> void { var l: Line = Point { x = 1 }; }",
+        "Point { x = 1 }",
+        "cannot implicitly convert `Point` to `Line`",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { var n: int = Point { x = 1 }; }",
+        "Point { x = 1 }",
+        "cannot implicitly convert `Point` to `int`",
+    );
+}
+
+#[test]
+fn a_struct_literal_keeps_its_fields_in_source_order() {
+    // The written fields stay in the order they are evaluated in, each
+    // paired with the position of the field it fills.
+    assert_eq!(
+        checked_struct_literals(
+            "type Point struct { x: int, y: int }
+             const p = Point { y = 2, x = 1 };
+             fn main() -> void {}"
+        ),
+        [(vec![(1, "2"), (0, "1")], vec![])]
+    );
+    assert_eq!(
+        checked_bindings(
+            "type Point struct { x: int, y: int }
+             const p = Point { y = 2, x = 1 };
+             fn main() -> void {}"
+        )[0]
+        .1,
+        Some(Constant::Struct(vec![
+            Constant::Integer(big(1)),
+            Constant::Integer(big(2)),
+        ]))
+    );
+}
+
+#[test]
+fn a_fill_gives_every_unlisted_field_its_recursive_zero_value() {
+    assert_eq!(
+        checked_bindings(
+            "type Inner struct { flag: bool, ratio: f32 }
+             type Outer struct { first: int, inner: Inner, row: [2]u8 }
+             const o = Outer { first = 7, ... };
+             fn main() -> void {}"
+        )[0],
+        (
+            struct_type(1, "Outer"),
+            Some(Constant::Struct(vec![
+                Constant::Integer(big(7)),
+                Constant::Struct(vec![
+                    Constant::Integer(big(0)),
+                    Constant::Float(Float::Binary32(0)),
+                ]),
+                Constant::Array(vec![Constant::Integer(big(0)), Constant::Integer(big(0))]),
+            ]))
+        )
+    );
+    // `...` may stand alone, and it may follow a complete field list.
+    assert_eq!(
+        checked_struct_literals(
+            "type Point struct { x: int, y: int }
+             const zero = Point { ... };
+             const both = Point { x = 1, y = 2, ... };
+             fn main() -> void {}"
+        ),
+        [(vec![], vec![0, 1]), (vec![(0, "1"), (1, "2")], vec![])]
+    );
+}
+
+#[test]
+fn a_struct_literal_lists_each_field_of_its_type_once() {
+    let point = "type Point struct { x: int, y: u8 }\n";
+    rejects_source(
+        &format!("{point}const p = Point {{ x = 1, z = 2 }}; fn main() -> void {{}}"),
+        "z",
+        "struct `Point` has no field `z`",
+    );
+    rejects_source(
+        &format!("{point}const p = Point {{ x = 1, x = 2, y = 3 }}; fn main() -> void {{}}"),
+        "x",
+        "duplicate field `x` in `Point` literal",
+    );
+    rejects_source(
+        &format!("{point}const p = Point {{ x = 1 }}; fn main() -> void {{}}"),
+        "Point { x = 1 }",
+        "`Point` literal is missing field `y`",
+    );
+    // Each initializer is checked against its own field's type.
+    rejects_source(
+        &format!("{point}const p = Point {{ x = 1, y = 256 }}; fn main() -> void {{}}"),
+        "256",
+        "integer literal out of range for `u8`",
+    );
+    rejects_source(
+        &format!("{point}const p = Point {{ x = true, y = 2 }}; fn main() -> void {{}}"),
+        "true",
+        "cannot implicitly convert `bool` to `int`",
+    );
+    rejects_source(
+        "type Row struct { cells: [2]int }
+         const r = Row { cells = [1, 2, 3] };
+         fn main() -> void {}",
+        "[1, 2, 3]",
+        "expected 2 elements for `[2]int`, found 3",
+    );
+}
+
+#[test]
+fn a_field_selection_reads_the_field_s_type() {
+    let source = "type Point struct { x: int, y: u8 }
+         type Line struct { start: Point, cells: [2]Point }
+         fn main() -> void {
+             const l = Line { start = Point { x = 1, y = 2 }, cells = [Point { x = 3, y = 4 }...] };
+             const a = l.start.x;
+             const b = l.start.y;
+             const c = l.cells[1].y;
+         }";
+    let bindings = checked_bindings(source);
+    let types: Vec<_> = bindings.iter().skip(1).map(|(ty, _)| ty.clone()).collect();
+    assert_eq!(
+        types,
+        [
+            value_type(Scalar::Int),
+            value_type(Scalar::U8),
+            value_type(Scalar::U8),
+        ]
+    );
+    // A selection is not a constant expression, so it folds to nothing even
+    // when its operand is constant.
+    assert!(bindings[1].1.is_none());
+    // An array of structs and a struct of arrays both select through.
+    accepts_source(
+        "type Point struct { x: int }
+         fn main() -> void {
+             var g: [2]Point = [Point { x = 1 }...];
+             exit(g[0].x);
+         }",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { const p = Point { x = 1 }; exit(p.z); }",
+        "z",
+        "struct `Point` has no field `z`",
+    );
+    for source in [
+        "fn main() -> void { const n = 1; exit(n.x); }",
+        "fn main() -> void { var a: [2]int = [1, 2]; exit(a.x); }",
+    ] {
+        let operand = source.rfind("exit(").unwrap() + "exit(".len();
+        let syntax = parse(source).unwrap();
+        let error = check_root(&syntax).unwrap_err();
+        assert_eq!(error.span, operand..operand + 1, "{source}");
+        assert!(
+            error.message.starts_with("cannot select a field of `"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn structs_compare_only_for_equality_and_only_with_their_own_type() {
+    accepts_source(
+        "type Point struct { x: int, y: [2]u8 }
+         fn main() -> void {
+             var p = Point { x = 1, y = [2, 3] };
+             const q = Point { ... };
+             if p == q { exit(1); }
+             if p != q { exit(2); }
+         }",
+    );
+    // Constant structs compare field by field, through nested aggregates.
+    assert_eq!(
+        checked_bindings(
+            "type Inner struct { row: [2]int }
+             type Outer struct { inner: Inner, ratio: f64 }
+             const same = Outer { inner = Inner { row = [1, 2] }, ratio = 0.5 }
+                 == Outer { inner = Inner { row = [1, 2] }, ratio = 0.5 };
+             const other = Outer { inner = Inner { row = [1, 2] }, ratio = 0.5 }
+                 != Outer { inner = Inner { row = [1, 3] }, ratio = 0.5 };
+             fn main() -> void {}"
+        )
+        .iter()
+        .map(|(_, constant)| constant.clone())
+        .collect::<Vec<_>>(),
+        [folded(1), folded(1)]
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         type Line struct { x: int }
+         fn main() -> void {
+             const p = Point { x = 1 };
+             const l = Line { x = 1 };
+             if p == l { exit(1); }
+         }",
+        "==",
+        "comparison operands have different types `Point` and `Line`",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void {
+             const p = Point { x = 1 };
+             if p < p { exit(1); }
+         }",
+        "<",
+        "only `==` and `!=` are defined on `Point`",
+    );
+    // Arithmetic and logical operators are not defined on a struct.
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { const p = Point { x = 1 }; exit(p + 1); }",
+        "+",
+        "`+` requires numeric operands",
+    );
+}
+
+#[test]
+fn a_struct_value_passes_through_bindings_calls_returns_and_iteration() {
+    accepts_source(
+        "type Point struct { x: int, y: int }
+         type Board struct { cells: [2]Point }
+         fn shift(p: Point) -> Point { return Point { x = p.x + 1, y = p.y }; }
+         const start = Board { cells = [Point { x = 1, y = 2 }, Point { ... }] };
+         fn main() -> void {
+             var board = start;
+             board.cells[0] = shift(board.cells[0]);
+             for cell, i in board.cells {
+                 if cell == start.cells[i] { continue; }
+                 exit(cell.x + cell.y);
+             }
+             exit(0);
+         }",
+    );
+}

@@ -196,7 +196,7 @@ fn malformed_top_level_bindings_report_the_offending_token() {
     for (source, message, span) in [
         ("var = 1;", "expected a binding name after `var`", 4..5),
         ("const value int = 1;", "expected `=`", 12..15),
-        ("var value: size = 1;", "expected a type", 11..15),
+        ("var value: void = 1;", "expected a type", 11..15),
         ("const value = ;", "expected an expression", 14..15),
         ("var value = 1", "expected `;`", 13..13),
     ] {
@@ -370,21 +370,9 @@ fn boolean_and_control_flow_nesting_obeys_the_source_limit() {
 
 #[test]
 fn malformed_annotations_report_the_offending_token() {
-    for spelling in [
-        "size",
-        "uintptr",
-        "void",
-        "i128",
-        "u7",
-        "int_value",
-        "i",
-        "u",
-        "42",
-        "=",
-        ";",
-        ":",
-        "",
-    ] {
+    // An ordinary identifier names a declared type, so only a reserved word
+    // that is not a type name and a non-name token are rejected here.
+    for spelling in ["void", "42", "=", ";", ":", ""] {
         let prefix = "/* 🌿 */ fn main() -> void { const x: ";
         let source = format!("{prefix}{spelling}");
         let error = parse(&source).unwrap_err();
@@ -401,7 +389,7 @@ fn malformed_statements_report_the_offending_token() {
         "const «;»",
         "var x = «;»",
         "var x: «=» 1;",
-        "var x: «size» = 1;",
+        "var x: «void» = 1;",
         "var x «1»;",
         "var x: int «;»",
         "const x = 1 «}»",
@@ -423,7 +411,7 @@ fn malformed_statements_report_the_offending_token() {
         "«1» = 2;",
         "«=» 2;",
         "«)»",
-        "x «.»field = 1;",
+        "x.«=» 1;",
         "const x = 1 + «;»",
         "exit(-«)»);",
         "var x = (1 + 2«;»",
@@ -457,16 +445,17 @@ fn malformed_expressions_and_calls_have_specific_diagnostics() {
         ("const = 1;", "expected a binding name after `const`"),
         ("var x = ;", "expected an expression"),
         ("exit();", "exit requires one argument"),
-        ("exit(1..5);", "expected `)` after exit argument"),
+        ("exit(1..5);", "expected a field name after `.`"),
         ("exit(1, 2);", "exit takes one argument"),
         ("var x = int();", "expected an expression"),
         ("var x = 1 + ;", "expected an expression"),
         ("var x = 1 + * 2;", "expected an expression"),
         ("var x = ();", "expected an expression"),
         ("var x = (1 + 2;", "expected `)` after grouped expression"),
-        // Two decimal points make two literals, not one candidate.
+        // Two decimal points make two literals, not one candidate, and a
+        // lone point between them selects a field.
         ("var x = 1.5.5;", "expected `;`"),
-        ("var x = 1..5;", "expected `;`"),
+        ("var x = 1..5;", "expected a field name after `.`"),
     ] {
         let error = parse(&format!("fn main() -> void {{ {body} }}")).unwrap_err();
         assert_eq!(error.message, message, "{body}");
@@ -642,6 +631,203 @@ fn array_nesting_obeys_the_source_limit() {
         )
     };
     for build in [indexes, literals, annotations] {
+        parse(&build(127)).unwrap();
+        assert_eq!(
+            parse(&build(128)).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+    }
+}
+
+#[test]
+fn struct_declarations_literals_and_selection_snapshot() {
+    let source = "\
+use geom;
+type Point struct {
+    x: int,
+    y: int,
+}
+pub type Shape struct {
+    origin: Point,
+    corners: [2]Point,
+    label: geom::Label,
+    scale: f64,
+}
+fn make(p: Point) -> Point {
+    return p;
+}
+fn main() -> void {
+    var origin = Point { x = 1, y = 2 };
+    const zeroed = Point { ... };
+    const partial = Point { x = 3, ... };
+    const nested = Shape {
+        origin = Point { x = 4, y = 5 },
+        corners = [Point { ... }...],
+        label = geom::Label { text = 6 },
+        scale = 0.5,
+    };
+    const value = make(Point { x = 7, y = 8 }).x;
+    const deep = nested.corners[0].y;
+    var grid: [2]Shape = [nested...];
+    grid[0].origin.x = 9;
+    grid[1].corners[1].y += 10;
+    origin.x = origin.y;
+}
+";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn a_struct_literal_in_a_condition_is_parenthesized() {
+    for body in [
+        "if ready {}",
+        "for ready {}",
+        "for v in a {}",
+        "for var i = 0; i < limit; i = i + step {}",
+        "if (Point { x = 1 }) == p {}",
+        "if (Point { x = 1 } == p) {}",
+        "for (Point { x = 1 }) == p {}",
+        "for v in (Point { x = 1 }) {}",
+        "for var p = Point { x = 1 }; ready; p = p {}",
+        "for var i = 0; i < limit; i = (Point { x = 1 }) {}",
+    ] {
+        parse(&format!("fn main() -> void {{ {body} }}"))
+            .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    }
+
+    // A direct literal's brace reads as the statement body's brace, so the
+    // header ends at it and the literal's fields become statements.
+    for body in [
+        "if Point { x = 1 } == p {}",
+        "for Point { x = 1 } == p {}",
+        "for v in Point { x = 1 } {}",
+        "for var i = 0; i < limit; i = Point { x = 1 } {}",
+    ] {
+        let error = parse(&format!("fn main() -> void {{ {body} }}")).unwrap_err();
+        assert_eq!(error.message, "expected `;`", "{body}");
+    }
+}
+
+#[test]
+fn malformed_struct_declarations_report_the_offending_token() {
+    for (marked, message) in [
+        (
+            "type «struct» { x: int }",
+            "reserved word cannot be used as an identifier",
+        ),
+        (
+            "type Point «int»;",
+            "named types other than structs are not yet implemented",
+        ),
+        (
+            "type Point «{» x: int }",
+            "named types other than structs are not yet implemented",
+        ),
+        (
+            "type Point struct «(» x: int )",
+            "expected `{` after `struct`",
+        ),
+        ("type Point struct {«}»", "expected a field declaration"),
+        ("type Point struct { «=» }", "expected a field name"),
+        (
+            "type Point struct { x«,» y: int }",
+            "expected `:` after field name",
+        ),
+        ("type Point struct { x: «}» }", "expected a type"),
+        ("type Point struct { x: int, «,» }", "expected a field name"),
+        (
+            "type Point struct { x: int«»",
+            "expected `}` after struct fields",
+        ),
+        (
+            "type Point struct { x: int }«;»",
+            "expected a top-level declaration",
+        ),
+    ] {
+        let prefix = "/* 🌿 */ ";
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(
+            error.span,
+            prefix.len() + start..prefix.len() + end,
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn malformed_struct_literals_and_selections_report_the_offending_token() {
+    for (marked, message) in [
+        ("const p = Point {«}»;", "expected a field initializer"),
+        ("const p = Point { «=» 1 };", "expected a field name"),
+        (
+            "const p = Point { «const» = 1 };",
+            "reserved word cannot be used as an identifier",
+        ),
+        (
+            "const p = Point { x «1» };",
+            "expected `=` after field name",
+        ),
+        ("const p = Point { x = «}» };", "expected an expression"),
+        (
+            "const p = Point { x = 1 «2» };",
+            "expected `,` or `}` after field initializer",
+        ),
+        (
+            "const p = Point { ...«,» x = 1 };",
+            "expected `}` after field initializers",
+        ),
+        (
+            "const p = Point { x = 1, ...«,» };",
+            "expected `}` after field initializers",
+        ),
+        (
+            "const p = Point { x = 1«»",
+            "expected `,` or `}` after field initializer",
+        ),
+        ("const v = p.«=»;", "expected a field name after `.`"),
+        (
+            "const v = p.«len»;",
+            "reserved word cannot be used as an identifier",
+        ),
+        ("p[0].«[»1] = 2;", "expected a field name after `.`"),
+    ] {
+        let prefix = "/* 🌿 */ fn main() -> void { ";
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(
+            error.span,
+            prefix.len() + start..prefix.len() + end,
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn struct_nesting_obeys_the_source_limit() {
+    // A function body already holds one level, so 127 more are accepted.
+    let literals = |count: usize| {
+        format!(
+            "fn main() -> void {{ const x = {}1{}; }}",
+            "Point { f = ".repeat(count),
+            " }".repeat(count),
+        )
+    };
+    let selections =
+        |count: usize| format!("fn main() -> void {{ const x = a{}; }}", ".f".repeat(count));
+    let mixed = |count: usize| {
+        format!(
+            "fn main() -> void {{ const x = a{}; }}",
+            ".f[0]".repeat(count / 2)
+        )
+    };
+    for build in [literals, selections, mixed] {
         parse(&build(127)).unwrap();
         assert_eq!(
             parse(&build(128)).unwrap_err().message,

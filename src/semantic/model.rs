@@ -1,9 +1,13 @@
 //! Checked values, bindings, signatures, and program storage.
 
 use crate::{
-    frontend::syntax::{Expression, Function, Statement, Syntax},
+    diagnostic::Diagnostic,
+    frontend::syntax::{Expression, Function, Statement, StructDeclaration, Syntax},
     source::FileId,
-    types::{BinaryOperator, ComparisonOperator, Float, LogicalOperator, Type, UnaryOperator},
+    types::{
+        BinaryOperator, ComparisonOperator, Float, LogicalOperator, Scalar, StructId, StructType,
+        Type, UnaryOperator,
+    },
 };
 
 use la_arena::{Arena, ArenaMap, Idx};
@@ -18,8 +22,23 @@ use std::collections::HashMap;
 
 use super::namespaces::{FileImports, Namespace};
 
+/// Rejects a checked program that declares a struct. Checking understands
+/// structs, and the remaining struct tasks teach Fern IR and native
+/// compilation to compile them; until then this stops one before lowering.
+pub(crate) fn reject_uncompiled_structs(
+    checked: CheckedProgram<'_>,
+) -> Result<CheckedProgram<'_>, Diagnostic> {
+    let Some(declared) = checked.structs.first() else {
+        return Ok(checked);
+    };
+    let span = checked.syntax.structs[declared.declaration]
+        .name_span
+        .clone();
+    Err(Diagnostic::new(span, "structs are not yet compiled"))
+}
+
 /// The value a constant expression folds to. An array literal folds when
-/// every element does.
+/// every element does, and a struct literal when every field does.
 ///
 /// An untyped constant keeps the exact value it was written with: an integer
 /// as a `BigInt` and a floating-point value as a `Rational`. A concrete
@@ -30,6 +49,8 @@ pub(crate) enum Constant {
     Rational(BigRational),
     Float(Float),
     Array(Vec<Constant>),
+    /// One value per field, in declaration order.
+    Struct(Vec<Constant>),
 }
 
 impl Constant {
@@ -38,7 +59,7 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Rational(_) | Self::Float(_) | Self::Array(_) => None,
+            Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 
@@ -46,7 +67,7 @@ impl Constant {
     pub(crate) fn rational(&self) -> Option<&BigRational> {
         match self {
             Self::Rational(value) => Some(value),
-            Self::Integer(_) | Self::Float(_) | Self::Array(_) => None,
+            Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 
@@ -54,7 +75,7 @@ impl Constant {
     pub(crate) fn float(&self) -> Option<Float> {
         match self {
             Self::Float(value) => Some(*value),
-            Self::Integer(_) | Self::Rational(_) | Self::Array(_) => None,
+            Self::Integer(_) | Self::Rational(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 }
@@ -137,6 +158,19 @@ pub(crate) enum ExpressionValue {
         operand: Idx<Expression>,
         index: Idx<Expression>,
     },
+    /// A struct literal. `initializers` are the written fields in source
+    /// order, which is the order they are evaluated in, and `filled` holds
+    /// the zero value `...` gives each field the literal omits.
+    Struct {
+        id: StructId,
+        initializers: Vec<(usize, Idx<Expression>)>,
+        filled: Vec<(usize, Constant)>,
+    },
+    /// `value.field`, holding the field's position in its declaration.
+    Field {
+        operand: Idx<Expression>,
+        ordinal: usize,
+    },
     /// `len(a)`, which reads its length from the operand's type and still
     /// evaluates the operand.
     Length {
@@ -182,13 +216,51 @@ pub(crate) struct FunctionSignature {
     pub result: Option<Type>,
 }
 
-/// Where an assignment stores: the binding its indices start from and the type
-/// of the element they reach, which is the binding's own type when it has no
-/// indices.
+/// One resolved step of an assignment target, in source order.
+#[derive(Debug)]
+pub(crate) enum CheckedStep {
+    Index(Idx<Expression>),
+    Field(usize),
+}
+
+/// Where an assignment stores: the binding its steps start from, those steps,
+/// and the type they reach, which is the binding's own type when it has no
+/// steps.
 #[derive(Debug)]
 pub(crate) struct CheckedTarget {
     pub binding: Idx<Binding>,
+    pub steps: Vec<CheckedStep>,
     pub ty: Type,
+}
+
+/// One checked field of a struct.
+#[derive(Debug)]
+pub(crate) struct CheckedField {
+    pub name: Spur,
+    pub ty: Type,
+}
+
+/// How far a struct's fields have been resolved. Fields resolve the first time
+/// a program names the type, so a struct reached again while it is resolving
+/// is one that would contain itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FieldState {
+    Unresolved,
+    Resolving,
+    Resolved,
+}
+
+/// A checked struct declaration: where it was declared, its fields in
+/// declaration order, and where each field name sits in that order.
+#[derive(Debug)]
+pub(crate) struct CheckedStruct {
+    pub declaration: Idx<StructDeclaration>,
+    /// The file the declaration is in, which selects the imports its field
+    /// annotations resolve against.
+    pub(super) file: FileId,
+    pub fields: Vec<CheckedField>,
+    pub ordinals: HashMap<Spur, usize>,
+    pub(super) state: FieldState,
 }
 
 /// The bindings a `for … in` statement introduces. They belong to the
@@ -211,6 +283,12 @@ pub(crate) struct CheckedProgram<'a> {
     pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,
     pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
+    /// Every struct the program declares, indexed by its `StructId`.
+    pub structs: Vec<CheckedStruct>,
+    /// Checking state: the module-level structs of the module being checked,
+    /// which an unqualified type name resolves against. It is replaced per
+    /// module, so it never describes the whole program.
+    pub(super) struct_names: HashMap<Spur, StructId>,
     /// Checking state: the module-level functions of the module being checked,
     /// which an unqualified call resolves against. It is replaced per module,
     /// so it never describes the whole program.
@@ -224,6 +302,43 @@ pub(crate) struct CheckedProgram<'a> {
     /// Checking state: the file whose declarations are being checked, which
     /// selects the imports name resolution sees.
     pub(super) file: FileId,
+}
+
+impl CheckedProgram<'_> {
+    /// The value type a struct declaration names.
+    pub(super) fn struct_type(&self, id: StructId) -> Type {
+        let declaration = self.structs[id.0].declaration;
+        Type::Struct(StructType {
+            id,
+            name: self
+                .syntax
+                .names
+                .resolve(&self.syntax.structs[declaration].name)
+                .to_owned(),
+        })
+    }
+
+    /// The value a binding or field of this type holds before anything is
+    /// stored into it: `0` for a number, `false` for a `bool`, and zero values
+    /// throughout an array or struct.
+    pub(super) fn zero_value(&self, ty: &Type) -> Constant {
+        match ty {
+            Type::Scalar(Scalar::F32) => Constant::Float(Float::Binary32(0)),
+            Type::Scalar(Scalar::F64) => Constant::Float(Float::Binary64(0)),
+            Type::Scalar(_) => Constant::Integer(BigInt::ZERO),
+            Type::Array { length, element } => {
+                let length = usize::try_from(*length).expect("an array fits in the address space");
+                Constant::Array(vec![self.zero_value(element); length])
+            }
+            Type::Struct(ty) => Constant::Struct(
+                self.structs[ty.id.0]
+                    .fields
+                    .iter()
+                    .map(|field| self.zero_value(&field.ty))
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// The module bindings a function can read, plus its nested lexical bindings.

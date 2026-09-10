@@ -30,16 +30,23 @@ pub(crate) enum Place {
         index: Operand,
         span: std::ops::Range<usize>,
     },
+    /// `base.field`, naming the field by its position in its declaration.
+    /// Checking already resolved the field and selecting one cannot fail, so
+    /// this carries no span.
+    Field {
+        base: Box<Place>,
+        ordinal: usize,
+    },
 }
 
 impl Place {
-    /// Storing through an element place writes inside its root, which is how
-    /// an array local is initialized.
+    /// Storing through an element or field place writes inside its root,
+    /// which is how an aggregate local is initialized.
     pub(super) fn root_local(&self) -> Option<LocalId> {
         match self {
             Self::Local(local) => Some(*local),
             Self::Global(_) => None,
-            Self::Element { base, .. } => base.root_local(),
+            Self::Element { base, .. } | Self::Field { base, .. } => base.root_local(),
         }
     }
 }
@@ -186,8 +193,8 @@ pub(crate) struct ControlFlow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
-    /// Its scalars in memory order: one for a scalar global, one per element
-    /// for an array global.
+    /// Its scalars in memory order: one for a scalar global, and one per
+    /// element or field, recursively, for an array or struct global.
     pub values: Vec<Literal>,
 }
 
@@ -202,8 +209,18 @@ pub(crate) struct Function {
     pub flow: ControlFlow,
 }
 
+/// A struct declaration's shape: the types of its fields in declaration
+/// order. `Type` carries a struct's nominal identity and its spelling, and
+/// this carries the field types lowering, verification, and the backend read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Struct {
+    pub fields: Vec<Type>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Program {
+    // Each position defines the corresponding StructId.
+    pub structs: Vec<Struct>,
     pub globals: Vec<Global>,
     // Each position defines the corresponding function ID.
     pub functions: Vec<Function>,

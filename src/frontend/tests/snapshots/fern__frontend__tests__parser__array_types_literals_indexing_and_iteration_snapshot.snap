@@ -12,19 +12,19 @@ fn rows name=3..7 span=0..136
           length
             integer 3 span=18..19
           element
-            named int span=20..23
+            scalar int span=20..23
   result
     array span=28..34
       length
         integer 2 span=29..30
       element
-        named int span=31..34
+        scalar int span=31..34
   var out name=45..48 span=41..66
     array span=50..56
       length
         integer 2 span=51..52
       element
-        named int span=53..56
+        scalar int span=53..56
     array literal fill=Some(61..64) span=59..65
       integer 0 span=60..61
   for label=- label_span=None span=71..118
@@ -46,7 +46,7 @@ fn main name=140..144 span=137..674
       length
         integer 3 span=169..170
       element
-        named int span=171..174
+        scalar int span=171..174
     array literal fill=None span=177..187
       integer 1 span=178..179
       integer 2 span=181..182
@@ -55,7 +55,7 @@ fn main name=140..144 span=137..674
     array span=209..215
       inferred length
       element
-        named int span=212..215
+        scalar int span=212..215
     array literal fill=Some(220..223) span=218..224
       integer 0 span=219..220
   const seeded name=236..242 span=230..269
@@ -63,7 +63,7 @@ fn main name=140..144 span=137..674
       length
         integer 4 span=245..246
       element
-        named int span=247..250
+        scalar int span=247..250
     array literal fill=Some(264..267) span=253..268
       integer 1 span=254..255
       integer 2 span=257..258
@@ -78,7 +78,7 @@ fn main name=140..144 span=137..674
           length
             integer 3 span=291..292
           element
-            named int span=293..296
+            scalar int span=293..296
     array literal fill=Some(306..309) span=299..310
       array literal fill=Some(302..305) span=300..306
         integer 1 span=301..302
@@ -91,7 +91,7 @@ fn main name=140..144 span=137..674
           length
             integer 3 span=330..331
           element
-            named int span=332..335
+            scalar int span=332..335
     array literal fill=None span=338..360
       array literal fill=None span=339..348
         integer 1 span=340..341

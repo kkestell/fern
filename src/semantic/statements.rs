@@ -4,7 +4,7 @@ use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{
         AssignmentTarget, Call, Expression, ForHeader, Function, Label, Statement, StatementKind,
-        Syntax, TypeAnnotation,
+        Syntax, TargetStep, TypeAnnotation,
     },
     types::{BinaryOperator, Scalar, Type},
 };
@@ -351,9 +351,9 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// The binding an assignment stores into, and the type of the element its
-    /// indices reach. An element of a `const` binding is rejected with the
-    /// binding itself, so the mutability check comes first.
+    /// The binding an assignment stores into, its resolved steps, and the type
+    /// they reach. An element or field of a `const` binding is rejected with
+    /// the binding itself, so the mutability check comes first.
     fn assignment_target(
         &mut self,
         target: &AssignmentTarget,
@@ -370,13 +370,28 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        // The indices are checked left to right, the order they are evaluated
-        // in, and each one descends into the element type.
+        // The steps are checked left to right, the order they are evaluated
+        // in, and each one descends into the element or field type.
         let mut ty = self.bindings[binding].ty.clone();
-        for &index in &target.indices {
-            ty = self.check_index_step(&ty, &name.span, index, scopes)?;
+        let mut steps = Vec::with_capacity(target.steps.len());
+        for step in &target.steps {
+            match step {
+                TargetStep::Index(index) => {
+                    ty = self.check_index_step(&ty, &name.span, *index, scopes)?;
+                    steps.push(CheckedStep::Index(*index));
+                }
+                TargetStep::Field {
+                    name: field,
+                    name_span,
+                } => {
+                    let (ordinal, field_type) =
+                        self.check_field_step(&ty, &name.span, *field, name_span)?;
+                    ty = field_type;
+                    steps.push(CheckedStep::Field(ordinal));
+                }
+            }
         }
-        Ok(CheckedTarget { binding, ty })
+        Ok(CheckedTarget { binding, steps, ty })
     }
 
     fn check_condition(

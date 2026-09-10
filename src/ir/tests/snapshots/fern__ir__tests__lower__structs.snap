@@ -1,0 +1,957 @@
+---
+source: src/ir/tests/lower.rs
+expression: program.program()
+---
+Program {
+    structs: [
+        Struct {
+            fields: [
+                Scalar(
+                    Int,
+                ),
+                Scalar(
+                    U8,
+                ),
+            ],
+        },
+        Struct {
+            fields: [
+                Struct(
+                    StructType {
+                        id: StructId(
+                            0,
+                        ),
+                        name: "Point",
+                    },
+                ),
+                Array {
+                    length: 2,
+                    element: Scalar(
+                        F64,
+                    ),
+                },
+            ],
+        },
+        Struct {
+            fields: [
+                Scalar(
+                    Int,
+                ),
+            ],
+        },
+        Struct {
+            fields: [
+                Array {
+                    length: 2,
+                    element: Struct(
+                        StructType {
+                            id: StructId(
+                                2,
+                            ),
+                            name: "Row",
+                        },
+                    ),
+                },
+            ],
+        },
+    ],
+    globals: [
+        Global {
+            ty: Struct(
+                StructType {
+                    id: StructId(
+                        0,
+                    ),
+                    name: "Point",
+                },
+            ),
+            values: [
+                Integer {
+                    value: 19,
+                    ty: Int,
+                },
+                Integer {
+                    value: 23,
+                    ty: U8,
+                },
+            ],
+        },
+    ],
+    functions: [
+        Function {
+            parameters: 1,
+            result: Some(
+                Struct(
+                    StructType {
+                        id: StructId(
+                            1,
+                        ),
+                        name: "Cell",
+                    },
+                ),
+            ),
+            values: [
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Field {
+                            base: Field {
+                                base: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                ordinal: 0,
+                            },
+                            ordinal: 0,
+                        },
+                    ),
+                },
+                Value {
+                    span: Some(
+                        314..315,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                0,
+                            ),
+                        ),
+                        right: Literal(
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        U8,
+                    ),
+                    kind: Load(
+                        Field {
+                            base: Field {
+                                base: Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                                ordinal: 0,
+                            },
+                            ordinal: 1,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            2,
+                                        ),
+                                    ),
+                                    ordinal: 0,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            2,
+                                        ),
+                                    ),
+                                    ordinal: 1,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    ordinal: 0,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        3,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Field {
+                                        base: Local(
+                                            LocalId(
+                                                1,
+                                            ),
+                                        ),
+                                        ordinal: 1,
+                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 274..344,
+                                },
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            0,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Field {
+                                        base: Local(
+                                            LocalId(
+                                                1,
+                                            ),
+                                        ),
+                                        ordinal: 1,
+                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 274..344,
+                                },
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            0,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    4,
+                                ),
+                            ),
+                        ],
+                        terminator: Return {
+                            value: Some(
+                                Value(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Function {
+            parameters: 0,
+            result: None,
+            values: [
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                    kind: Load(
+                        Global(
+                            GlobalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            F64,
+                        ),
+                    },
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    kind: CallResult,
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                    kind: Load(
+                        Field {
+                            base: Local(
+                                LocalId(
+                                    4,
+                                ),
+                            ),
+                            ordinal: 0,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                    kind: Load(
+                        Local(
+                            LocalId(
+                                5,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: Some(
+                        617..619,
+                    ),
+                    ty: Scalar(
+                        Bool,
+                    ),
+                    kind: Comparison {
+                        operator: Equal,
+                        left: Value(
+                            ValueId(
+                                6,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                7,
+                            ),
+                        ),
+                    },
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Load(
+                        Field {
+                            base: Field {
+                                base: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                ordinal: 0,
+                            },
+                            ordinal: 0,
+                        },
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Scalar(
+                        U8,
+                    ),
+                    kind: Load(
+                        Field {
+                            base: Field {
+                                base: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                ordinal: 0,
+                            },
+                            ordinal: 1,
+                        },
+                    ),
+                },
+                Value {
+                    span: Some(
+                        669..687,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Convert {
+                        operand: Value(
+                            ValueId(
+                                10,
+                            ),
+                        ),
+                        truncating: false,
+                    },
+                },
+                Value {
+                    span: Some(
+                        667..668,
+                    ),
+                    ty: Scalar(
+                        Int,
+                    ),
+                    kind: Binary {
+                        operator: Add,
+                        form: Infix,
+                        left: Value(
+                            ValueId(
+                                9,
+                            ),
+                        ),
+                        right: Value(
+                            ValueId(
+                                11,
+                            ),
+                        ),
+                    },
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Array {
+                        length: 2,
+                        element: Scalar(
+                            F64,
+                        ),
+                    },
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                1,
+                            ),
+                            name: "Cell",
+                        },
+                    ),
+                    Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                ],
+                blocks: [
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    0,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            0,
+                                        ),
+                                    ),
+                                    ordinal: 0,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        0,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    index: Literal(
+                                        Integer {
+                                            value: 0,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 443..453,
+                                },
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            4602678819172646912,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Local(
+                                        LocalId(
+                                            1,
+                                        ),
+                                    ),
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 443..453,
+                                },
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            4609434218613702656,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    1,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            0,
+                                        ),
+                                    ),
+                                    ordinal: 1,
+                                },
+                                operand: Value(
+                                    ValueId(
+                                        1,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    2,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        2,
+                                    ),
+                                ),
+                            },
+                            Store {
+                                place: Element {
+                                    base: Field {
+                                        base: Local(
+                                            LocalId(
+                                                2,
+                                            ),
+                                        ),
+                                        ordinal: 1,
+                                    },
+                                    index: Literal(
+                                        Integer {
+                                            value: 1,
+                                            ty: Int,
+                                        },
+                                    ),
+                                    span: 483..484,
+                                },
+                                operand: Literal(
+                                    Floating(
+                                        Binary64(
+                                            4612811918334230528,
+                                        ),
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    3,
+                                ),
+                            ),
+                            Call {
+                                result: Some(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                                function: FunctionId(
+                                    0,
+                                ),
+                                arguments: [
+                                    Value(
+                                        ValueId(
+                                            3,
+                                        ),
+                                    ),
+                                ],
+                                span: 518..531,
+                            },
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        4,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    5,
+                                ),
+                            ),
+                            Store {
+                                place: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                                operand: Value(
+                                    ValueId(
+                                        5,
+                                    ),
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    6,
+                                ),
+                            ),
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    ordinal: 0,
+                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 20,
+                                        ty: Int,
+                                    },
+                                ),
+                            },
+                            Store {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            5,
+                                        ),
+                                    ),
+                                    ordinal: 1,
+                                },
+                                operand: Literal(
+                                    Integer {
+                                        value: 23,
+                                        ty: U8,
+                                    },
+                                ),
+                            },
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                        ],
+                        terminator: Branch {
+                            condition: Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
+                            then_target: BlockId(
+                                1,
+                            ),
+                            else_target: BlockId(
+                                2,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [
+                            Value(
+                                ValueId(
+                                    9,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    10,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    11,
+                                ),
+                            ),
+                            Value(
+                                ValueId(
+                                    12,
+                                ),
+                            ),
+                        ],
+                        terminator: Exit {
+                            status: Value(
+                                ValueId(
+                                    12,
+                                ),
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Jump {
+                            target: BlockId(
+                                3,
+                            ),
+                        },
+                    },
+                    Block {
+                        instructions: [],
+                        terminator: Exit {
+                            status: Literal(
+                                Integer {
+                                    value: 255,
+                                    ty: Int,
+                                },
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+    main: FunctionId(
+        1,
+    ),
+}

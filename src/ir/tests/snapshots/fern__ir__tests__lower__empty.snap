@@ -3,6 +3,7 @@ source: src/ir/tests/lower.rs
 expression: program.program()
 ---
 Program {
+    structs: [],
     globals: [],
     functions: [
         Function {

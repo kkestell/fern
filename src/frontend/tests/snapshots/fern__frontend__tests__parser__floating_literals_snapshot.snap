@@ -41,5 +41,5 @@ fn main name=3..7 span=0..311
       integer 1 span=275..276
       floating 0.5 span=279..282
   var annotated name=288..297 span=284..309
-    named int span=299..302
+    scalar int span=299..302
     floating 1.0 span=305..308

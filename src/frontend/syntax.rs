@@ -41,18 +41,29 @@ pub(crate) struct Import {
 pub(crate) struct Function {
     pub name: Spur,
     pub name_span: Range<usize>,
-    pub parameters: Vec<Parameter>,
+    pub parameters: Vec<TypedName>,
     pub result: FunctionResult,
     #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
     pub body: Vec<Idx<Statement>>,
 }
 
+/// One `name: T` declaration: a function parameter or a struct field.
 #[derive(Debug)]
-pub(crate) struct Parameter {
+pub(crate) struct TypedName {
     pub name: Spur,
     pub name_span: Range<usize>,
     pub annotation: Idx<TypeAnnotation>,
+}
+
+/// A `type Name struct { … }` declaration, which has at least one field.
+#[derive(Debug)]
+pub(crate) struct StructDeclaration {
+    pub name: Spur,
+    pub name_span: Range<usize>,
+    pub fields: Vec<TypedName>,
+    #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
+    pub span: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -69,6 +80,10 @@ pub(crate) enum TopLevelItem {
     },
     Binding {
         binding: Idx<Statement>,
+        public: bool,
+    },
+    Struct {
+        declaration: Idx<StructDeclaration>,
         public: bool,
     },
 }
@@ -134,12 +149,19 @@ pub(crate) struct Label {
     pub name_span: Range<usize>,
 }
 
-/// The left side of an assignment: a binding, or an element reached through
-/// one index per `[ … ]` group.
+/// The left side of an assignment: a binding, or the element or field reached
+/// through one step per `[ … ]` group and per `.name` selection.
 #[derive(Debug)]
 pub(crate) struct AssignmentTarget {
     pub name: QualifiedName,
-    pub indices: Vec<Idx<Expression>>,
+    pub steps: Vec<TargetStep>,
+}
+
+/// One `[ … ]` or `.name` step of an assignment target, in source order.
+#[derive(Debug)]
+pub(crate) enum TargetStep {
+    Index(Idx<Expression>),
+    Field { name: Spur, name_span: Range<usize> },
 }
 
 #[derive(Debug)]
@@ -177,11 +199,21 @@ pub(crate) struct TypeAnnotation {
 /// is the `[_]` length taken from an initializer.
 #[derive(Debug)]
 pub(crate) enum AnnotationKind {
-    Named(Scalar),
+    Scalar(Scalar),
+    /// A declared type, written plainly or as `module::Name`.
+    Named(QualifiedName),
     Array {
         length: Option<Idx<Expression>>,
         element: Idx<TypeAnnotation>,
     },
+}
+
+/// One `field = e` initializer of a struct literal.
+#[derive(Debug)]
+pub(crate) struct FieldInitializer {
+    pub name: Spur,
+    pub name_span: Range<usize>,
+    pub value: Idx<Expression>,
 }
 
 #[derive(Debug)]
@@ -240,6 +272,18 @@ pub(crate) enum ExpressionKind {
         elements: Vec<Idx<Expression>>,
         fill: Option<Range<usize>>,
     },
+    /// `Name { field = e, ... }`, where `fill` is the span of the `...` that
+    /// gives every unlisted field its zero value.
+    StructLiteral {
+        name: QualifiedName,
+        fields: Vec<FieldInitializer>,
+        fill: Option<Range<usize>>,
+    },
+    Field {
+        operand: Idx<Expression>,
+        name: Spur,
+        name_span: Range<usize>,
+    },
     Index {
         operand: Idx<Expression>,
         index: Idx<Expression>,
@@ -262,6 +306,7 @@ pub(crate) struct Syntax {
     pub names: Rodeo,
     pub files: Vec<FileSyntax>,
     pub functions: Arena<Function>,
+    pub structs: Arena<StructDeclaration>,
     pub statements: Arena<Statement>,
     pub expressions: Arena<Expression>,
     pub annotations: Arena<TypeAnnotation>,
@@ -305,6 +350,10 @@ pub(crate) fn walk_expression(
         }
         | ExpressionKind::Length {
             operand: expression,
+        }
+        | ExpressionKind::Field {
+            operand: expression,
+            ..
         } => walk_expression(syntax, *expression, visit),
         ExpressionKind::Binary { left, right, .. }
         | ExpressionKind::Comparison { left, right, .. }
@@ -325,6 +374,11 @@ pub(crate) fn walk_expression(
         ExpressionKind::ArrayLiteral { elements, .. } => {
             for &element in elements {
                 walk_expression(syntax, element, visit);
+            }
+        }
+        ExpressionKind::StructLiteral { fields, .. } => {
+            for field in fields {
+                walk_expression(syntax, field.value, visit);
             }
         }
     }

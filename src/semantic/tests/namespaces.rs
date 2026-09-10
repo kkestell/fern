@@ -272,7 +272,7 @@ fn module_bindings_resolve_forward_references_and_enclose_every_function() {
         .flat_map(|file| &file.items)
         .filter_map(|item| match item {
             TopLevelItem::Binding { binding, .. } => Some(*binding),
-            TopLevelItem::Function { .. } => None,
+            TopLevelItem::Function { .. } | TopLevelItem::Struct { .. } => None,
         })
         .collect();
     let counter = checked.declarations[module_statements[0]];
@@ -410,5 +410,171 @@ fn a_signature_retains_its_floating_types() {
     assert_eq!(
         checked.functions[scale].result,
         Some(value_type(Scalar::F64))
+    );
+}
+
+#[test]
+fn a_struct_shares_one_namespace_with_the_module_s_other_declarations() {
+    for source in [
+        "type Point struct { x: int }\ntype Point struct { y: int }\nfn main() -> void {}",
+        "const Point = 1;\ntype Point struct { x: int }\nfn main() -> void {}",
+        "type Point struct { x: int }\nvar Point = 1;\nfn main() -> void {}",
+        "fn Point() -> void {}\ntype Point struct { x: int }\nfn main() -> void {}",
+        "type Point struct { x: int }\nfn Point() -> void {}\nfn main() -> void {}",
+    ] {
+        rejects_source(source, "Point", "duplicate module-level name `Point`");
+    }
+}
+
+#[test]
+fn a_type_name_reaches_a_struct_declared_anywhere_in_its_module() {
+    // A struct is visible before its declaration and across the module's
+    // files, the same way a module-level binding is.
+    accepts_source(
+        "fn main() -> void { var p: Point = Point { x = 1 }; }
+         type Point struct { x: int }",
+    );
+    accepts_tree([
+        (
+            "app/main.fern",
+            "fn main() -> void { var p: Point = Point { x = 1 }; }",
+        ),
+        ("app/point.fern", "type Point struct { x: int }"),
+    ]);
+}
+
+#[test]
+fn a_type_position_accepts_only_a_struct_declaration() {
+    rejects_source(
+        "const Point = 1; fn main() -> void { var p: Point = 1; }",
+        "Point",
+        "cannot use binding `Point` as a type",
+    );
+    // A local binding shadows the module-level name, so it cannot reach the
+    // type either.
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { const Point = 1; var p: Point = 1; }",
+        "Point",
+        "cannot use binding `Point` as a type",
+    );
+    rejects_source(
+        "fn Point() -> void {} fn main() -> void { var p: Point = 1; }",
+        "Point",
+        "cannot use function `Point` as a type",
+    );
+    rejects_source(
+        "fn main() -> void { var p: Point = 1; }",
+        "Point",
+        "unknown type `Point`",
+    );
+    rejects_root(
+        "use counter; var v: «counter::value» = 1; fn main() -> void {}",
+        "cannot use binding `value` as a type",
+    );
+    rejects_root(
+        "use counter; var v: «counter::bump» = 1; fn main() -> void {}",
+        "cannot use function `bump` as a type",
+    );
+    rejects_root(
+        "use counter; var v: «counter» = 1; fn main() -> void {}",
+        "module `counter` is not a type",
+    );
+}
+
+#[test]
+fn an_imported_type_follows_the_visibility_rules_of_every_declaration() {
+    let geometry = ("geometry/geometry.fern", GEOMETRY);
+    // A selective import and a qualified name both reach a public type, and
+    // naming one in a type position marks that import referenced.
+    accepts_tree([
+        (
+            "app/main.fern",
+            "use geometry::{Point};
+             fn take(p: Point) -> void {}
+             fn main() -> void {}",
+        ),
+        geometry,
+    ]);
+    accepts_tree([
+        (
+            "app/main.fern",
+            "use geometry;
+             const p = geometry::Point { x = 1, y = 2 };
+             fn main() -> void {}",
+        ),
+        geometry,
+    ]);
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry::{Hidden}; fn take(h: Hidden) -> void {} fn main() -> void {}",
+            ),
+            geometry,
+        ],
+        "declaration `Hidden` is private to module `geometry`",
+    );
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry; fn take(h: geometry::Hidden) -> void {} fn main() -> void {}",
+            ),
+            geometry,
+        ],
+        "declaration `Hidden` is private to module `geometry`",
+    );
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry; fn take(l: geometry::Line) -> void {} fn main() -> void {}",
+            ),
+            geometry,
+        ],
+        "module `geometry` has no declaration named `Line`",
+    );
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry::{Point}; fn main() -> void {}",
+            ),
+            geometry,
+        ],
+        "imported name `Point` is never referenced",
+    );
+    // A type is not a value or a function, however it is reached.
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry::{Point}; fn main() -> void { exit(Point); }",
+            ),
+            geometry,
+        ],
+        "cannot use type `Point` as a value",
+    );
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry; fn main() -> void { geometry::Point(); }",
+            ),
+            geometry,
+        ],
+        "cannot call non-function declaration `Point`",
+    );
+    // An imported type and a local declaration cannot share a name.
+    rejects_tree(
+        [
+            (
+                "app/main.fern",
+                "use geometry::{Point}; type Point struct { x: int } fn main() -> void {}",
+            ),
+            geometry,
+        ],
+        "imported name `Point` conflicts with a module-level declaration",
     );
 }

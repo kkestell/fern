@@ -307,6 +307,11 @@ is permitted. Field names must be unique. Struct fields have no separate
 visibility modifier: fields of a public struct are accessible wherever the
 struct type is accessible.
 
+A struct declaration is invalid when following struct fields and array element
+types can reach that same struct type, directly or indirectly. Every struct
+therefore has a finite value size. Future indirect-storage types may break such
+a cycle when their semantics are specified.
+
 Type declarations whose right-hand side is a struct end at the closing `}` and
 do not have a semicolon. Other type declarations end with `;`. Anonymous struct
 types are not part of the language.
@@ -1133,6 +1138,18 @@ if c { ... } else if c2 { ... } else { ... }
 The condition must have type `bool` or be an untyped boolean constant. It is not
 parenthesized. Each body is a brace-delimited block and introduces a scope; the
 braces are required, and a single statement cannot replace the block.
+
+A named struct literal used directly in an `if` or `for` condition must be
+parenthesized, either by enclosing the literal or by enclosing the whole
+condition. This distinguishes the literal's opening brace from the brace that
+begins the statement body.
+
+```fern
+if (Point { x = 1, y = 2 }) == expected { // valid
+}
+if Point { x = 1, y = 2 } == expected { // invalid
+}
+```
 
 `else` is followed either by a block or by another `if` statement, which forms a
 chain. The conditions of a chain are tested in source order, and the first

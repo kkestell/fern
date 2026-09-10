@@ -4,11 +4,11 @@ expression: projected(source)
 ---
 fn mark name=3..7 span=0..57
   parameter digit name=8..13
-    named int span=15..18
+    scalar int span=15..18
   parameter flag name=20..24
-    named bool span=26..30
+    scalar bool span=26..30
   result
-    named int span=36..39
+    scalar int span=36..39
   return span=42..55
     reference digit span=49..54
 fn nothing name=61..68 span=58..90

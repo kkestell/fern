@@ -126,6 +126,31 @@ fn project_file(syntax: &Syntax, file: &FileSyntax, output: &mut String) {
                 }
                 project_body(syntax, std::slice::from_ref(id), 0, output);
             }
+            TopLevelItem::Struct {
+                declaration: id,
+                public,
+            } => {
+                let declaration = &syntax.structs[*id];
+                writeln!(
+                    output,
+                    "{}type {} struct name={:?} span={:?}",
+                    if *public { "pub " } else { "" },
+                    syntax.names.resolve(&declaration.name),
+                    declaration.name_span,
+                    declaration.span
+                )
+                .unwrap();
+                for field in &declaration.fields {
+                    writeln!(
+                        output,
+                        "  field {} name={:?}",
+                        syntax.names.resolve(&field.name),
+                        field.name_span,
+                    )
+                    .unwrap();
+                    project_annotation(syntax, field.annotation, 2, output);
+                }
+            }
         }
     }
 }
@@ -166,7 +191,7 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
                     qualifier(&target.name)
                 )
                 .unwrap();
-                project_target_indices(syntax, target, depth + 1, output);
+                project_target_steps(syntax, target, depth + 1, output);
                 project_expression(syntax, *value, depth + 1, output);
             }
             StatementKind::CompoundAssignment {
@@ -184,7 +209,7 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
                     qualifier(&target.name)
                 )
                 .unwrap();
-                project_target_indices(syntax, target, depth + 1, output);
+                project_target_steps(syntax, target, depth + 1, output);
                 project_expression(syntax, *value, depth + 1, output);
             }
             StatementKind::Block { body } => {
@@ -309,18 +334,29 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
     }
 }
 
-/// Projects an assignment target's indices, which precede the assigned
-/// value in evaluation order.
-fn project_target_indices(
+/// Projects an assignment target's steps, which precede the assigned value
+/// in evaluation order.
+fn project_target_steps(
     syntax: &Syntax,
     target: &AssignmentTarget,
     depth: usize,
     output: &mut String,
 ) {
     use std::fmt::Write;
-    for &index in &target.indices {
-        writeln!(output, "{}index", "  ".repeat(depth)).unwrap();
-        project_expression(syntax, index, depth + 1, output);
+    let indent = "  ".repeat(depth);
+    for step in &target.steps {
+        match step {
+            TargetStep::Index(index) => {
+                writeln!(output, "{indent}index").unwrap();
+                project_expression(syntax, *index, depth + 1, output);
+            }
+            TargetStep::Field { name, name_span } => writeln!(
+                output,
+                "{indent}field {} name={name_span:?}",
+                syntax.names.resolve(name)
+            )
+            .unwrap(),
+        }
     }
 }
 
@@ -329,12 +365,22 @@ fn project_annotation(syntax: &Syntax, id: Idx<TypeAnnotation>, depth: usize, ou
     let indent = "  ".repeat(depth);
     let annotation = &syntax.annotations[id];
     match &annotation.kind {
-        AnnotationKind::Named(ty) => {
+        AnnotationKind::Scalar(ty) => {
             writeln!(
                 output,
-                "{indent}named {} span={:?}",
+                "{indent}scalar {} span={:?}",
                 ty.name(),
                 annotation.span
+            )
+            .unwrap();
+        }
+        AnnotationKind::Named(name) => {
+            writeln!(
+                output,
+                "{indent}named {} span={:?}{}",
+                spell(syntax, name),
+                annotation.span,
+                qualifier(name)
             )
             .unwrap();
         }
@@ -496,6 +542,41 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
             for &element in elements {
                 project_expression(syntax, element, depth + 1, output);
             }
+        }
+        ExpressionKind::StructLiteral { name, fields, fill } => {
+            writeln!(
+                output,
+                "{indent}struct literal {} name={:?} fill={fill:?} span={:?}{}",
+                spell(syntax, name),
+                name.name_span,
+                expression.span,
+                qualifier(name)
+            )
+            .unwrap();
+            for field in fields {
+                writeln!(
+                    output,
+                    "{indent}  field {} name={:?}",
+                    syntax.names.resolve(&field.name),
+                    field.name_span
+                )
+                .unwrap();
+                project_expression(syntax, field.value, depth + 2, output);
+            }
+        }
+        ExpressionKind::Field {
+            operand,
+            name,
+            name_span,
+        } => {
+            writeln!(
+                output,
+                "{indent}field {} name={name_span:?} span={:?}",
+                syntax.names.resolve(name),
+                expression.span
+            )
+            .unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
         }
         ExpressionKind::Index { operand, index } => {
             writeln!(output, "{indent}index span={:?}", expression.span).unwrap();

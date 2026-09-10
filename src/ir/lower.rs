@@ -2,10 +2,9 @@
 
 use crate::{
     frontend::syntax::{
-        AssignmentTarget, Expression, ExpressionKind, ForHeader, Function as SyntaxFunction,
-        Statement, StatementKind,
+        Expression, ExpressionKind, ForHeader, Function as SyntaxFunction, Statement, StatementKind,
     },
-    semantic::model::{Binding, CheckedProgram, Constant, ExpressionValue},
+    semantic::model::{Binding, CheckedProgram, CheckedStep, Constant, ExpressionValue},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type},
 };
 use la_arena::Idx;
@@ -31,6 +30,17 @@ fn function_id(id: Idx<SyntaxFunction>) -> FunctionId {
 /// initializers are constant expressions, so globals are static data: nothing
 /// initializes them while the program runs, and no ordering code is emitted.
 pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
+    let structs = checked
+        .structs
+        .iter()
+        .map(|declared| Struct {
+            fields: declared
+                .fields
+                .iter()
+                .map(|field| field.ty.clone())
+                .collect(),
+        })
+        .collect();
     let mut globals = Vec::new();
     let mut module_places = HashMap::new();
     for &statement in &checked.module_bindings {
@@ -46,11 +56,12 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
         let ty = checked.bindings[binding].ty.clone();
         let mut values = Vec::new();
         flatten(
+            &checked,
             checked.expressions[*initializer]
                 .constant
                 .as_ref()
                 .expect("module-level initializers are constant expressions"),
-            ty.leaf(),
+            &ty,
             &mut values,
         );
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
@@ -64,6 +75,7 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
         .map(|(id, _)| lower_function(&checked, id, &module_places))
         .collect();
     Program {
+        structs,
         globals,
         functions,
         main: function_id(checked.main),
@@ -149,21 +161,46 @@ fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
         Constant::Rational(_) => {
             unreachable!("an untyped constant is contextualized before lowering")
         }
-        Constant::Array(_) => unreachable!("an array constant is not a scalar"),
+        Constant::Array(_) | Constant::Struct(_) => {
+            unreachable!("an aggregate constant is not a scalar")
+        }
     }
 }
 
-/// The scalars a constant holds, in memory order. Every scalar of a value has
-/// the same type, so one leaf type types all of them.
-fn flatten(constant: &Constant, leaf: Scalar, values: &mut Vec<Literal>) {
-    match constant {
-        Constant::Array(elements) => {
-            for element in elements {
-                flatten(element, leaf, values);
+/// The scalars a constant holds, in memory order. A struct's fields have
+/// their own types, so the constant is walked together with its type rather
+/// than under one leaf type.
+fn flatten(
+    checked: &CheckedProgram<'_>,
+    constant: &Constant,
+    ty: &Type,
+    values: &mut Vec<Literal>,
+) {
+    match (ty, constant) {
+        (Type::Scalar(scalar), scalar_constant) => {
+            values.push(scalar_literal(scalar_constant, *scalar));
+        }
+        (Type::Array { element, .. }, Constant::Array(elements)) => {
+            for value in elements {
+                flatten(checked, value, element, values);
             }
         }
-        scalar => values.push(scalar_literal(scalar, leaf)),
+        (Type::Struct(_), Constant::Struct(fields)) => {
+            for (ordinal, value) in fields.iter().enumerate() {
+                flatten(checked, value, &field_type(checked, ty, ordinal), values);
+            }
+        }
+        _ => unreachable!("a folded constant has the shape of its type"),
     }
+}
+
+/// The declared type of one field of a struct type. Checking resolved the
+/// field, so the ordinal names a field the declaration has.
+fn field_type(checked: &CheckedProgram<'_>, ty: &Type, ordinal: usize) -> Type {
+    let Type::Struct(declared) = ty else {
+        unreachable!("a field belongs to a struct type")
+    };
+    checked.structs[declared.id.0].fields[ordinal].ty.clone()
 }
 
 struct BuildingBlock {
@@ -340,20 +377,20 @@ fn lower_flow_statement(
             lower_flow_binding(checked, statement, bindings, builder);
             false
         }
-        StatementKind::Assignment { target, value } => {
-            let mut place = lower_target(checked, statement, target, bindings, builder);
+        StatementKind::Assignment { value, .. } => {
+            let mut place = lower_target(checked, statement, bindings, builder);
             let operand = lower_flow_operand(checked, *value, bindings, builder);
             let place = place.read(builder);
             builder.store(place, operand);
             false
         }
         StatementKind::CompoundAssignment {
-            target,
             operator,
             operator_span,
             value,
+            ..
         } => {
-            let mut held = lower_target(checked, statement, target, bindings, builder);
+            let mut held = lower_target(checked, statement, bindings, builder);
             let ty = checked.assignments[statement].ty.clone();
             let place = held.read(builder);
             let left_operand = load_place(builder, place, ty.clone());
@@ -428,23 +465,28 @@ fn lower_flow_statement(
     }
 }
 
-/// The place an assignment target names, with its indices lowered left to
-/// right before the value.
+/// The place an assignment target names, with its steps lowered left to right
+/// before the value.
 fn lower_target(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
-    target: &AssignmentTarget,
     bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> HeldPlace {
-    let root = bindings[&checked.assignments[statement].binding].clone();
-    let mut indices = Vec::with_capacity(target.indices.len());
-    for &index in &target.indices {
-        let span = checked.syntax.expressions[index].span.clone();
-        let operand = lower_flow_operand(checked, index, bindings, builder);
-        indices.push((hold_operand(builder, operand, Scalar::Int.into()), span));
+    let target = &checked.assignments[statement];
+    let root = bindings[&target.binding].clone();
+    let mut steps = Vec::with_capacity(target.steps.len());
+    for step in &target.steps {
+        steps.push(match step {
+            CheckedStep::Index(index) => {
+                let span = checked.syntax.expressions[*index].span.clone();
+                let operand = lower_flow_operand(checked, *index, bindings, builder);
+                HeldStep::Index(hold_operand(builder, operand, Scalar::Int.into()), span)
+            }
+            CheckedStep::Field(ordinal) => HeldStep::Field(*ordinal),
+        });
     }
-    HeldPlace { root, indices }
+    HeldPlace { root, steps }
 }
 
 /// Lowers arguments left to right, holding each so a later argument that splits
@@ -664,7 +706,7 @@ fn capture(
         unreachable!("checking requires an array operand for `for … in`")
     };
     let span = checked.syntax.expressions[operand].span.clone();
-    let source = lower_array_place(checked, operand, bindings, builder);
+    let source = lower_aggregate_place(checked, operand, bindings, builder);
     let loaded = load_place(builder, source, ty.clone());
     let array = Place::Local(builder.local(ty.clone()));
     builder.store(array.clone(), loaded);
@@ -794,8 +836,16 @@ fn element_at(base: &Place, index: u64, span: &std::ops::Range<usize>) -> Place 
     }
 }
 
-/// Stores a folded array into `place`, one scalar per element.
+fn field_at(base: &Place, ordinal: usize) -> Place {
+    Place::Field {
+        base: Box::new(base.clone()),
+        ordinal,
+    }
+}
+
+/// Stores a folded aggregate into `place`, one scalar per element or field.
 fn store_constant(
+    checked: &CheckedProgram<'_>,
     builder: &mut FlowBuilder,
     place: &Place,
     ty: &Type,
@@ -813,6 +863,7 @@ fn store_constant(
             for (index, value) in elements.iter().enumerate() {
                 let index = u64::try_from(index).expect("an array fits in the address space");
                 store_constant(
+                    checked,
                     builder,
                     &element_at(place, index, span),
                     element,
@@ -821,7 +872,49 @@ fn store_constant(
                 );
             }
         }
+        (Type::Struct(_), Constant::Struct(fields)) => {
+            for (ordinal, value) in fields.iter().enumerate() {
+                store_constant(
+                    checked,
+                    builder,
+                    &field_at(place, ordinal),
+                    &field_type(checked, ty, ordinal),
+                    value,
+                    span,
+                );
+            }
+        }
         _ => unreachable!("a folded constant has the shape of its type"),
+    }
+}
+
+/// Stores a struct literal's fields into `place`: the written initializers in
+/// source order, which is the order they are evaluated in, and then the zero
+/// value each omitted field is filled with.
+fn store_fields(
+    checked: &CheckedProgram<'_>,
+    place: &Place,
+    id: Idx<Expression>,
+    initializers: &[(usize, Idx<Expression>)],
+    filled: &[(usize, Constant)],
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) {
+    let ty = checked.expressions[id].ty.clone();
+    let span = &checked.syntax.expressions[id].span;
+    for &(ordinal, value) in initializers {
+        let operand = lower_flow_operand(checked, value, bindings, builder);
+        builder.store(field_at(place, ordinal), operand);
+    }
+    for (ordinal, constant) in filled {
+        store_constant(
+            checked,
+            builder,
+            &field_at(place, *ordinal),
+            &field_type(checked, &ty, *ordinal),
+            constant,
+            span,
+        );
     }
 }
 
@@ -857,9 +950,9 @@ fn store_elements(
     }
 }
 
-/// The place holding an array-typed expression. An expression with no storage
-/// of its own materializes into a fresh local.
-fn lower_array_place(
+/// The place holding an aggregate-typed expression. An expression with no
+/// storage of its own materializes into a fresh local.
+fn lower_aggregate_place(
     checked: &CheckedProgram<'_>,
     id: Idx<Expression>,
     bindings: &Places<'_>,
@@ -871,18 +964,28 @@ fn lower_array_place(
         lower_folded_effects(checked, id, bindings, builder);
         let place = Place::Local(builder.local(ty.clone()));
         let span = &checked.syntax.expressions[id].span;
-        store_constant(builder, &place, ty, constant, span);
+        store_constant(checked, builder, &place, ty, constant, span);
         return place;
     }
     match &expression.value {
         ExpressionValue::Reference(binding) => bindings[binding].clone(),
         ExpressionValue::Grouping { expression } => {
-            lower_array_place(checked, *expression, bindings, builder)
+            lower_aggregate_place(checked, *expression, bindings, builder)
         }
         ExpressionValue::Index { .. } => element_place(checked, id, bindings, builder),
+        ExpressionValue::Field { .. } => field_place(checked, id, bindings, builder),
         ExpressionValue::Array { elements, fill } => {
             let place = Place::Local(builder.local(ty.clone()));
             store_elements(checked, &place, id, elements, *fill, bindings, builder);
+            place
+        }
+        ExpressionValue::Struct {
+            initializers,
+            filled,
+            ..
+        } => {
+            let place = Place::Local(builder.local(ty.clone()));
+            store_fields(checked, &place, id, initializers, filled, bindings, builder);
             place
         }
         ExpressionValue::Call { .. } => {
@@ -891,7 +994,9 @@ fn lower_array_place(
             builder.store(place.clone(), operand);
             place
         }
-        _ => unreachable!("an array value is a reference, a literal, an element, or a call"),
+        _ => unreachable!(
+            "an aggregate value is a reference, a literal, an element, a field, or a call"
+        ),
     }
 }
 
@@ -904,7 +1009,7 @@ fn element_place(
     let ExpressionValue::Index { operand, index } = &checked.expressions[id].value else {
         unreachable!("an element place is lowered from an index expression")
     };
-    let base = lower_array_place(checked, *operand, bindings, builder);
+    let base = lower_aggregate_place(checked, *operand, bindings, builder);
     let span = checked.syntax.expressions[*index].span.clone();
     let index = lower_flow_operand(checked, *index, bindings, builder);
     Place::Element {
@@ -912,6 +1017,19 @@ fn element_place(
         index,
         span,
     }
+}
+
+fn field_place(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Place {
+    let ExpressionValue::Field { operand, ordinal } = &checked.expressions[id].value else {
+        unreachable!("a field place is lowered from a field expression")
+    };
+    let base = lower_aggregate_place(checked, *operand, bindings, builder);
+    field_at(&base, *ordinal)
 }
 
 /// The length `len(operand)` reads from its operand's type. The operand is
@@ -953,14 +1071,19 @@ fn lower_folded_effects(
         | ExpressionValue::Comparison { left, right, .. }
         | ExpressionValue::Logical { left, right, .. } => operands.extend([*left, *right]),
         ExpressionValue::Array { elements, .. } => operands.extend(elements),
-        // A call and an index never fold, so a folded expression only reaches
-        // them under a `len`, and the rest hold no sub-expression at all.
+        ExpressionValue::Struct { initializers, .. } => {
+            operands.extend(initializers.iter().map(|(_, value)| value));
+        }
+        // A call, an index, and a field never fold, so a folded expression
+        // only reaches them under a `len`, and the rest hold no
+        // sub-expression at all.
         ExpressionValue::Integer
         | ExpressionValue::Floating
         | ExpressionValue::Boolean
         | ExpressionValue::Reference(_)
         | ExpressionValue::Call { .. }
-        | ExpressionValue::Index { .. } => {}
+        | ExpressionValue::Index { .. }
+        | ExpressionValue::Field { .. } => {}
     }
     for operand in operands {
         lower_folded_effects(checked, operand, bindings, builder);
@@ -975,7 +1098,7 @@ fn lower_flow_operand(
 ) -> Operand {
     let expression = &checked.expressions[id];
     let Some(scalar) = expression.ty.scalar() else {
-        let place = lower_array_place(checked, id, bindings, builder);
+        let place = lower_aggregate_place(checked, id, bindings, builder);
         return load_place(builder, place, expression.ty.clone());
     };
     let ty: Type = scalar.into();
@@ -988,11 +1111,16 @@ fn lower_flow_operand(
             unreachable!("literal expressions are constant")
         }
         ExpressionValue::Array { .. } => unreachable!("an array literal has an array type"),
+        ExpressionValue::Struct { .. } => unreachable!("a struct literal has a struct type"),
         // A `len` reaches here only when its operand holds a call, which is
         // what stops it from folding.
         ExpressionValue::Length { operand } => lower_length(checked, *operand, bindings, builder),
         ExpressionValue::Index { .. } => {
             let place = element_place(checked, id, bindings, builder);
+            load_place(builder, place, ty)
+        }
+        ExpressionValue::Field { .. } => {
+            let place = field_place(checked, id, bindings, builder);
             load_place(builder, place, ty)
         }
         ExpressionValue::Reference(binding) => load_place(builder, bindings[binding].clone(), ty),
@@ -1138,21 +1266,31 @@ impl HeldOperand {
     }
 }
 
-/// An assignment target whose indices were lowered before the value stored
+/// One step of an assignment target. An index holds the operand it lowered
+/// before the assigned value; a field is just its ordinal.
+enum HeldStep {
+    Index(HeldOperand, std::ops::Range<usize>),
+    Field(usize),
+}
+
+/// An assignment target whose steps were lowered before the value stored
 /// through it, so the place is rebuilt in whichever block the store lands in.
 struct HeldPlace {
     root: Place,
-    indices: Vec<(HeldOperand, std::ops::Range<usize>)>,
+    steps: Vec<HeldStep>,
 }
 
 impl HeldPlace {
     fn read(&mut self, builder: &mut FlowBuilder) -> Place {
         let mut place = self.root.clone();
-        for (index, span) in &mut self.indices {
-            place = Place::Element {
-                base: Box::new(place),
-                index: index.read(builder),
-                span: span.clone(),
+        for step in &mut self.steps {
+            place = match step {
+                HeldStep::Index(index, span) => Place::Element {
+                    base: Box::new(place),
+                    index: index.read(builder),
+                    span: span.clone(),
+                },
+                HeldStep::Field(ordinal) => field_at(&place, *ordinal),
             };
         }
         place

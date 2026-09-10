@@ -620,6 +620,7 @@ fn arguments_initialize_the_parameters_before_the_entry_block() {
 /// `main` runs `instructions` and exits; `callee` is `FunctionId(1)`.
 fn two_functions(callee: Function, values: Vec<Value>, instructions: Vec<Instruction>) -> Program {
     Program {
+        structs: vec![],
         globals: vec![],
         functions: vec![
             main_function(
@@ -920,6 +921,7 @@ fn verification_checks_main_globals_and_global_places() {
     assert!(error.to_string().contains("IR main takes parameters"));
 
     let stores_to_global = |globals: Vec<Global>| Program {
+        structs: vec![],
         globals,
         functions: vec![main_function(
             vec![],
@@ -955,6 +957,7 @@ fn verification_checks_main_globals_and_global_places() {
     assert!(error.to_string().contains("IR store has type"));
 
     let error = Program {
+        structs: vec![],
         globals: vec![Global {
             ty: Scalar::U8.into(),
             values: integers([256], Scalar::U8),
@@ -1180,4 +1183,246 @@ fn verification_rejects_an_integer_literal_of_a_floating_point_type() {
             .contains("IR integer 1 has floating-point type F32"),
         "{error}"
     );
+}
+
+/// `Point { x: int, y: u8 }` and `Cell { point: Point, weights: [2]f64 }`.
+fn point_and_cell() -> Vec<Struct> {
+    vec![
+        Struct {
+            fields: vec![Scalar::Int.into(), Scalar::U8.into()],
+        },
+        Struct {
+            fields: vec![declared(0, "Point"), array(2, Scalar::F64.into())],
+        },
+    ]
+}
+
+/// A `main` that stores into `place` and then runs `values`, over the struct
+/// table `point_and_cell` defines and one `Cell` local.
+fn cell_program(place: Place, values: Vec<Value>) -> Program {
+    let blocks = vec![Block {
+        instructions: std::iter::once(Instruction::Store {
+            place,
+            operand: integer(0, Scalar::Int),
+        })
+        .chain((0..values.len()).map(|id| Instruction::Value(ValueId(id))))
+        .collect(),
+        terminator: Terminator::Exit {
+            status: integer(0, Scalar::Int),
+        },
+    }];
+    with_structs(
+        point_and_cell(),
+        main_function(values, vec![declared(1, "Cell")], blocks),
+    )
+}
+
+#[test]
+fn verification_accepts_a_field_place_nested_through_a_struct_and_an_array() {
+    let cell = Place::Local(LocalId(0));
+    let x = field(field(cell.clone(), 0), 0);
+    let weight = element(field(cell, 1), integer(1, Scalar::Int));
+    cell_program(
+        x.clone(),
+        vec![
+            Value {
+                span: None,
+                ty: Scalar::Int.into(),
+                kind: ValueKind::Load(x),
+            },
+            Value {
+                span: None,
+                ty: Scalar::F64.into(),
+                kind: ValueKind::Load(weight),
+            },
+        ],
+    )
+    .verify()
+    .unwrap();
+}
+
+#[test]
+fn verification_rejects_invalid_field_places() {
+    let cell = Place::Local(LocalId(0));
+    let load = |ty: Type, place| Value {
+        span: None,
+        ty,
+        kind: ValueKind::Load(place),
+    };
+    for (place, expected) in [
+        // A field of the `[2]f64` field, and a field of one of its elements.
+        (field(field(cell.clone(), 1), 0), "IR selects a field of"),
+        (
+            field(element(field(cell.clone(), 1), integer(0, Scalar::Int)), 0),
+            "IR selects a field of `f64`",
+        ),
+        (field(cell.clone(), 2), "IR selects field 2 of `Cell`"),
+    ] {
+        let error = cell_program(
+            field(field(cell.clone(), 0), 0),
+            vec![load(Scalar::Int.into(), place)],
+        )
+        .verify()
+        .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    // A field place types the store through it, so storing the wrong type is
+    // rejected the same way an element store is.
+    let error = with_structs(
+        point_and_cell(),
+        main_function(
+            vec![],
+            vec![declared(0, "Point")],
+            vec![Block {
+                instructions: vec![Instruction::Store {
+                    place: field(Place::Local(LocalId(0)), 1),
+                    operand: integer(0, Scalar::Int),
+                }],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }],
+        ),
+    )
+    .verify()
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR store has type `int`, expected `u8`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn verification_rejects_a_type_naming_a_struct_the_program_does_not_define() {
+    let exit = vec![Block {
+        instructions: vec![],
+        terminator: Terminator::Exit {
+            status: integer(0, Scalar::Int),
+        },
+    }];
+    // A local, a global, a value, and a field of a defined struct each reach
+    // type validation, so an unknown struct cannot arrive through any of them.
+    let unknown = array(2, declared(7, "Missing"));
+    let error = one_function(main_function(vec![], vec![unknown.clone()], exit.clone()))
+        .verify()
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown struct 7"), "{error}");
+
+    let error = Program {
+        structs: vec![],
+        globals: vec![Global {
+            ty: declared(0, "Missing"),
+            values: vec![],
+        }],
+        functions: vec![main_function(vec![], vec![], exit.clone())],
+        main: FunctionId(0),
+    }
+    .verify()
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown struct 0"), "{error}");
+
+    let error = with_structs(
+        vec![Struct {
+            fields: vec![unknown],
+        }],
+        main_function(vec![], vec![], exit),
+    )
+    .verify()
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown struct 7"), "{error}");
+}
+
+#[test]
+fn verification_rejects_a_struct_table_whose_fields_form_a_cycle() {
+    let exit = vec![Block {
+        instructions: vec![],
+        terminator: Terminator::Exit {
+            status: integer(0, Scalar::Int),
+        },
+    }];
+    for structs in [
+        // A struct holding itself, and two structs holding each other through
+        // an array, which stores its elements inline just as a field does.
+        vec![Struct {
+            fields: vec![declared(0, "Loop")],
+        }],
+        vec![
+            Struct {
+                fields: vec![array(2, declared(1, "Second"))],
+            },
+            Struct {
+                fields: vec![declared(0, "First")],
+            },
+        ],
+    ] {
+        let error = with_structs(structs, main_function(vec![], vec![], exit.clone()))
+            .verify()
+            .unwrap_err();
+        assert!(error.to_string().contains("contains itself"), "{error}");
+    }
+}
+
+#[test]
+fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order() {
+    let cell = |values: Vec<Literal>| Program {
+        structs: point_and_cell(),
+        globals: vec![Global {
+            ty: declared(1, "Cell"),
+            values,
+        }],
+        functions: vec![main_function(
+            vec![],
+            vec![],
+            vec![Block {
+                instructions: vec![],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }],
+        )],
+        main: FunctionId(0),
+    };
+    let x = Literal::Integer {
+        value: 1,
+        ty: Scalar::Int,
+    };
+    let y = Literal::Integer {
+        value: 2,
+        ty: Scalar::U8,
+    };
+    let weights = doubles([0.5, 1.5]);
+    let complete = || vec![x, y, weights[0], weights[1]];
+
+    cell(complete()).verify().unwrap();
+
+    for (values, expected) in [
+        (vec![x, y, weights[0]], "holds 3 values, expected 4"),
+        (
+            [complete(), vec![weights[1]]].concat(),
+            "holds 5 values, expected 4",
+        ),
+        // The scalars are heterogeneous, so their order is part of the check.
+        (
+            vec![y, x, weights[0], weights[1]],
+            "holds a `u8` value where a `int` value belongs",
+        ),
+        (
+            vec![
+                x,
+                Literal::Integer {
+                    value: 256,
+                    ty: Scalar::U8,
+                },
+                weights[0],
+                weights[1],
+            ],
+            "IR integer 256 out of range",
+        ),
+    ] {
+        let error = cell(values).verify().unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
 }

@@ -1,0 +1,101 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+use geom span=0..9 path=[4..8]
+type Point struct name=15..20 span=10..55
+  field x name=34..35
+    scalar int span=37..40
+  field y name=46..47
+    scalar int span=49..52
+pub type Shape struct name=65..70 span=60..163
+  field origin name=84..90
+    named Point span=92..97
+  field corners name=103..110
+    array span=112..120
+      length
+        integer 2 span=113..114
+      element
+        named Point span=115..120
+  field label name=126..131
+    named geom::Label span=133..144 qualifier=133..137
+  field scale name=150..155
+    scalar f64 span=157..160
+fn make name=167..171 span=164..208
+  parameter p name=172..173
+    named Point span=175..180
+  result
+    named Point span=185..190
+  return span=197..206
+    reference p span=204..205
+fn main name=212..216 span=209..732
+  result void
+  var origin name=237..243 span=233..269
+    struct literal Point name=246..251 fill=None span=246..268
+      field x name=254..255
+        integer 1 span=258..259
+      field y name=261..262
+        integer 2 span=265..266
+  const zeroed name=280..286 span=274..303
+    struct literal Point name=289..294 fill=Some(297..300) span=289..302
+  const partial name=314..321 span=308..345
+    struct literal Point name=324..329 fill=Some(339..342) span=324..344
+      field x name=332..333
+        integer 3 span=336..337
+  const nested name=356..362 span=350..521
+    struct literal Shape name=365..370 fill=None span=365..520
+      field origin name=381..387
+        struct literal Point name=390..395 fill=None span=390..412
+          field x name=398..399
+            integer 4 span=402..403
+          field y name=405..406
+            integer 5 span=409..410
+      field corners name=422..429
+        array literal fill=Some(446..449) span=432..450
+          struct literal Point name=433..438 fill=Some(441..444) span=433..446
+      field label name=460..465
+        struct literal geom::Label name=474..479 fill=None span=468..492 qualifier=468..472
+          field text name=482..486
+            integer 6 span=489..490
+      field scale name=502..507
+        floating 0.5 span=510..513
+  const value name=532..537 span=526..571
+    field x name=569..570 span=540..570
+      call make target=540..544 left_paren=544..545 right_paren=567..568 span=540..568
+        struct literal Point name=545..550 fill=None span=545..567
+          field x name=553..554
+            integer 7 span=557..558
+          field y name=560..561
+            integer 8 span=564..565
+  const deep name=582..586 span=576..609
+    field y name=607..608 span=589..608
+      index span=589..606
+        field corners name=596..603 span=589..603
+          reference nested span=589..595
+        integer 0 span=604..605
+  var grid name=618..622 span=614..647
+    array span=624..632
+      length
+        integer 2 span=625..626
+      element
+        named Shape span=627..632
+    array literal fill=Some(642..645) span=635..646
+      reference nested span=636..642
+  assign grid name=652..656 span=652..673
+    index
+      integer 0 span=657..658
+    field origin name=660..666
+    field x name=667..668
+    integer 9 span=671..672
+  compound assign grid Add= name=678..682 operator=699..701 span=678..705
+    index
+      integer 1 span=683..684
+    field corners name=686..693
+    index
+      integer 1 span=694..695
+    field y name=697..698
+    integer 10 span=702..704
+  assign origin name=710..716 span=710..730
+    field x name=717..718
+    field y name=728..729 span=721..729
+      reference origin span=721..727

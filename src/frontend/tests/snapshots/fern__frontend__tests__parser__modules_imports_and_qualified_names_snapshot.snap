@@ -6,7 +6,7 @@ use fmt span=0..8 path=[4..7]
 use network::http span=9..27 path=[13..20, 22..26]
 use fs::{flag, mode} span=28..50 path=[32..34] selection=[37..41, 43..47]
 pub const limit name=61..66 span=55..76
-  named int span=68..71
+  scalar int span=68..71
   integer 4 span=74..75
 pub var total name=85..90 span=81..95
   integer 0 span=93..94
@@ -14,7 +14,7 @@ const private name=102..109 span=96..114
   integer 1 span=112..113
 fn helper name=118..124 span=115..153
   result
-    named int span=130..133
+    scalar int span=130..133
   return span=136..151
     reference private span=143..150
 pub fn main name=161..165 span=158..321

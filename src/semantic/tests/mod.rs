@@ -7,7 +7,7 @@ use crate::{
         namespaces::{check, check_root},
     },
     source::SourceMap,
-    types::{Float, LogicalOperator, Scalar, Type},
+    types::{Float, LogicalOperator, Scalar, StructId, StructType, Type},
 };
 use num_bigint::BigInt;
 
@@ -82,6 +82,28 @@ fn value_type(scalar: Scalar) -> Type {
     Type::Scalar(scalar)
 }
 
+/// The value type the `index`th struct declaration of a program names.
+fn struct_type(index: usize, name: &str) -> Type {
+    Type::Struct(StructType {
+        id: StructId(index),
+        name: name.to_owned(),
+    })
+}
+
+/// The name and type of every field of the `index`th struct declaration.
+fn struct_fields(checked: &CheckedProgram<'_>, index: usize) -> Vec<(String, Type)> {
+    checked.structs[index]
+        .fields
+        .iter()
+        .map(|field| {
+            (
+                checked.syntax.names.resolve(&field.name).to_owned(),
+                field.ty.clone(),
+            )
+        })
+        .collect()
+}
+
 /// An array type, innermost element type first.
 fn array_type(length: u64, element: Type) -> Type {
     Type::Array {
@@ -89,6 +111,18 @@ fn array_type(length: u64, element: Type) -> Type {
         element: Box::new(element),
     }
 }
+
+/// A `geometry` module beside the `app` root module, with one public struct
+/// type, one private struct type, and one public `const`.
+const GEOMETRY: &str = "pub type Point struct {
+    x: int,
+    y: int,
+}
+type Hidden struct {
+    z: int,
+}
+pub const origin = 0;
+";
 
 /// A `counter` module beside the `app` root module, with one public
 /// function, one public `var`, one public `const`, and one private `const`.

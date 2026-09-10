@@ -63,6 +63,8 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             | ExpressionValue::Index { .. }
             | ExpressionValue::Length { .. }
             | ExpressionValue::LogicalNot { .. }
+            | ExpressionValue::Struct { .. }
+            | ExpressionValue::Field { .. }
             | ExpressionValue::Call { .. } => None,
         })
         .collect();

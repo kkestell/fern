@@ -48,6 +48,7 @@ pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
     let (sources, syntax) = (program.sources, program.syntax);
     reject_input_output_alias(&sources, output)?;
     let checked = semantic::namespaces::check(&syntax, &program.modules, &program.files)
+        .and_then(semantic::model::reject_uncompiled_structs)
         .map_err(|e| CompileError::new(e.render(&sources)))?;
     let entry = ir::lower::lower(checked).verify()?;
     backend::toolchain::build(&entry, &sources, output)

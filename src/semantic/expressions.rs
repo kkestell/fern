@@ -2,14 +2,31 @@
 
 use crate::{
     diagnostic::Diagnostic,
-    frontend::syntax::{Expression, ExpressionKind, find_call},
+    frontend::syntax::{Expression, ExpressionKind, Syntax, find_call},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
 };
 use la_arena::Idx;
+use lasso::Spur;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use super::{annotations::check_element_count, constants::*, model::*};
+
+/// Reports a field name the struct does not declare.
+fn no_field(
+    syntax: &Syntax,
+    ty: &Type,
+    name: Spur,
+    name_span: &std::ops::Range<usize>,
+) -> Diagnostic {
+    Diagnostic::new(
+        name_span.clone(),
+        format!(
+            "struct `{ty}` has no field `{}`",
+            syntax.names.resolve(&name)
+        ),
+    )
+}
 
 impl CheckedProgram<'_> {
     pub(super) fn check_expression(
@@ -120,6 +137,12 @@ impl CheckedProgram<'_> {
                 self.infer_index(*operand, *index, scopes)
             }
             ExpressionKind::Length { operand } => self.infer_length(*operand, scopes),
+            ExpressionKind::StructLiteral { .. } => self.check_struct_literal(id, scopes),
+            ExpressionKind::Field {
+                operand,
+                name,
+                name_span,
+            } => self.infer_field(*operand, *name, name_span, scopes),
             ExpressionKind::Call(call) => {
                 let (function, result) = self.check_call(call, scopes, true)?;
                 Ok(CheckedExpression {
@@ -255,6 +278,132 @@ impl CheckedProgram<'_> {
         }
         self.expressions.insert(index, checked);
         Ok((**element).clone())
+    }
+
+    /// Checks a struct literal against the type it names itself, so an
+    /// unexpected struct type is reported by the destination it does not fit.
+    /// Its written fields are checked in source order, which is the order they
+    /// are evaluated in.
+    fn check_struct_literal(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let syntax = self.syntax;
+        let span = syntax.expressions[id].span.clone();
+        let ExpressionKind::StructLiteral { name, fields, fill } = &syntax.expressions[id].kind
+        else {
+            unreachable!("a struct literal is checked from its own syntax")
+        };
+        let declared = self.resolve_type_name(name, scopes)?;
+        self.resolve_struct_fields(declared, &name.span, scopes)?;
+        let ty = self.struct_type(declared);
+        let count = self.structs[declared.0].fields.len();
+        let mut values: Vec<Option<Constant>> = vec![None; count];
+        let mut written = vec![false; count];
+        let mut initializers = Vec::with_capacity(fields.len());
+        let mut checked = Vec::with_capacity(fields.len());
+        for field in fields {
+            let Some(&ordinal) = self.structs[declared.0].ordinals.get(&field.name) else {
+                return Err(no_field(syntax, &ty, field.name, &field.name_span));
+            };
+            if written[ordinal] {
+                return Err(Diagnostic::new(
+                    field.name_span.clone(),
+                    format!(
+                        "duplicate field `{}` in `{ty}` literal",
+                        syntax.names.resolve(&field.name)
+                    ),
+                ));
+            }
+            let field_type = self.structs[declared.0].fields[ordinal].ty.clone();
+            let value = self.check_expression(field.value, scopes, Some(field_type))?;
+            written[ordinal] = true;
+            values[ordinal] = value.constant.clone();
+            initializers.push((ordinal, field.value));
+            checked.push(value);
+        }
+        let mut filled = Vec::new();
+        for ordinal in written
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, written)| (!written).then_some(ordinal))
+        {
+            let field = &self.structs[declared.0].fields[ordinal];
+            if fill.is_none() {
+                return Err(Diagnostic::new(
+                    span,
+                    format!(
+                        "`{ty}` literal is missing field `{}`",
+                        syntax.names.resolve(&field.name)
+                    ),
+                ));
+            }
+            let zero = self.zero_value(&field.ty);
+            values[ordinal] = Some(zero.clone());
+            filled.push((ordinal, zero));
+        }
+        let constant = values
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map(Constant::Struct);
+        let folded = constant.is_some();
+        for (&(_, value), checked) in initializers.iter().zip(checked) {
+            self.record_operand(value, checked, folded);
+        }
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::Struct {
+                id: declared,
+                initializers,
+                filled,
+            },
+            constant,
+        })
+    }
+
+    /// Checks one `.name` step and gives the field's position and type. Field
+    /// expressions and assignment targets share this, so both spell one rule.
+    pub(super) fn check_field_step(
+        &self,
+        operand: &Type,
+        operand_span: &std::ops::Range<usize>,
+        name: Spur,
+        name_span: &std::ops::Range<usize>,
+    ) -> Result<(usize, Type), Diagnostic> {
+        let Type::Struct(struct_type) = operand else {
+            return Err(Diagnostic::new(
+                operand_span.clone(),
+                format!("cannot select a field of `{operand}`"),
+            ));
+        };
+        let declared = &self.structs[struct_type.id.0];
+        let Some(&ordinal) = declared.ordinals.get(&name) else {
+            return Err(no_field(self.syntax, operand, name, name_span));
+        };
+        Ok((ordinal, declared.fields[ordinal].ty.clone()))
+    }
+
+    fn infer_field(
+        &mut self,
+        operand: Idx<Expression>,
+        name: Spur,
+        name_span: &std::ops::Range<usize>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let checked_operand = self.infer_expression(operand, scopes)?;
+        let span = self.syntax.expressions[operand].span.clone();
+        let (ordinal, ty) = self.check_field_step(&checked_operand.ty, &span, name, name_span)?;
+        // `p.x` is not a constant expression, so the operand keeps its own
+        // constant and is still evaluated.
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::Field { operand, ordinal },
+            constant: None,
+        })
     }
 
     fn infer_index(
@@ -472,8 +621,8 @@ impl CheckedProgram<'_> {
 
     /// Gives both comparison operands one type. An untyped operand takes the
     /// type of a typed one; otherwise the two types must already agree. Arrays
-    /// are never untyped, so they only have to agree, and only `==` and `!=`
-    /// reach them.
+    /// and structs are never untyped, so they only have to agree, and only
+    /// `==` and `!=` reach them.
     fn unify_comparison(
         &mut self,
         operator: ComparisonOperator,

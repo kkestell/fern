@@ -471,7 +471,7 @@ fn contextualize_constant(value: &Constant, destination: Scalar) -> Option<Const
             integer_fits(value, destination).then(|| Constant::Integer(value.clone()))
         }
         Constant::Rational(value) => round_to_float(value, destination).map(Constant::from),
-        Constant::Float(_) | Constant::Array(_) => {
+        Constant::Float(_) | Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("an untyped constant is an integer, an exact value, or a boolean")
         }
     }
@@ -520,7 +520,7 @@ fn converted(value: &Constant, destination: Scalar) -> Option<Constant> {
             let whole = exact.is_integer().then(|| exact.to_integer())?;
             integer_fits(&whole, destination).then_some(Constant::Integer(whole))
         }
-        Constant::Rational(_) | Constant::Array(_) => {
+        Constant::Rational(_) | Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("a converted constant has a concrete numeric type")
         }
     }
@@ -637,13 +637,14 @@ pub(super) fn compare_constants(
 
 /// Whether two constants of one type hold the same value. Floating-point
 /// values compare by value rather than by their bits, so a positive and a
-/// negative zero are equal, and an array compares elementwise.
+/// negative zero are equal, and an array or struct compares componentwise.
 fn constants_equal(left: &Constant, right: &Constant) -> bool {
     match (left, right) {
         (Constant::Float(left), Constant::Float(right)) => {
             float_value(*left) == float_value(*right)
         }
-        (Constant::Array(left), Constant::Array(right)) => {
+        (Constant::Array(left), Constant::Array(right))
+        | (Constant::Struct(left), Constant::Struct(right)) => {
             left.len() == right.len()
                 && std::iter::zip(left, right).all(|(left, right)| constants_equal(left, right))
         }

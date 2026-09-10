@@ -29,6 +29,7 @@ fn class(ty: &Type) -> String {
     match ty {
         Type::Scalar(ty) => qbe_type(*ty).to_string(),
         Type::Array { .. } => format!(":array{}{}", word(ty), ty.element_count()),
+        Type::Struct(_) => unreachable!("a struct is rejected before lowering"),
     }
 }
 
@@ -134,6 +135,7 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             .unwrap();
             (format!("%access{access}_address"), *element)
         }
+        Place::Field { .. } => unreachable!("a struct is rejected before lowering"),
     }
 }
 

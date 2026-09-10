@@ -3,7 +3,7 @@ source: src/frontend/tests/parser.rs
 expression: projected(source)
 ---
 const start name=6..11 span=0..22
-  named int span=13..16
+  scalar int span=13..16
   integer 40 span=19..21
 fn main name=26..30 span=23..76
   result void

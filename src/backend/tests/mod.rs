@@ -27,6 +27,7 @@ fn copy(operand: Operand) -> Value {
 
 fn program(values: Vec<Value>, exit: Operand) -> Program {
     Program {
+        structs: vec![],
         globals: vec![],
         main: FunctionId(0),
         functions: vec![Function {

@@ -141,6 +141,24 @@ fn valid_numeric_operation(
     })
 }
 
+/// How far one struct's fields have been walked while looking for a cycle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Resolution {
+    Unvisited,
+    Visiting,
+    Acyclic,
+}
+
+/// The struct a field of this type stores inline. An array stores its elements
+/// inline too, so `[N]Point` contains `Point`.
+fn contained_struct(ty: &Type) -> Option<usize> {
+    match ty {
+        Type::Scalar(_) => None,
+        Type::Array { element, .. } => contained_struct(element),
+        Type::Struct(declared) => Some(declared.id.0),
+    }
+}
+
 /// Where a value is defined, and whether a call defined it.
 #[derive(Clone, Copy)]
 struct Definition {
@@ -151,8 +169,9 @@ struct Definition {
 
 impl Program {
     pub(crate) fn verify(self) -> Result<VerifiedProgram, CompileError> {
+        self.verify_structs()?;
         for (id, global) in self.globals.iter().enumerate() {
-            verify_global(global)
+            self.verify_global(global)
                 .map_err(|error| CompileError::new(format!("{error} (IR global {id})")))?;
         }
         let main = self.function(self.main)?;
@@ -214,11 +233,131 @@ impl Program {
                 }
                 Ok(*element)
             }
+            Place::Field { base, ordinal } => {
+                let base = self.place_type(flow, base, operand_type)?;
+                let Type::Struct(declared) = &base else {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR selects a field of `{base}`"
+                    )));
+                };
+                self.structs[declared.id.0]
+                    .fields
+                    .get(*ordinal)
+                    .cloned()
+                    .ok_or_else(|| {
+                        CompileError::new(format!(
+                            "internal compiler error: IR selects field {ordinal} of `{base}`"
+                        ))
+                    })
+            }
         }
+    }
+
+    /// Checks the program's struct table before anything reads it: every
+    /// struct a field names is defined, and no struct contains itself. A field
+    /// stores its value inline, directly or through an array, so a cycle among
+    /// them has no finite layout.
+    fn verify_structs(&self) -> Result<(), CompileError> {
+        for definition in &self.structs {
+            for field in &definition.fields {
+                self.verify_type(field)?;
+            }
+        }
+        let mut state = vec![Resolution::Unvisited; self.structs.len()];
+        for id in 0..self.structs.len() {
+            self.verify_acyclic(id, &mut state)?;
+        }
+        Ok(())
+    }
+
+    fn verify_acyclic(&self, id: usize, state: &mut [Resolution]) -> Result<(), CompileError> {
+        match state[id] {
+            Resolution::Acyclic => return Ok(()),
+            Resolution::Visiting => {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR struct {id} contains itself"
+                )));
+            }
+            Resolution::Unvisited => {}
+        }
+        state[id] = Resolution::Visiting;
+        for field in &self.structs[id].fields {
+            if let Some(contained) = contained_struct(field) {
+                self.verify_acyclic(contained, state)?;
+            }
+        }
+        state[id] = Resolution::Acyclic;
+        Ok(())
+    }
+
+    /// Rejects a type naming a struct the program does not define, so an
+    /// unknown struct cannot reach the backend through a global, a signature,
+    /// a local, or a value that nothing else looks at.
+    fn verify_type(&self, ty: &Type) -> Result<(), CompileError> {
+        match ty {
+            Type::Scalar(_) => Ok(()),
+            Type::Array { element, .. } => self.verify_type(element),
+            Type::Struct(declared) if declared.id.0 < self.structs.len() => Ok(()),
+            Type::Struct(declared) => Err(CompileError::new(format!(
+                "internal compiler error: IR uses unknown struct {}",
+                declared.id.0
+            ))),
+        }
+    }
+
+    /// The scalar types a value of `ty` stores, in memory order. A struct's
+    /// fields have their own types, so the sequence is derived from the
+    /// program's struct table rather than from one leaf type.
+    fn scalar_types(&self, ty: &Type, types: &mut Vec<Scalar>) {
+        match ty {
+            Type::Scalar(scalar) => types.push(*scalar),
+            Type::Array { length, element } => {
+                for _ in 0..*length {
+                    self.scalar_types(element, types);
+                }
+            }
+            Type::Struct(declared) => {
+                for field in &self.structs[declared.id.0].fields {
+                    self.scalar_types(field, types);
+                }
+            }
+        }
+    }
+
+    fn verify_global(&self, global: &Global) -> Result<(), CompileError> {
+        self.verify_type(&global.ty)?;
+        let mut expected = Vec::new();
+        self.scalar_types(&global.ty, &mut expected);
+        if global.values.len() != expected.len() {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR global of type `{}` holds {} values, expected {}",
+                global.ty,
+                global.values.len(),
+                expected.len()
+            )));
+        }
+        for (&value, &expected) in global.values.iter().zip(&expected) {
+            let ty = verify_literal(value)?;
+            if ty != expected {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR global of type `{}` holds a `{ty}` value where a `{expected}` value belongs",
+                    global.ty
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn verify_function(&self, function: &Function) -> Result<(), CompileError> {
         let flow = &function.flow;
+        for ty in flow
+            .locals
+            .iter()
+            .chain(function.result.as_ref())
+            .chain(function.values.iter().map(|value| &value.ty))
+        {
+            self.verify_type(ty)?;
+        }
         verify_target(flow.entry, flow)?;
         let definitions = value_definitions(function)?;
         let reachable = reachable_blocks(flow)?;
@@ -521,28 +660,6 @@ fn local_stores(flow: &ControlFlow, locals: usize) -> Vec<LocalSet> {
             stored
         })
         .collect()
-}
-
-fn verify_global(global: &Global) -> Result<(), CompileError> {
-    let expected = global.ty.element_count();
-    let found = global.values.len() as u64;
-    if found != expected {
-        return Err(CompileError::new(format!(
-            "internal compiler error: IR global of type `{}` holds {found} values, expected {expected}",
-            global.ty
-        )));
-    }
-    let leaf = global.ty.leaf();
-    for &value in &global.values {
-        let ty = verify_literal(value)?;
-        if ty != leaf {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR global of type `{}` holds a `{ty}` value",
-                global.ty
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn invalid_value(index: usize, value: &Value) -> CompileError {

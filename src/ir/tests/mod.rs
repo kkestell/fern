@@ -2,7 +2,7 @@ use crate::{
     frontend::parser,
     ir::{lower::lower, model::*, verify::VerifiedProgram},
     semantic::namespaces,
-    types::{BinaryOperator, Float, Scalar, Type},
+    types::{BinaryOperator, ComparisonOperator, Float, Scalar, StructId, StructType, Type},
 };
 
 pub(super) fn integer(value: i128, ty: Scalar) -> Operand {
@@ -66,7 +66,13 @@ pub(super) fn main_function(values: Vec<Value>, locals: Vec<Type>, blocks: Vec<B
 }
 
 pub(super) fn one_function(main: Function) -> Program {
+    with_structs(vec![], main)
+}
+
+/// A whole program of one `main` over a struct table.
+pub(super) fn with_structs(structs: Vec<Struct>, main: Function) -> Program {
     Program {
+        structs,
         globals: vec![],
         functions: vec![main],
         main: FunctionId(0),
@@ -130,6 +136,14 @@ pub(super) fn array(length: u64, element: Type) -> Type {
     }
 }
 
+/// The type of struct `id`, spelled `name` the way diagnostics show it.
+pub(super) fn declared(id: usize, name: &str) -> Type {
+    Type::Struct(StructType {
+        id: StructId(id),
+        name: name.to_owned(),
+    })
+}
+
 pub(super) fn element(base: Place, index: Operand) -> Place {
     Place::Element {
         base: Box::new(base),
@@ -138,8 +152,15 @@ pub(super) fn element(base: Place, index: Operand) -> Place {
     }
 }
 
-/// Spells a place the way a test reads it: `local0[1]`, `global2`.
-fn describe(place: &Place) -> String {
+pub(super) fn field(base: Place, ordinal: usize) -> Place {
+    Place::Field {
+        base: Box::new(base),
+        ordinal,
+    }
+}
+
+/// Spells a place the way a test reads it: `local0[1].2`, `global2`.
+pub(super) fn describe(place: &Place) -> String {
     match place {
         Place::Local(LocalId(id)) => format!("local{id}"),
         Place::Global(GlobalId(id)) => format!("global{id}"),
@@ -153,6 +174,7 @@ fn describe(place: &Place) -> String {
             };
             format!("{}[{index}]", describe(base))
         }
+        Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
     }
 }
 

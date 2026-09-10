@@ -1211,3 +1211,381 @@ fn floating_signatures_arrays_and_globals_reach_the_common_ir_forms() {
     assert_eq!(loads(weigh).len(), 3);
     insta::assert_debug_snapshot!("floating_functions", program.program());
 }
+
+/// The struct declarations the lowering tests build their programs on.
+const STRUCTS: &str = "type Point struct { x: int, y: u8 }
+     type Cell struct { point: Point, weights: [2]f64 }
+     type Row struct { count: int }
+     type Table struct { rows: [2]Row }
+     ";
+
+fn lowered_with_structs(body: &str) -> VerifiedProgram {
+    lowered(&format!("{STRUCTS}{body}"))
+}
+
+#[test]
+fn the_program_owns_every_struct_definition_in_field_order() {
+    let program = lowered_with_structs("fn main() -> void { exit(0); }");
+    assert_eq!(
+        program.program().structs,
+        vec![
+            Struct {
+                fields: vec![Scalar::Int.into(), Scalar::U8.into()],
+            },
+            Struct {
+                fields: vec![declared(0, "Point"), array(2, Scalar::F64.into())],
+            },
+            Struct {
+                fields: vec![Scalar::Int.into()],
+            },
+            Struct {
+                fields: vec![array(2, declared(2, "Row"))],
+            },
+        ]
+    );
+}
+
+#[test]
+fn heterogeneous_struct_globals_flatten_in_field_order() {
+    let program = lowered_with_structs(
+        "var cell = Cell { point = Point { x = 1, y = 2 }, weights = [0.5, 1.5] };
+         var table = Table { ... };
+         fn main() -> void { exit(0); }",
+    );
+    assert_eq!(
+        program.program().globals,
+        vec![
+            // A struct's fields have their own types, so one global holds
+            // `int`, `u8`, and `f64` literals in declaration order.
+            Global {
+                ty: declared(1, "Cell"),
+                values: vec![
+                    Literal::Integer {
+                        value: 1,
+                        ty: Scalar::Int,
+                    },
+                    Literal::Integer {
+                        value: 2,
+                        ty: Scalar::U8,
+                    },
+                    Literal::Floating(Float::Binary64(0.5f64.to_bits())),
+                    Literal::Floating(Float::Binary64(1.5f64.to_bits())),
+                ],
+            },
+            Global {
+                ty: declared(3, "Table"),
+                values: integers([0, 0], Scalar::Int),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_struct_literal_stores_its_written_fields_and_then_its_filled_ones() {
+    let complete = lowered_with_structs(
+        "var y: u8 = 2;
+         fn main() -> void { var p = Point { y = y, x = 1 }; exit(0); }",
+    );
+    // The written fields store through their own ordinals, in source order,
+    // rather than in declaration order.
+    assert_eq!(
+        stored_places(main_of(&complete)),
+        ["local0.1", "local0.0", "local1"]
+    );
+
+    let filled = lowered_with_structs(
+        "var x = 7;
+         fn main() -> void { var c = Cell { point = Point { x = x, ... }, ... }; exit(0); }",
+    );
+    assert_eq!(
+        stored_places(main_of(&filled)),
+        [
+            // `Point { x = x, ... }` writes `x` and fills `y` into its own
+            // local, which then stores into the enclosing literal's `point`
+            // field before that literal fills its whole array field.
+            "local1.0",
+            "local1.1",
+            "local0.0",
+            "local0.1[0]",
+            "local0.1[1]",
+            "local2",
+        ]
+    );
+}
+
+#[test]
+fn a_folded_struct_stores_one_literal_per_scalar_it_holds() {
+    let program = lowered_with_structs(
+        "fn main() -> void {
+             const cell = Cell { point = Point { x = 1, y = 2 }, weights = [0.5, 1.5] };
+             var copy = cell;
+             exit(0);
+         }",
+    );
+    let main = main_of(&program);
+    // A folded struct reaches storage the same way a folded array does: one
+    // literal store per scalar, through the field and element steps that
+    // reach it.
+    assert_eq!(
+        stored_places(main),
+        [
+            "local0.0.0",
+            "local0.0.1",
+            "local0.1[0]",
+            "local0.1[1]",
+            "local1"
+        ]
+    );
+    let operands: Vec<Operand> = stores(main)
+        .into_iter()
+        .map(|(_, operand)| operand)
+        .collect();
+    assert_eq!(
+        operands,
+        [
+            integer(1, Scalar::Int),
+            integer(2, Scalar::U8),
+            floating(Float::Binary64(0.5f64.to_bits())),
+            floating(Float::Binary64(1.5f64.to_bits())),
+            Operand::Value(ValueId(0)),
+        ]
+    );
+}
+
+#[test]
+fn field_selection_reads_scalar_and_aggregate_fields_through_one_place() {
+    let program = lowered_with_structs(
+        "fn main() -> void {
+             var cell = Cell { point = Point { x = 4, y = 5 }, weights = [0.5, 1.5] };
+             var point = cell.point;
+             var weight = cell.weights[1];
+             exit(point.x);
+         }",
+    );
+    let main = main_of(&program);
+    // `local0` materializes the literal and `local1` is `cell`. A scalar
+    // field and an aggregate field both load through a field place, and no
+    // separate struct copy instruction exists.
+    let cell = Place::Local(LocalId(1));
+    let loaded: Vec<String> = loads(main).iter().map(describe).collect();
+    assert_eq!(loaded, ["local0", "local1.0", "local1.1[1]", "local2.0"]);
+    assert_eq!(
+        loads(main)[1],
+        field(cell.clone(), 0),
+        "the aggregate field loads through one place"
+    );
+    let Place::Element { base, .. } = &loads(main)[2] else {
+        unreachable!("indexing an array field ends in an element step")
+    };
+    assert_eq!(**base, field(cell, 1));
+}
+
+#[test]
+fn copying_a_struct_copies_its_whole_value() {
+    let program = lowered_with_structs(
+        "fn main() -> void {
+             var p = Point { x = 1, y = 2 };
+             var copy = p;
+             copy.x = 9;
+             exit(p.x);
+         }",
+    );
+    let main = main_of(&program);
+    // The copy loads the whole struct once and stores it into its own local,
+    // so assigning through the copy cannot reach the source.
+    let whole = main
+        .values
+        .iter()
+        .filter(|value| {
+            value.kind == ValueKind::Load(Place::Local(LocalId(0)))
+                && value.ty == declared(0, "Point")
+        })
+        .count();
+    assert_eq!(whole, 1);
+    assert_eq!(
+        stored_places(main),
+        ["local0.0", "local0.1", "local1", "local2", "local2.0"]
+    );
+}
+
+#[test]
+fn structs_pass_through_parameters_arguments_and_results() {
+    let program = lowered_with_structs(
+        "fn shifted(p: Point) -> Point { return Point { x = p.x + 1, y = p.y }; }
+         fn main() -> void {
+             var p = Point { x = 1, y = 2 };
+             exit(shifted(shifted(p)).x);
+         }",
+    );
+    let functions = &program.program().functions;
+    let point = declared(0, "Point");
+    assert_eq!(functions[0].flow.locals[0], point);
+    assert_eq!(functions[0].result, Some(point.clone()));
+    let main = main_of(&program);
+    assert_eq!(call_targets(main), [FunctionId(0), FunctionId(0)]);
+    // The inner call's struct result lands in a local before it is passed on.
+    assert!(main.flow.locals.contains(&point));
+}
+
+#[test]
+fn struct_equality_compares_whole_values() {
+    for (source, operator) in [
+        ("a == b", ComparisonOperator::Equal),
+        ("a != b", ComparisonOperator::NotEqual),
+    ] {
+        let program = lowered_with_structs(&format!(
+            "fn main() -> void {{
+                 var a = Point {{ x = 1, y = 2 }};
+                 var b = Point {{ x = 1, y = 2 }};
+                 if {source} {{ exit(1); }}
+                 exit(0);
+             }}"
+        ));
+        let main = main_of(&program);
+        let comparison = main
+            .values
+            .iter()
+            .find(|value| matches!(value.kind, ValueKind::Comparison { .. }))
+            .expect("the condition compares the two structs");
+        assert_eq!(comparison.ty, Scalar::Bool.into());
+        let ValueKind::Comparison {
+            operator: found,
+            left,
+            right,
+        } = &comparison.kind
+        else {
+            unreachable!("the value is a comparison")
+        };
+        assert_eq!(*found, operator);
+        // Both operands are whole struct values, not field-by-field reads.
+        for operand in [left, right] {
+            let Operand::Value(ValueId(id)) = operand else {
+                unreachable!("a struct operand is a loaded value")
+            };
+            assert_eq!(main.values[*id].ty, declared(0, "Point"));
+        }
+    }
+}
+
+#[test]
+fn written_field_initializers_lower_in_source_order() {
+    let program = lowered_with_structs(
+        "fn one() -> int { return 1; }
+         fn two() -> u8 { return 2; }
+         fn main() -> void { var p = Point { y = two(), x = one() }; exit(0); }",
+    );
+    // `y` is written first, so its call runs first even though `x` is
+    // declared first.
+    assert_eq!(
+        call_targets(main_of(&program)),
+        [FunctionId(1), FunctionId(0)]
+    );
+    assert_eq!(
+        stored_places(main_of(&program)),
+        ["local0.1", "local0.0", "local1"]
+    );
+}
+
+#[test]
+fn mixed_field_and_element_targets_build_their_steps_in_order() {
+    let program = lowered_with_structs(
+        "fn main() -> void {
+             var grid: [2]Cell = [Cell { ... }, Cell { ... }];
+             var table = Table { ... };
+             var i = 1;
+             grid[i].point.x = 3;
+             table.rows[i].count = 4;
+             exit(0);
+         }",
+    );
+    let places = stored_places(main_of(&program));
+    let mixed: Vec<&String> = places.iter().filter(|place| place.contains("[v")).collect();
+    assert_eq!(mixed, ["local1[v2].0.0", "local3.0[v3].0"]);
+}
+
+#[test]
+fn an_assignment_through_a_mixed_target_rebuilds_it_after_a_split_value() {
+    let program = lowered_with_structs(
+        "type Flags struct { seen: [2]bool }
+         fn main() -> void {
+             var flags = Flags { ... };
+             var i = 0;
+             var a = true;
+             var b = false;
+             flags.seen[i] = a && b;
+             exit(0);
+         }",
+    );
+    let main = main_of(&program);
+    let store = stores(main)
+        .pop()
+        .expect("the assignment stores through the mixed target");
+    // The index was lowered before the short-circuiting value, so the store's
+    // block reads it back through its spill rather than through the original
+    // value.
+    let Place::Element { base, index, .. } = &store.0 else {
+        unreachable!("the target ends in an element step")
+    };
+    assert_eq!(**base, field(Place::Local(LocalId(1)), 0));
+    let Operand::Value(ValueId(id)) = index else {
+        unreachable!("a runtime index is a value")
+    };
+    assert!(matches!(
+        main.values[*id].kind,
+        ValueKind::Load(Place::Local(_))
+    ));
+}
+
+#[test]
+fn a_compound_assignment_evaluates_each_runtime_index_once() {
+    let program = lowered_with_structs(
+        "fn next() -> int { return 0; }
+         fn main() -> void {
+             var grid: [2]Cell = [Cell { ... }, Cell { ... }];
+             grid[next()].point.x = grid[0].point.x;
+             grid[next()].point.x += 5;
+             exit(0);
+         }",
+    );
+    let main = main_of(&program);
+    // Two statements name `grid[next()]`, and each evaluates its index once
+    // even though the compound assignment reads and writes through it.
+    assert_eq!(call_targets(main), [FunctionId(0), FunctionId(0)]);
+    let compound = main
+        .values
+        .iter()
+        .filter(|value| {
+            matches!(
+                value.kind,
+                ValueKind::Binary {
+                    form: BinaryForm::CompoundAssignment,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(compound, 1);
+}
+
+#[test]
+fn lowers_the_structs_milestone_program() {
+    let program = lowered_with_structs(
+        "var start = Point { x = 19, y = 23 };
+
+         fn shifted(cell: Cell) -> Cell {
+             return Cell { point = Point { x = cell.point.x + 1, y = cell.point.y }, ... };
+         }
+
+         fn main() -> void {
+             var cell = Cell { point = start, weights = [0.5, 1.5] };
+             cell.weights[1] = 2.5;
+             var moved = shifted(cell);
+             const expected = Point { x = 20, y = 23 };
+             if moved.point == expected {
+                 exit(moved.point.x + int(moved.point.y));
+             }
+             exit(255);
+         }",
+    );
+    insta::assert_debug_snapshot!("structs", program.program());
+}

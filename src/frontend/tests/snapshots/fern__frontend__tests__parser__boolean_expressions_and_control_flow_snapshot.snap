@@ -5,7 +5,7 @@ expression: projected(source)
 fn main name=3..7 span=0..356
   result void
   var ready name=24..29 span=20..43
-    named bool span=31..35
+    scalar bool span=31..35
     boolean true span=38..42
   const stopped name=50..57 span=44..66
     boolean false span=60..65
@@ -47,7 +47,7 @@ fn main name=3..7 span=0..356
   for label=rows label_span=Some(226..230) span=221..291
     initializer
       var i name=235..236 span=231..246
-        named int span=238..241
+        scalar int span=238..241
         integer 0 span=244..245
     condition
       comparison Less operator=249..250 span=247..252

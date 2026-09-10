@@ -620,3 +620,120 @@ fn floating_bindings_and_assignments_follow_their_format() {
         rejects(body, offending, message);
     }
 }
+
+/// The resolved steps of every assignment target of a checked program, in the
+/// order the statements were checked.
+fn checked_target_steps(source: &str) -> Vec<Vec<String>> {
+    let syntax = parse(source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    checked
+        .assignments
+        .iter()
+        .map(|(_, target)| {
+            target
+                .steps
+                .iter()
+                .map(|step| match step {
+                    CheckedStep::Index(_) => "index".to_owned(),
+                    CheckedStep::Field(ordinal) => format!("field {ordinal}"),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_field_of_a_mutable_struct_may_be_assigned() {
+    accepts_source(
+        "type Point struct { x: int, y: u8 }
+         fn main() -> void {
+             var p = Point { x = 1, y = 2 };
+             p.x = 5;
+             p.y += 1;
+             p = Point { x = 6, y = 7 };
+         }",
+    );
+    // A field of a `const` binding is rejected with the binding itself.
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { const p = Point { x = 1 }; p.x = 5; }",
+        "p",
+        "cannot assign to immutable binding `p`",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { var p = Point { x = 1 }; p.x = true; }",
+        "true",
+        "cannot implicitly convert `bool` to `int`",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { var p = Point { x = 1 }; p.z = 5; }",
+        "z",
+        "struct `Point` has no field `z`",
+    );
+    rejects_source(
+        "type Point struct { x: int }
+         fn main() -> void { var p = Point { x = 1 }; p += 1; }",
+        "+=",
+        "`+=` requires numeric operands",
+    );
+    rejects_source(
+        "fn main() -> void { var n = 1; n.x = 5; }",
+        "n",
+        "cannot select a field of `int`",
+    );
+}
+
+#[test]
+fn an_assignment_target_records_its_index_and_field_steps_in_order() {
+    assert_eq!(
+        checked_target_steps(
+            "type Point struct { x: int, y: int }
+             type Cell struct { point: Point }
+             type Board struct { rows: [2]Cell, count: int }
+             fn main() -> void {
+                 var grid: [2]Cell = [Cell { point = Point { ... } }...];
+                 var board = Board { rows = grid, count = 0 };
+                 const i = 1;
+                 grid[i].point.y = 3;
+                 board.rows[i].point.x = 4;
+                 board.count = 5;
+             }"
+        ),
+        [
+            vec![
+                "index".to_owned(),
+                "field 0".to_owned(),
+                "field 1".to_owned()
+            ],
+            vec![
+                "field 0".to_owned(),
+                "index".to_owned(),
+                "field 0".to_owned(),
+                "field 0".to_owned()
+            ],
+            vec!["field 1".to_owned()],
+        ]
+    );
+    // Every step is checked, so an index out of range or a field of a
+    // non-struct is rejected part way along a chain.
+    rejects_source(
+        "type Cell struct { point: int }
+         fn main() -> void {
+             var grid: [2]Cell = [Cell { point = 0 }...];
+             grid[2].point = 1;
+         }",
+        "2",
+        "index 2 is out of range for `[2]Cell`",
+    );
+    rejects_source(
+        "type Cell struct { point: int }
+         fn main() -> void {
+             var grid: [2]Cell = [Cell { point = 0 }...];
+             grid[0].point.x = 1;
+         }",
+        "grid",
+        "cannot select a field of `int`",
+    );
+}

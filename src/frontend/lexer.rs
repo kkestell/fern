@@ -13,6 +13,10 @@ pub(super) enum Token {
     Const,
     #[token("var")]
     Var,
+    #[token("type")]
+    Type,
+    #[token("struct")]
+    Struct,
     #[token("exit")]
     Exit,
     #[token("if")]

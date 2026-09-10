@@ -8,7 +8,9 @@ fn public_declarations_and_qualified_names_are_recorded_on_their_nodes() {
         .iter()
         .flat_map(|file| &file.items)
         .map(|item| match item {
-            TopLevelItem::Function { public, .. } | TopLevelItem::Binding { public, .. } => *public,
+            TopLevelItem::Function { public, .. }
+            | TopLevelItem::Binding { public, .. }
+            | TopLevelItem::Struct { public, .. } => *public,
         })
         .collect();
     assert_eq!(public, [true, false, true]);

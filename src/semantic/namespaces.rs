@@ -9,7 +9,7 @@ use crate::{
     },
     module::{File, Module, ModuleId},
     source::FileId,
-    types::Scalar,
+    types::{Scalar, StructId},
 };
 use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
@@ -27,6 +27,7 @@ pub(super) struct Declaration {
 pub(super) enum DeclarationKind {
     Binding(Idx<Binding>),
     Function(Idx<Function>),
+    Struct(StructId),
 }
 
 /// One module's declarations by name.
@@ -47,6 +48,7 @@ pub(super) enum Imported {
 enum Wanted {
     Function,
     Value,
+    Type,
 }
 
 impl Wanted {
@@ -55,6 +57,7 @@ impl Wanted {
         match self {
             Self::Function => "a function",
             Self::Value => "a value",
+            Self::Type => "a type",
         }
     }
 
@@ -63,6 +66,7 @@ impl Wanted {
         match self {
             Self::Function => "unknown function",
             Self::Value => "unknown binding",
+            Self::Type => "unknown type",
         }
     }
 }
@@ -166,6 +170,8 @@ pub(crate) fn check<'a>(
         iterations: ArenaMap::default(),
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
+        structs: Vec::new(),
+        struct_names: HashMap::new(),
         function_names: HashMap::new(),
         namespaces: HashMap::new(),
         imports: HashMap::new(),
@@ -236,7 +242,9 @@ impl CheckedProgram<'_> {
     ///
     /// Signatures are resolved after the module's initializers because an array
     /// length in a signature may name a module-level `const`, which only has a
-    /// value once its own initializer is checked.
+    /// value once its own initializer is checked. Struct fields resolve on the
+    /// same rule, and every one of them is resolved before any signature or
+    /// body, so a field's array length never sees a local binding.
     fn check_module(
         &mut self,
         id: ModuleId,
@@ -248,8 +256,10 @@ impl CheckedProgram<'_> {
         let mut namespace = Namespace::new();
         let module_scope = self.declare_module_bindings(&items, &mut namespace)?;
         self.declare_function_names(&items, &mut namespace);
+        self.declare_struct_names(&items, &mut namespace);
         self.resolve_imports(module, files, &namespace)?;
         self.check_module_initializers(&bindings, &module_scope)?;
+        self.resolve_module_structs(&items, &module_scope)?;
         self.resolve_signatures(&items, &module_scope)?;
         self.check_function_bodies(&items, &module_scope)?;
         self.check_imports_used(module)?;
@@ -284,6 +294,7 @@ impl CheckedProgram<'_> {
         let mut names = HashSet::new();
         let mut bindings = ModuleBindings::default();
         self.function_names = HashMap::new();
+        self.struct_names = HashMap::new();
         for &(file, item) in items {
             match item {
                 TopLevelItem::Function { function: id, .. } => {
@@ -303,6 +314,22 @@ impl CheckedProgram<'_> {
                     bindings.declarations.insert(*name, id);
                     bindings.statements.push(id);
                     bindings.files.insert(id, file);
+                }
+                TopLevelItem::Struct { declaration, .. } => {
+                    let declared = &syntax.structs[declaration];
+                    claim_module_name(&mut names, declared.name, &declared.name_span, syntax)?;
+                    // Every struct of the module has an identity before any
+                    // field is resolved, so a field can name a struct
+                    // declared after it.
+                    let id = StructId(self.structs.len());
+                    self.structs.push(CheckedStruct {
+                        declaration,
+                        file,
+                        fields: Vec::new(),
+                        ordinals: HashMap::new(),
+                        state: FieldState::Unresolved,
+                    });
+                    self.struct_names.insert(declared.name, id);
                 }
             }
         }
@@ -367,6 +394,52 @@ impl CheckedProgram<'_> {
                 },
             );
         }
+    }
+
+    /// Puts every struct in the module's namespace, so an import can name it
+    /// before its fields are resolved.
+    fn declare_struct_names(
+        &mut self,
+        items: &[(FileId, TopLevelItem)],
+        namespace: &mut Namespace,
+    ) {
+        for &(_, item) in items {
+            let TopLevelItem::Struct {
+                declaration,
+                public,
+            } = item
+            else {
+                continue;
+            };
+            let name = self.syntax.structs[declaration].name;
+            namespace.insert(
+                name,
+                Declaration {
+                    public,
+                    kind: DeclarationKind::Struct(self.struct_names[&name]),
+                },
+            );
+        }
+    }
+
+    /// Resolves the fields of every struct the module declares, so a
+    /// declaration nothing names is still checked.
+    fn resolve_module_structs(
+        &mut self,
+        items: &[(FileId, TopLevelItem)],
+        module_scope: &HashMap<Spur, Idx<Binding>>,
+    ) -> Result<(), Diagnostic> {
+        let scopes = ScopeStack::module(module_scope);
+        for &(_, item) in items {
+            let TopLevelItem::Struct { declaration, .. } = item else {
+                continue;
+            };
+            let declared = &self.syntax.structs[declaration];
+            let id = self.struct_names[&declared.name];
+            let span = declared.name_span.clone();
+            self.resolve_struct_fields(id, &span, &scopes)?;
+        }
+        Ok(())
     }
 
     /// Resolves every function's parameter and result types, so a call can be
@@ -507,10 +580,11 @@ impl CheckedProgram<'_> {
                 unreachable!("frontend only permits bindings at module level")
             };
             let mut references = Vec::new();
+            let mut visited = HashSet::new();
             if let Some(annotation) = annotation {
-                collect_annotation_references(syntax, *annotation, &mut references);
+                self.collect_annotation_references(*annotation, &mut visited, &mut references);
             }
-            collect_references(syntax, *initializer, &mut references);
+            self.collect_references(*initializer, &mut visited, &mut references);
             dependencies.insert(
                 statement,
                 references
@@ -704,39 +778,83 @@ fn order_module_bindings(
     Ok(order)
 }
 
-/// The module-level names an annotation's array lengths reference.
-fn collect_annotation_references(
-    syntax: &Syntax,
-    annotation: Idx<TypeAnnotation>,
-    references: &mut Vec<(Spur, std::ops::Range<usize>)>,
-) {
-    let AnnotationKind::Array { length, element } = syntax.annotations[annotation].kind else {
-        return;
-    };
-    if let Some(length) = length {
-        collect_references(syntax, length, references);
-    }
-    collect_annotation_references(syntax, element, references);
-}
-
-/// The unqualified module-level names an expression references. A call's
-/// target names a function rather than a binding, so only its arguments count.
-fn collect_references(
-    syntax: &Syntax,
-    expression: Idx<Expression>,
-    references: &mut Vec<(Spur, std::ops::Range<usize>)>,
-) {
-    walk_expression(syntax, expression, &mut |id| {
-        let expression = &syntax.expressions[id];
-        if let ExpressionKind::Reference(name) = &expression.kind
-            && name.qualifier.is_none()
-        {
-            references.push((name.name, expression.span.clone()));
-        }
-    });
-}
+/// The module-level names one declaration reaches, which is what orders the
+/// module's initializers. A struct type it names contributes the names its
+/// own field annotations reach, and `visited` keeps a struct that several
+/// fields name from being followed twice.
+type References = Vec<(Spur, std::ops::Range<usize>)>;
 
 impl CheckedProgram<'_> {
+    /// The names an annotation reaches: the module-level names in its array
+    /// lengths, and those of any struct type it names.
+    fn collect_annotation_references(
+        &self,
+        annotation: Idx<TypeAnnotation>,
+        visited: &mut HashSet<StructId>,
+        references: &mut References,
+    ) {
+        match &self.syntax.annotations[annotation].kind {
+            AnnotationKind::Scalar(_) => {}
+            AnnotationKind::Named(name) => self.collect_type_references(name, visited, references),
+            AnnotationKind::Array { length, element } => {
+                let (length, element) = (*length, *element);
+                if let Some(length) = length {
+                    self.collect_references(length, visited, references);
+                }
+                self.collect_annotation_references(element, visited, references);
+            }
+        }
+    }
+
+    /// The names a written type reaches through its fields. A qualified name
+    /// belongs to another module, whose own bindings are already checked.
+    fn collect_type_references(
+        &self,
+        name: &QualifiedName,
+        visited: &mut HashSet<StructId>,
+        references: &mut References,
+    ) {
+        if name.qualifier.is_some() {
+            return;
+        }
+        let Some(&id) = self.struct_names.get(&name.name) else {
+            return;
+        };
+        if !visited.insert(id) {
+            return;
+        }
+        let declaration = self.structs[id.0].declaration;
+        for field in &self.syntax.structs[declaration].fields {
+            self.collect_annotation_references(field.annotation, visited, references);
+        }
+    }
+
+    /// The unqualified module-level names an expression references, plus the
+    /// names the struct types its literals build reach. A call's target names
+    /// a function rather than a binding, so only its arguments count.
+    fn collect_references(
+        &self,
+        expression: Idx<Expression>,
+        visited: &mut HashSet<StructId>,
+        references: &mut References,
+    ) {
+        let syntax = self.syntax;
+        let mut literals = Vec::new();
+        walk_expression(syntax, expression, &mut |id| {
+            let expression = &syntax.expressions[id];
+            match &expression.kind {
+                ExpressionKind::Reference(name) if name.qualifier.is_none() => {
+                    references.push((name.name, expression.span.clone()));
+                }
+                ExpressionKind::StructLiteral { name, .. } => literals.push(name),
+                _ => {}
+            }
+        });
+        for name in literals {
+            self.collect_type_references(name, visited, references);
+        }
+    }
+
     pub(super) fn resolve_call(
         &mut self,
         call: &Call,
@@ -762,7 +880,7 @@ impl CheckedProgram<'_> {
         };
         match declaration {
             DeclarationKind::Function(function) => Ok(function),
-            DeclarationKind::Binding(_) => Err(Diagnostic::new(
+            DeclarationKind::Binding(_) | DeclarationKind::Struct(_) => Err(Diagnostic::new(
                 target.span.clone(),
                 format!(
                     "cannot call non-function declaration `{}`",
@@ -794,6 +912,50 @@ impl CheckedProgram<'_> {
                     self.syntax.names.resolve(&name.name)
                 ),
             )),
+            DeclarationKind::Struct(_) => Err(Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "cannot use type `{}` as a value",
+                    self.syntax.names.resolve(&name.name)
+                ),
+            )),
+        }
+    }
+
+    /// The struct a written type name refers to. A lexical binding shadows a
+    /// module-level name, so one holding the name cannot reach the type.
+    pub(super) fn resolve_type_name(
+        &mut self,
+        name: &QualifiedName,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<StructId, Diagnostic> {
+        let wrong_kind = |kind| {
+            Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "cannot use {kind} `{}` as a type",
+                    self.syntax.names.resolve(&name.name)
+                ),
+            )
+        };
+        let declaration = if name.qualifier.is_some() {
+            self.qualified(name, scopes)?
+        } else {
+            if scopes.contains(name.name) {
+                return Err(wrong_kind("binding"));
+            }
+            if let Some(&id) = self.struct_names.get(&name.name) {
+                return Ok(id);
+            }
+            if self.function_names.contains_key(&name.name) {
+                return Err(wrong_kind("function"));
+            }
+            self.imported(name, Wanted::Type)?
+        };
+        match declaration {
+            DeclarationKind::Struct(id) => Ok(id),
+            DeclarationKind::Binding(_) => Err(wrong_kind("binding")),
+            DeclarationKind::Function(_) => Err(wrong_kind("function")),
         }
     }
 

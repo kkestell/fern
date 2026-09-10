@@ -26,12 +26,24 @@ load order is dependencies before dependents, with the root module last.
 Syntax owns the program-wide name interner and arenas. Syntax node IDs remain
 valid for the lifetime of the syntax and are used by semantic checking. A
 `CheckedProgram` borrows that syntax and owns the checked bindings, expression
-facts, signatures, and declaration relations. Its temporary namespace and
-import state is keyed by `ModuleId` and `FileId`.
+facts, signatures, declaration relations, and struct declarations. Its
+temporary namespace and import state is keyed by `ModuleId` and `FileId`.
+
+Semantic checking allocates a `StructId` for each struct declaration, and a
+struct type carries that identity rather than a syntax index, so nominal type
+equality is one comparison and does not depend on arena position. A checked
+struct keeps its syntax declaration as the relation back to source. Field
+ordinals are the checked identity of a field: literals, selections, and
+assignment targets record them, and later phases never resolve a field name
+again.
 
 IR lowering consumes the checked program and creates one `ir::model::Program`.
-IR IDs identify positions only within that program. `Program::verify` is the
-sole constructor of `VerifiedProgram`; only verified IR reaches the backend.
+IR IDs identify positions only within that program. That program owns a struct
+definition per declaration, at the index its `StructId` names, holding the
+field types in declaration order. A `Type` carries a struct's nominal identity
+and its spelling; field shape lives once in that table, which lowering,
+verification, and the backend read. `Program::verify` is the sole constructor
+of `VerifiedProgram`; only verified IR reaches the backend.
 
 ## Diagnostics
 

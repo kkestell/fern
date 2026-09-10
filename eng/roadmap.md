@@ -212,9 +212,9 @@ It exits with status 43.
 
 ### Tasks
 
-- [ ] Parse named struct declarations, literals, and field selection
-- [ ] Resolve struct fields and check struct values, assignments, and equality
-- [ ] Represent structs and field access in Fern IR
+- [x] Parse named struct declarations, literals, and field selection
+- [x] Resolve struct fields and check struct values, assignments, and equality
+- [x] Represent structs and field access in Fern IR
 - [ ] Lay out, copy, compare, and access structs in native code
 - [ ] Compile and execute struct programs and failures
 

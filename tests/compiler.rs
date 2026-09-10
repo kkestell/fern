@@ -223,6 +223,33 @@ fn source_failures_preserve_output() {
 }
 
 #[test]
+fn struct_programs_are_checked_and_stop_before_lowering() {
+    // Checking accepts the program, and the temporary pre-lowering guard is
+    // what rejects it until Fern IR represents structs.
+    let (_dir, input, output) = fixture(
+        "type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var point = Point { x = 19, y = 23 };
+    point.x = point.x + 1;
+    const expected = Point { x = 20, y = 23 };
+    if point == expected {
+        exit(point.x + point.y);
+    }
+    exit(255);
+}
+",
+    );
+    fs::write(&output, "old executable").unwrap();
+    let error = fern::compile(&input, &output).unwrap_err().to_string();
+    assert!(error.contains("structs are not yet compiled"), "{error}");
+    assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+}
+
+#[test]
 fn oversized_integer_diagnostics_are_bounded() {
     let digits = "9".repeat(200_000);
     let (_dir, input, output) = fixture(format!("fn main() -> void {{ const value = {digits}; }}"));

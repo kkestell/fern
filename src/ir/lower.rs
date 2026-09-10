@@ -793,7 +793,7 @@ fn store_elements(
     let Type::Array { length, .. } = &checked.expressions[id].ty else {
         unreachable!("an array literal has an array type")
     };
-    let span = &checked.syntax.expressions[id].span.clone();
+    let span = &checked.syntax.expressions[id].span;
     let mut last = None;
     for (index, &element) in elements.iter().enumerate() {
         let index = u64::try_from(index).expect("an array fits in the address space");
@@ -824,7 +824,7 @@ fn lower_array_place(
     if let Some(constant) = expression.constant.as_ref() {
         lower_folded_effects(checked, id, bindings, builder);
         let place = Place::Local(builder.local(ty.clone()));
-        let span = &checked.syntax.expressions[id].span.clone();
+        let span = &checked.syntax.expressions[id].span;
         store_constant(builder, &place, ty, constant, span);
         return place;
     }

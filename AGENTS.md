@@ -149,6 +149,11 @@ Use `kplan` to write an implementation plan for one roadmap task, then `kwork`
 to execute that plan and validate it. Both `docs/spec.md` and `eng/roadmap.md`
 must exist before planning begins.
 
+Do not use `kwork` to fix a review finding unless the user names the plan to
+execute. A small, clearly scoped review follow-up is a one-off task and is
+implemented directly. Create a roadmap task and plan first only when the
+finding is too complex for a small change.
+
 The roadmap is a list of named milestones in implementation order, with task
 checkboxes recording progress. Preserve completed tasks and milestone details.
 

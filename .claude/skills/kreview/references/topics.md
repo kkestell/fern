@@ -4,6 +4,13 @@ Each section below serves both modes. In general mode, read only the topic's
 first paragraph and treat it as a survey prompt. In topic mode, work the whole
 section: the checklist is the review, and each item deserves an answer.
 
+For a diff, commit, or branch review, “the diff” and “changed” below mean that
+change. For a directory or whole-codebase review, they mean the requested
+corpus. Inventory that corpus first. In topic mode, read every production file
+in it and the relevant tests; then apply each checklist to the matching code.
+A search identifies candidates to inspect. It does not complete an exhaustive
+review.
+
 ## General
 
 Sweep all thirteen topics in the order they appear here. For each one, read its

@@ -6,14 +6,17 @@ argument-hint: "[general|ownership|error-handling|api-design|performance|testing
 
 ## Workflow
 
-Review the change directly. Do not edit implementation files or delegate the
-review. Write its report under `eng/reviews/`.
+Review the requested corpus directly. Do not edit implementation files or
+delegate the review. Write its report under `eng/reviews/`.
 
 1. Resolve the topic and review scope from
    `<input_document> $ARGUMENTS </input_document>`. The first argument may be
    one topic from the list below. Default to `general` when none is given.
-2. Read the repository instructions, then inspect the diff and changed-file
-   list. Ask one focused question only when the review scope remains ambiguous.
+2. Read the repository instructions, then identify the review corpus.
+   - For a diff, branch, or commit, inspect its diff and changed-file list.
+   - For explicit files, directories, or the whole codebase, inventory that
+     scope. Do not reduce it to the current diff.
+   Ask one focused question only when the review scope remains ambiguous.
 3. Read the chosen topic's section in
    [references/topics.md](references/topics.md), then run the mode below.
 4. Review intentional `clone`, `unwrap`, `unsafe`, allocation, and dependency
@@ -35,9 +38,9 @@ listed, spending a bounded pass on each.
 
 - Cover every topic, including ones the change does not obviously touch. A
   topic with nothing to report is a normal outcome; say so in one line.
-- Judge each topic from the diff plus the immediate surrounding code. Do not
-  open the wider call graph, trace whole execution paths, or read a topic's
-  detailed checklist.
+- Judge each topic from the requested corpus plus the immediate surrounding
+  code. Do not open the wider call graph, trace whole execution paths, or read
+  a topic's detailed checklist.
 - Report a finding when the diff plainly shows the problem. Note a suspicion
   worth a deep pass as a follow-up rather than investigating it now.
 - Close with a one-line verdict per topic and a recommendation of which topics
@@ -48,9 +51,12 @@ listed, spending a bounded pass on each.
 An exhaustive review of one lens. Read that topic's section in
 `references/topics.md` and apply every check it lists.
 
-- Examine every changed line the topic touches, plus the code it calls, the
-  code that calls it, and the invariants it depends on. Follow the call graph
-  out of the diff until the topic's questions are answered.
+- For a change review, examine every changed line the topic touches, plus the
+  code it calls, the code that calls it, and the invariants it depends on.
+  For a whole-codebase or directory review, read every production file in the
+  corpus and the relevant tests before following the topic's call paths.
+  Do not present a pattern search or a pass over central types as an exhaustive
+  whole-codebase review.
 - Trace representative success, boundary, and failure paths concretely, naming
   the values that reach each branch.
 - Verify each suspicion with a focused search, a test, or a build rather than

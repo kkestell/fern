@@ -16,6 +16,7 @@ described as "behavior" or a "specification."
 | `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
 | `eng/roadmap.md`      | Milestones, their tasks, scope, order, and completion gates. Reference behavior contracts rather than defining them here.                                                              |
 | `eng/plans/`          | Implementation plans for individual roadmap tasks: concrete file changes, focused tests, and decisions the owning documents leave open.                                                |
+| `eng/reviews/`        | Code-review reports: scope, findings, unresolved suspicions, and checks run.                                                                                                           |
 | `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
 
 Use `kspec` when creating or modifying `docs/spec.md`. Use `kroadmap` to
@@ -42,6 +43,7 @@ missing. The architecture document is not required to begin planning.
 - `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
 - `eng/architecture.md` — durable compiler phase, storage, identity,
   diagnostic, and verification boundaries.
+- `eng/reviews/` — checked-in code-review reports.
 - `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
   frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
@@ -161,6 +163,19 @@ Public programs under `examples/` are documentation organized by language
 topic. Do not use them as semantic regression fixtures. Behavioral coverage
 belongs in focused test sources or `tests/fixtures/programs/`; tests may check
 that the public examples remain valid as documentation.
+
+### Work records
+
+Every code review writes `eng/reviews/YYYY-MM-DD-NNN-slug.md`. The report names
+its scope and mode, records its findings or no-finding result, unresolved
+suspicion, and checks. A review reports only. It does not implement findings.
+
+An implementation commit from a plan includes that plan. An implementation
+commit from a review includes that review. Include both when a review leads to
+a planned task. A small one-off task needs neither document. For a one-off that
+is too complex for a small change, use the user request as the scope and create
+the roadmap task and plan before implementing; do not wait for separate consent
+to plan it.
 
 Preserve unrelated working-tree changes. Never commit unless the user asks for a
 commit explicitly.

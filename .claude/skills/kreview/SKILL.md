@@ -6,7 +6,8 @@ argument-hint: "[general|ownership|error-handling|api-design|performance|testing
 
 ## Workflow
 
-Review the change directly. Do not edit files or delegate the review.
+Review the change directly. Do not edit implementation files or delegate the
+review. Write its report under `eng/reviews/`.
 
 1. Resolve the topic and review scope from
    `<input_document> $ARGUMENTS </input_document>`. The first argument may be
@@ -17,10 +18,14 @@ Review the change directly. Do not edit files or delegate the review.
    [references/topics.md](references/topics.md), then run the mode below.
 4. Review intentional `clone`, `unwrap`, `unsafe`, allocation, and dependency
    choices in context rather than treating them as automatic defects.
-5. Report actionable findings ordered by severity. Give each finding a path,
-   line, consequence, and suggested fix. Name the mode and topics reviewed. If
-   there are no findings, say so plainly and mention any material validation
-   gap.
+5. Write `eng/reviews/YYYY-MM-DD-NNN-slug.md`, using the next sequence for the
+   day. Name the scope and mode, then record findings ordered by severity with
+   path, line, consequence, and suggested fix. Record unresolved suspicions and
+   checks run. When there are no findings, say so plainly and note any material
+   validation gap.
+6. Report the review concisely and link its document. Do not implement findings
+   in the review turn. A later implementation commit includes this report, and
+   includes its plan too when the finding becomes a planned task.
 
 ### General mode
 

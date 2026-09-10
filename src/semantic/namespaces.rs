@@ -7,7 +7,8 @@ use crate::{
         PathComponent, QualifiedName, Statement, StatementKind, Syntax, TopLevelItem,
         TypeAnnotation, find_call, walk_expression,
     },
-    module::Module,
+    module::{File, Module, ModuleId},
+    source::FileId,
     types::Scalar,
 };
 use la_arena::{Arena, ArenaMap, Idx};
@@ -36,7 +37,7 @@ pub(super) type Namespace = HashMap<Spur, Declaration>;
 /// than a copy of its namespace.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Imported {
-    Module(usize),
+    Module(ModuleId),
     Declaration(DeclarationKind),
 }
 
@@ -82,7 +83,7 @@ struct ModuleBindings {
     pub(super) declarations: HashMap<Spur, Idx<Statement>>,
     pub(super) statements: Vec<Idx<Statement>>,
     /// The file each binding is declared in.
-    pub(super) files: HashMap<Idx<Statement>, usize>,
+    pub(super) files: HashMap<Idx<Statement>, FileId>,
 }
 
 /// Records a module-level name, rejecting a second declaration of it.
@@ -151,7 +152,7 @@ fn introduce(
 pub(crate) fn check<'a>(
     syntax: &'a Syntax,
     modules: &[Module],
-    imports: &[Vec<usize>],
+    files: &[File],
 ) -> Result<CheckedProgram<'a>, Diagnostic> {
     let root = modules.last().expect("a program has a root module");
     let mut checked = CheckedProgram {
@@ -166,18 +167,14 @@ pub(crate) fn check<'a>(
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
         function_names: HashMap::new(),
-        namespaces: Vec::new(),
-        imports: syntax
-            .files
-            .iter()
-            .map(|_| FileImports::default())
-            .collect(),
-        file: 0,
+        namespaces: HashMap::new(),
+        imports: HashMap::new(),
+        file: FileId(0),
     };
     // Dependencies come before dependents, so an imported module's namespace is
     // built and its bindings are ordered before any module that imports it.
-    for module in modules {
-        checked.check_module(module, imports)?;
+    for (index, module) in modules.iter().enumerate() {
+        checked.check_module(ModuleId(index), module, files)?;
     }
     Ok(checked)
 }
@@ -185,16 +182,16 @@ pub(crate) fn check<'a>(
 /// Checks `syntax` as one root module with no imports.
 #[cfg(test)]
 pub(crate) fn check_root(syntax: &Syntax) -> Result<CheckedProgram<'_>, Diagnostic> {
-    let (modules, imports) = crate::module::single(syntax);
-    check(syntax, &modules, &imports)
+    let (modules, files) = crate::module::single(syntax);
+    check(syntax, &modules, &files)
 }
 
 /// The root module's sole `main`, with the entry-point signature. A `main` in a
 /// dependency module is an ordinary function.
 fn entry_point(syntax: &Syntax, root: &Module) -> Result<Idx<Function>, Diagnostic> {
     let mut main = None;
-    for file in root.files.clone() {
-        for item in &syntax.files[file].items {
+    for file in &root.files {
+        for item in &syntax.files[file.0].items {
             let TopLevelItem::Function { function: id, .. } = *item else {
                 continue;
             };
@@ -240,29 +237,35 @@ impl CheckedProgram<'_> {
     /// Signatures are resolved after the module's initializers because an array
     /// length in a signature may name a module-level `const`, which only has a
     /// value once its own initializer is checked.
-    fn check_module(&mut self, module: &Module, imports: &[Vec<usize>]) -> Result<(), Diagnostic> {
+    fn check_module(
+        &mut self,
+        id: ModuleId,
+        module: &Module,
+        files: &[File],
+    ) -> Result<(), Diagnostic> {
         let items = self.module_items(module);
         let bindings = self.declare_module_names(&items)?;
         let mut namespace = Namespace::new();
         let module_scope = self.declare_module_bindings(&items, &mut namespace)?;
         self.declare_function_names(&items, &mut namespace);
-        self.resolve_imports(module, imports, &namespace)?;
+        self.resolve_imports(module, files, &namespace)?;
         self.check_module_initializers(&bindings, &module_scope)?;
         self.resolve_signatures(&items, &module_scope)?;
         self.check_function_bodies(&items, &module_scope)?;
         self.check_imports_used(module)?;
-        self.namespaces.push(namespace);
+        self.namespaces.insert(id, namespace);
         Ok(())
     }
 
     /// Every top-level item of the module, paired with the file it comes from.
-    fn module_items(&self, module: &Module) -> Vec<(usize, TopLevelItem)> {
+    fn module_items(&self, module: &Module) -> Vec<(FileId, TopLevelItem)> {
         let syntax = self.syntax;
         module
             .files
-            .clone()
+            .iter()
+            .copied()
             .flat_map(|file| {
-                syntax.files[file]
+                syntax.files[file.0]
                     .items
                     .iter()
                     .map(move |item| (file, *item))
@@ -275,7 +278,7 @@ impl CheckedProgram<'_> {
     /// declared.
     fn declare_module_names(
         &mut self,
-        items: &[(usize, TopLevelItem)],
+        items: &[(FileId, TopLevelItem)],
     ) -> Result<ModuleBindings, Diagnostic> {
         let syntax = self.syntax;
         let mut names = HashSet::new();
@@ -310,7 +313,7 @@ impl CheckedProgram<'_> {
     /// until the initializer is checked, which is what fills it in.
     fn declare_module_bindings(
         &mut self,
-        items: &[(usize, TopLevelItem)],
+        items: &[(FileId, TopLevelItem)],
         namespace: &mut Namespace,
     ) -> Result<HashMap<Spur, Idx<Binding>>, Diagnostic> {
         let syntax = self.syntax;
@@ -349,7 +352,7 @@ impl CheckedProgram<'_> {
     /// before its signature is resolved.
     fn declare_function_names(
         &mut self,
-        items: &[(usize, TopLevelItem)],
+        items: &[(FileId, TopLevelItem)],
         namespace: &mut Namespace,
     ) {
         for &(_, item) in items {
@@ -370,7 +373,7 @@ impl CheckedProgram<'_> {
     /// checked before the called function's body is.
     fn resolve_signatures(
         &mut self,
-        items: &[(usize, TopLevelItem)],
+        items: &[(FileId, TopLevelItem)],
         module_scope: &HashMap<Spur, Idx<Binding>>,
     ) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
@@ -405,16 +408,21 @@ impl CheckedProgram<'_> {
     fn resolve_imports(
         &mut self,
         module: &Module,
-        imports: &[Vec<usize>],
+        files: &[File],
         namespace: &Namespace,
     ) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
-        for file in module.files.clone() {
+        for file in module.files.iter().copied() {
             let mut file_imports = FileImports::default();
-            for (index, import) in syntax.files[file].imports.iter().enumerate() {
-                self.resolve_import(import, imports[file][index], namespace, &mut file_imports)?;
+            for (index, import) in syntax.files[file.0].imports.iter().enumerate() {
+                self.resolve_import(
+                    import,
+                    files[file.0].imports[index],
+                    namespace,
+                    &mut file_imports,
+                )?;
             }
-            self.imports[file] = file_imports;
+            self.imports.insert(file, file_imports);
         }
         Ok(())
     }
@@ -424,7 +432,7 @@ impl CheckedProgram<'_> {
     fn resolve_import(
         &self,
         import: &Import,
-        resolved: usize,
+        resolved: ModuleId,
         namespace: &Namespace,
         file_imports: &mut FileImports,
     ) -> Result<(), Diagnostic> {
@@ -440,7 +448,10 @@ impl CheckedProgram<'_> {
             .map(|component| syntax.names.resolve(&component.name))
             .collect();
         let path = path.join("::");
-        let target = &self.namespaces[resolved];
+        let target = self
+            .namespaces
+            .get(&resolved)
+            .expect("imports resolve only completed modules");
         for component in selection {
             let name = syntax.names.resolve(&component.name);
             let Some(declaration) = target.get(&component.name).copied() else {
@@ -574,7 +585,7 @@ impl CheckedProgram<'_> {
 
     fn check_function_bodies(
         &mut self,
-        items: &[(usize, TopLevelItem)],
+        items: &[(FileId, TopLevelItem)],
         module_scope: &HashMap<Spur, Idx<Binding>>,
     ) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
@@ -611,8 +622,11 @@ impl CheckedProgram<'_> {
     /// Every name a file imports must be referenced by that file.
     fn check_imports_used(&self, module: &Module) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
-        for file in module.files.clone() {
-            let file_imports = &self.imports[file];
+        for file in &module.files {
+            let file_imports = self
+                .imports
+                .get(file)
+                .expect("every module file has resolved imports");
             if let Some((name, span)) = file_imports
                 .introduced
                 .iter()
@@ -797,9 +811,19 @@ impl CheckedProgram<'_> {
     ) -> Result<DeclarationKind, Diagnostic> {
         let syntax = self.syntax;
         let spelling = syntax.names.resolve(&name.name);
-        match self.imports[self.file].names.get(&name.name) {
+        match self
+            .imports
+            .get(&self.file)
+            .expect("checking selects a file with resolved imports")
+            .names
+            .get(&name.name)
+        {
             Some(&Imported::Declaration(kind)) => {
-                self.imports[self.file].used.insert(name.name);
+                self.imports
+                    .get_mut(&self.file)
+                    .expect("checking selects a file with resolved imports")
+                    .used
+                    .insert(name.name);
                 Ok(kind)
             }
             Some(Imported::Module(_)) => Err(Diagnostic::new(
@@ -838,7 +862,13 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        let module = match self.imports[self.file].names.get(&qualifier.name) {
+        let module = match self
+            .imports
+            .get(&self.file)
+            .expect("checking selects a file with resolved imports")
+            .names
+            .get(&qualifier.name)
+        {
             Some(&Imported::Module(module)) => module,
             Some(Imported::Declaration(_)) => {
                 return Err(Diagnostic::new(
@@ -859,8 +889,12 @@ impl CheckedProgram<'_> {
                 ));
             }
         };
-        self.imports[self.file].used.insert(qualifier.name);
-        let Some(declaration) = self.namespaces[module].get(&name.name).copied() else {
+        self.imports
+            .get_mut(&self.file)
+            .expect("checking selects a file with resolved imports")
+            .used
+            .insert(qualifier.name);
+        let Some(declaration) = self.namespaces[&module].get(&name.name).copied() else {
             return Err(Diagnostic::new(
                 name.span.clone(),
                 format!(

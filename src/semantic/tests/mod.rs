@@ -93,12 +93,12 @@ fn load_tree<'a>(
 
 fn accepts_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) {
     let (_dir, program) = load_tree(files);
-    check(&program.syntax, &program.modules, &program.imports).unwrap();
+    check(&program.syntax, &program.modules, &program.files).unwrap();
 }
 
 fn tree_error<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Diagnostic {
     let (_dir, program) = load_tree(files);
-    check(&program.syntax, &program.modules, &program.imports).unwrap_err()
+    check(&program.syntax, &program.modules, &program.files).unwrap_err()
 }
 
 fn rejects_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>, message: &str) {

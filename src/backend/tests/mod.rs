@@ -62,7 +62,7 @@ fn lowered_tree<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Veri
     let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
         .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
     crate::ir::lower::lower(
-        crate::semantic::namespaces::check(&program.syntax, &program.modules, &program.imports)
+        crate::semantic::namespaces::check(&program.syntax, &program.modules, &program.files)
             .unwrap_or_else(|error| panic!("{}", error.render(&program.sources))),
     )
     .verify()

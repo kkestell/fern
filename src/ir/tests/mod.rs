@@ -70,7 +70,7 @@ pub(super) fn lowered_tree<'a>(
     let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
         .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
     lower(
-        namespaces::check(&program.syntax, &program.modules, &program.imports)
+        namespaces::check(&program.syntax, &program.modules, &program.files)
             .unwrap_or_else(|error| panic!("{}", error.render(&program.sources))),
     )
     .verify()

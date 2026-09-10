@@ -100,21 +100,3 @@ visibility only.
   backend move, including trap messages and symbol names.
 - Run the complete compiler and CLI integration suite after the module split,
   including the array fixture under `tests/fixtures/programs/`.
-
-## Decisions
-
-- Module boundaries follow compiler responsibilities, not a line-count quota.
-  Tests move with their owner, so extracting tests alone cannot satisfy the
-  task.
-- Callers use owner paths such as `frontend::syntax::Syntax`,
-  `semantic::model::CheckedProgram`, and `ir::model::Program`. The phase roots
-  contain only submodule declarations.
-- Annotation resolution owns its own submodule rather than sitting with module
-  namespaces. It resolves element types and evaluates array lengths through
-  constant folding, so it belongs between the namespace and constant owners
-  instead of inside either.
-- The semantic namespace submodule is `namespaces.rs`, because `src/module.rs`
-  already owns module discovery, import loading, and the dependency graph over
-  source files.
-- Snapshots keep insta's default layout next to their tests, so no
-  `snapshot_path` configuration is added.

@@ -230,9 +230,9 @@ fn only_the_root_modules_main_is_the_entry_point() {
                  fn main(flag: int) -> int { return flag; }",
         ),
     ]);
-    let checked = check(&program.syntax, &program.modules, &program.imports).unwrap();
+    let checked = check(&program.syntax, &program.modules, &program.files).unwrap();
     let root = program.modules.last().unwrap();
-    let entry = program.syntax.files[root.files.start].items[0];
+    let entry = program.syntax.files[root.files[0].0].items[0];
     assert!(matches!(
         entry,
         TopLevelItem::Function { function, .. } if function == checked.main

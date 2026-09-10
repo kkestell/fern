@@ -40,6 +40,8 @@ missing. The architecture document is not required to begin planning.
 - `src/module.rs` — module discovery, import resolution, and the dependency
   graph.
 - `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
+- `eng/architecture.md` — durable compiler phase, storage, identity,
+  diagnostic, and verification boundaries.
 - `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
   frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.

@@ -2,6 +2,7 @@
 
 use crate::{
     frontend::syntax::{Expression, Function, Statement, Syntax},
+    source::FileId,
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Type, UnaryOperator},
 };
 
@@ -166,12 +167,13 @@ pub(crate) struct CheckedProgram<'a> {
     /// which an unqualified call resolves against. It is replaced per module,
     /// so it never describes the whole program.
     pub(super) function_names: HashMap<Spur, Idx<Function>>,
-    /// Checking state: each checked module's namespace, in module order, which
-    /// a qualified name reaches through its file's imports.
-    pub(super) namespaces: Vec<Namespace>,
-    /// Checking state: each source file's imported names, indexed by file.
-    pub(super) imports: Vec<FileImports>,
+    /// Checking state: each checked module's namespace, reached through a
+    /// module identity rather than its position in load order.
+    pub(super) namespaces: HashMap<crate::module::ModuleId, Namespace>,
+    /// Checking state: each source file's imported names, reached through its
+    /// file identity rather than a parallel vector index.
+    pub(super) imports: HashMap<FileId, FileImports>,
     /// Checking state: the file whose declarations are being checked, which
     /// selects the imports name resolution sees.
-    pub(super) file: usize,
+    pub(super) file: FileId,
 }

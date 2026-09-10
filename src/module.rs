@@ -8,7 +8,7 @@ use crate::{
     CompileError,
     diagnostic::Diagnostic,
     frontend::{parser, syntax::Syntax},
-    source::{self, SourceMap},
+    source::{self, FileId, SourceMap},
 };
 use std::{
     collections::HashMap,
@@ -17,12 +17,21 @@ use std::{
     path::{self, Path, PathBuf},
 };
 
-/// One module: the `.fern` files of a single directory. The directory itself is
-/// the parent of each of those files, so `SourceMap` is its one home.
+/// The identity of a loaded module within one program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ModuleId(pub(crate) usize);
+
+/// One loaded source file. Its syntax has the same `FileId` in the program's
+/// syntax store, and this record owns its resolved imports.
+#[derive(Debug)]
+pub(crate) struct File {
+    pub imports: Vec<ModuleId>,
+}
+
+/// One module: the `.fern` files of a single directory.
 #[derive(Debug)]
 pub(crate) struct Module {
-    /// This module's files, as a contiguous range of `Syntax::files`.
-    pub files: Range<usize>,
+    pub files: Vec<FileId>,
 }
 
 /// A loaded program: the root module and every module it imports, with
@@ -32,19 +41,23 @@ pub(crate) struct Program {
     pub sources: SourceMap,
     pub syntax: Syntax,
     pub modules: Vec<Module>,
-    /// For each source file, the module each of its `use` declarations
-    /// resolves to, by index into `modules`, in declaration order.
-    pub imports: Vec<Vec<usize>>,
+    /// One record for each source file. `FileId` indexes this and
+    /// `Syntax::files` together, and no parallel import store exists.
+    pub files: Vec<File>,
 }
 
 /// The whole of `syntax` as one root module with no imports.
 #[cfg(test)]
-pub(crate) fn single(syntax: &Syntax) -> (Vec<Module>, Vec<Vec<usize>>) {
+pub(crate) fn single(syntax: &Syntax) -> (Vec<Module>, Vec<File>) {
     (
         vec![Module {
-            files: 0..syntax.files.len(),
+            files: (0..syntax.files.len()).map(FileId).collect(),
         }],
-        vec![Vec::new(); syntax.files.len()],
+        (0..syntax.files.len())
+            .map(|_| File {
+                imports: Vec::new(),
+            })
+            .collect(),
     )
 }
 
@@ -109,7 +122,7 @@ pub(crate) fn load(root: &Path, roots: &[PathBuf]) -> Result<Program, LoadError>
         sources: SourceMap::default(),
         syntax: Syntax::default(),
         modules: Vec::new(),
-        imports: Vec::new(),
+        files: Vec::new(),
         completed: HashMap::new(),
         stack: Vec::new(),
     };
@@ -119,7 +132,7 @@ pub(crate) fn load(root: &Path, roots: &[PathBuf]) -> Result<Program, LoadError>
         sources: loader.sources,
         syntax: loader.syntax,
         modules: loader.modules,
-        imports: loader.imports,
+        files: loader.files,
     })
 }
 
@@ -147,8 +160,8 @@ fn label(path: &[String], directory: &Path) -> String {
 struct ImportPath {
     components: Vec<String>,
     span: Range<usize>,
-    /// The file that declares this import, by index into `Syntax::files`.
-    file: usize,
+    /// The file that declares this import.
+    file: FileId,
 }
 
 /// A module whose files are parsed and whose imports are still being loaded.
@@ -157,11 +170,11 @@ struct Frame {
     /// `fs::canonicalize` of `directory`, the module's identity.
     canonical: PathBuf,
     path: Vec<String>,
-    files: Range<usize>,
+    files: Vec<FileId>,
     imports: Vec<ImportPath>,
     cursor: usize,
     /// The file whose import opened this module, once this module completes.
-    importer: Option<usize>,
+    importer: Option<FileId>,
 }
 
 /// The dependency walk. Modules are held on an explicit stack rather than the
@@ -170,12 +183,11 @@ struct Loader<'a> {
     roots: &'a [PathBuf],
     sources: SourceMap,
     syntax: Syntax,
+    files: Vec<File>,
     modules: Vec<Module>,
-    /// One resolution list per file, filled as each import resolves.
-    imports: Vec<Vec<usize>>,
     /// Loaded modules by canonical directory, so one directory reached through
     /// two roots or two paths is one module.
-    completed: HashMap<PathBuf, usize>,
+    completed: HashMap<PathBuf, ModuleId>,
     stack: Vec<Frame>,
 }
 
@@ -197,7 +209,7 @@ impl Loader<'_> {
             };
             let canonical = canonicalize(&directory).map_err(LoadError::Failed)?;
             if let Some(&index) = self.completed.get(&canonical) {
-                self.imports[file].push(index);
+                self.files[file.0].imports.push(index);
                 continue;
             }
             if let Some(start) = self
@@ -219,20 +231,22 @@ impl Loader<'_> {
         directory: PathBuf,
         path: Vec<String>,
         paths: Vec<PathBuf>,
-        importer: Option<usize>,
+        importer: Option<FileId>,
     ) -> Result<(), LoadError> {
         let canonical = canonicalize(&directory).map_err(LoadError::Failed)?;
-        let start = self.syntax.files.len();
+        let mut files = Vec::new();
         for file in paths {
             let text = source::read_text(&file).map_err(LoadError::Failed)?;
-            let index = self.sources.push(file, text);
-            self.imports.push(Vec::new());
-            let parsed = parser::parse_file(&mut self.syntax, &self.sources.files()[index]);
+            let id = self.sources.push(file, text);
+            let parsed = parser::parse_file(&mut self.syntax, &self.sources.files()[id.0]);
             if let Err(diagnostic) = parsed {
                 return Err(self.source_error(diagnostic));
             }
+            self.files.push(File {
+                imports: Vec::new(),
+            });
+            files.push(id);
         }
-        let files = start..self.syntax.files.len();
         let imports = self.import_paths(&files);
         self.stack.push(Frame {
             directory,
@@ -247,11 +261,12 @@ impl Loader<'_> {
     }
 
     /// The import paths of one module's files, in file and declaration order.
-    fn import_paths(&self, files: &Range<usize>) -> Vec<ImportPath> {
+    fn import_paths(&self, files: &[FileId]) -> Vec<ImportPath> {
         files
-            .clone()
+            .iter()
+            .copied()
             .flat_map(|file| {
-                self.syntax.files[file].imports.iter().map(move |import| {
+                self.syntax.files[file.0].imports.iter().map(move |import| {
                     let last = import.path.len() - 1;
                     ImportPath {
                         components: import
@@ -282,10 +297,10 @@ impl Loader<'_> {
     /// opened it.
     fn complete_top(&mut self) {
         let frame = self.stack.pop().expect("the caller checked the stack top");
-        let index = self.modules.len();
+        let index = ModuleId(self.modules.len());
         self.completed.insert(frame.canonical, index);
         if let Some(file) = frame.importer {
-            self.imports[file].push(index);
+            self.files[file.0].imports.push(index);
         }
         self.modules.push(Module { files: frame.files });
     }
@@ -349,7 +364,7 @@ mod tests {
             .modules
             .iter()
             .map(|module| {
-                program.sources.files()[module.files.start]
+                program.sources.files()[module.files[0].0]
                     .path
                     .parent()
                     .expect("a source file sits in its module's directory")
@@ -380,7 +395,8 @@ mod tests {
             directories(&program),
             [dir.path().join("text/format"), dir.path().join("app")]
         );
-        assert_eq!(program.modules[0].files, 1..2);
+        assert_eq!(program.modules[0].files, [FileId(1)]);
+        assert_eq!(program.files[FileId(0).0].imports, [ModuleId(0)]);
         assert_eq!(program.syntax.files.len(), 2);
         let paths: Vec<_> = program
             .sources

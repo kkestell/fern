@@ -49,8 +49,8 @@ impl<'a> DiagnosticRenderer<'a> {
     /// file's own offsets.
     pub(crate) fn render(&self, diagnostic: &Diagnostic) -> String {
         let index = self.sources.index_at(diagnostic.span.start);
-        let span = self.sources.files()[index].local(&diagnostic.span);
-        self.files[index].render(&span, &diagnostic.message)
+        let span = self.sources.files()[index.0].local(&diagnostic.span);
+        self.files[index.0].render(&span, &diagnostic.message)
     }
 }
 

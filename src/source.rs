@@ -13,6 +13,10 @@ pub(crate) struct Source {
     pub base: usize,
 }
 
+/// The identity of one source file within a loaded program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FileId(pub(crate) usize);
+
 impl Source {
     /// `span` in this file's own offsets, clamped to its text. A span never
     /// crosses the gap between two files, so clamping only trims a span
@@ -24,36 +28,35 @@ impl Source {
     }
 }
 
-/// The source files of one module, in load order, sharing a single offset
-/// space. Every span in the compiler indexes that space, so a span identifies
-/// both the file it points into and the position within it.
+/// A source collection sharing one offset space. Every span in the compiler
+/// indexes that space, so a span identifies both its file and its position.
 #[derive(Debug, Default)]
 pub(crate) struct SourceMap {
     files: Vec<Source>,
 }
 
 impl SourceMap {
-    /// Appends a file and returns its index. Its base leaves a one-byte gap
+    /// Appends a file and returns its identity. Its base leaves a one-byte gap
     /// after the previous text so an end-of-file span cannot collide with this
     /// file's first byte.
-    pub fn push(&mut self, path: PathBuf, text: String) -> usize {
+    pub fn push(&mut self, path: PathBuf, text: String) -> FileId {
         let base = self
             .files
             .last()
             .map_or(0, |last| last.base + last.text.len() + 1);
         self.files.push(Source { path, text, base });
-        self.files.len() - 1
+        FileId(self.files.len() - 1)
     }
 
     pub fn files(&self) -> &[Source] {
         &self.files
     }
 
-    /// The index of the file holding `offset`.
-    pub fn index_at(&self, offset: usize) -> usize {
+    /// The identity of the file holding `offset`.
+    pub fn index_at(&self, offset: usize) -> FileId {
         // The first file's base is zero, so at least one file starts at or
         // before any offset.
-        self.files.partition_point(|file| file.base <= offset) - 1
+        FileId(self.files.partition_point(|file| file.base <= offset) - 1)
     }
 
     #[cfg(test)]

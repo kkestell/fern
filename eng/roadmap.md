@@ -104,3 +104,30 @@ It continues to exit with status 46.
   snapshot contents unchanged.
 - Existing diagnostics, emitted QBE, and native compiler and CLI results remain
   unchanged, including the array completion fixture.
+
+---
+
+## Compiler architecture hardening
+
+Make program file and module identity explicit, and record the compiler's
+durable phase, storage, diagnostic, and verification boundaries. Fern behavior
+and generated native programs remain unchanged.
+
+### Example
+
+The completion fixture is
+[`tests/fixtures/programs/arrays.fern`](../tests/fixtures/programs/arrays.fern).
+It continues to exit with status 46.
+
+### Tasks
+
+- [x] Make program identity explicit and record the compiler architecture
+
+### Completion gates
+
+- A program has one typed identity for files and modules, without parallel
+  file-indexed stores that can fall out of sync.
+- `eng/architecture.md` owns the compiler's durable implementation boundaries
+  and identity rules.
+- Existing diagnostics, emitted QBE, and native compiler and CLI results remain
+  unchanged, including the array completion fixture.

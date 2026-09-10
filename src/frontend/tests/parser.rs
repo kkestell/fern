@@ -106,8 +106,8 @@ fn module_files_parse_into_one_syntax_with_file_local_spans_snapshot() {
     assert_eq!(base, sources.files()[0].text.len() + 1);
     let helper = syntax.functions.iter().next().unwrap().1;
     assert!(helper.name_span.start >= base);
-    assert_eq!(sources.index_at(helper.name_span.start), 1);
-    assert_eq!(sources.index_at(base - 1), 0);
+    assert_eq!(sources.index_at(helper.name_span.start).0, 1);
+    assert_eq!(sources.index_at(base - 1).0, 0);
 }
 
 #[test]

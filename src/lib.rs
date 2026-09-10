@@ -46,7 +46,7 @@ pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
     let program = module::load(root, &roots).map_err(module::LoadError::into_compile_error)?;
     let (sources, syntax) = (program.sources, program.syntax);
     reject_input_output_alias(&sources, output)?;
-    let checked = semantic::namespaces::check(&syntax, &program.modules, &program.imports)
+    let checked = semantic::namespaces::check(&syntax, &program.modules, &program.files)
         .map_err(|e| CompileError::new(e.render(&sources)))?;
     let entry = ir::lower::lower(checked).verify()?;
     backend::toolchain::build(&entry, &sources, output)

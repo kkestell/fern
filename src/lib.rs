@@ -35,7 +35,8 @@ impl std::error::Error for CompileError {}
 /// `root` is either a directory whose `.fern` files form one module or a single
 /// `.fern` file forming a one-file module. Its imports resolve against the
 /// ordered module search roots, which default to the root module directory's
-/// parent and are replaced by `FERNPATH` when it is set.
+/// parent. `FERNPATH` replaces those roots only when it contains a non-empty
+/// entry.
 ///
 /// # Errors
 /// Returns an error for invalid source, an unresolved import, a module

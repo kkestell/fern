@@ -1203,9 +1203,10 @@ module. Later matching roots are ignored.
 An implementation must document how callers supply the ordered roots and what
 defaults apply. A command-line implementation may accept roots through flags or
 `FERNPATH`; a build tool may construct them from project metadata. When
-`FERNPATH` is set, its entries replace the command-line implementation's
-default roots rather than extending them. The working directory is not an
-implicit dependency source when an explicit root list is supplied.
+`FERNPATH` contains at least one non-empty entry, its entries replace the
+command-line implementation's default roots rather than extending them. An
+empty `FERNPATH` leaves the default roots in effect. The working directory is
+not an implicit dependency source when an explicit root list is supplied.
 
 If no root contains the requested module, compilation fails. The diagnostic
 must point to and identify the unresolved import path and list every searched

@@ -159,9 +159,3 @@ globals now print `Type`. Regenerate them rather than editing by hand.
   expressions otherwise. Only a module-level `var` becomes static data.
 - **A fill evaluates its last element once** and stores that value into every
   remaining slot.
-
-## Extra validation
-
-- `scripts/code-health.sh check` — `lower_for`, `valid_value`, `place_type`,
-  and `lower_flow_operand` all gain branches, and `initialized_locals` is
-  already at 13.

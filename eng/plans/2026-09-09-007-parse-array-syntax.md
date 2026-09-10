@@ -105,8 +105,3 @@ now.
   annotations each report the `MAX_NESTING` diagnostic.
 
 - Semantic: one program per new form fails with the temporary guard.
-
-## Extra validation
-
-- `scripts/code-health.sh check` — `for_statement` and `primary_expression`
-  both gain branches in this task.

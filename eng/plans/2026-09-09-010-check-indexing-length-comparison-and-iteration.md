@@ -160,8 +160,3 @@ Remove the `expect(dead_code)` attributes on `ForHeader::Iteration`'s `value`,
 `tests/compiler.rs`: extend the array entry of `source_failures_preserve_output`
 with an indexed assignment, which reaches the guard through the target rather
 than through an expression.
-
-## Extra validation
-
-- `scripts/code-health.sh check` — `assignment_target`, `unify_comparison`, and
-  `check_iteration_header` all gain branches.

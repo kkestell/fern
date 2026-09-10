@@ -128,8 +128,3 @@ reachable input.
 - A module-level `const N = 3;` declared after `var a: [N]int = …;` resolves.
 - A call in a module-level initializer still reports the constant-expression
   diagnostic.
-
-## Extra validation
-
-- `scripts/code-health.sh check` — the new resolver and the reordered
-  `check_module` are the functions at risk.

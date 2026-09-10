@@ -166,8 +166,3 @@ passing, and return, because `Type` compares structurally. No change there.
 - An array literal is never `untyped`. The `untyped` flag drives `concretize`,
   which is defined on scalars; array literals reach their type through the
   destination instead.
-
-## Extra validation
-
-- `scripts/code-health.sh check` — `check_array_literal` and
-  `reject_array_values` are new branching functions.

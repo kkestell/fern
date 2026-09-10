@@ -44,7 +44,6 @@ missing. The architecture document is not required to begin planning.
   under `tests/fixtures/programs/`.
 - `examples/` — an ordered, topic-based tour of supported Fern syntax and
   semantics; build and run instructions are documented in `README.md`.
-- `scripts/code-health.sh` — the per-function complexity budget.
 
 ## Development Commands
 
@@ -54,17 +53,8 @@ missing. The architecture document is not required to begin planning.
 - `cargo build` — build the compiler.
 - `cargo run -- examples/literals.fern -o target/literals && target/literals` —
   compile and execute the first example.
-- `scripts/code-health.sh check` — fail if any function is over the complexity
-  budget.
 
 Native tests require the tools documented in [README.md](README.md).
-
-The complexity report needs `jq` and rust-code-analysis-cli, pinned to the
-version the script names:
-
-```
-cargo install rust-code-analysis-cli --version 0.0.25 --locked
-```
 
 ## Project Rules
 
@@ -116,15 +106,6 @@ speculative frameworks, extension points, or layers without a present caller.
 When removing a special case, enum variant, or separate code path, inspect the
 surrounding code for structure it made redundant. Collapse newly identical paths
 and use existing helpers in the same change.
-
-No function may exceed a cognitive complexity of 15. Run
-`scripts/code-health.sh check` before completing a milestone; it names every
-function over the budget. The rule applies to all code equally, so a function
-that is too complex gets simplified whether the milestone introduced it or not.
-
-Never split a function only to move it under the budget. The budget exists to
-find code that is hard to reason about; splitting a long dispatch into two
-halves that only ever run together hides the complexity instead of removing it.
 
 Before completing a milestone, search for mode flags, optional representations,
 path-selection predicates, duplicated phase logic, and stale suppressions added

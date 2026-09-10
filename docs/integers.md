@@ -48,6 +48,8 @@ There are only 256 possible patterns. If you need a larger number, you need more
 
 A CPU has circuits that operate on fixed-size groups of bits, such as 8, 16, 32, or 64 bits.
 
+This document follows the usual AArch64 model; x86-64 is the same in all the ways that matter here.
+
 An 8-bit addition looks like this:
 
 ```text
@@ -57,11 +59,13 @@ An 8-bit addition looks like this:
 1 00000000   256
 ```
 
-The result has only eight bits, so the extra leading `1` falls off:
+The mathematical result is too large for eight bits, so an overflow bit is produced and discarded:
 
 ```text
 00000000 = 0
 ```
+
+For an unsigned integer, this is called wrapping: the result is taken modulo `2^8`, or 256.
 
 The CPU may also set status flags:
 
@@ -84,21 +88,11 @@ A trap is the hardware saying:
 
 The operating system usually turns that into a signal or process failure.
 
-## AArch64 and x86-64
-
-AArch64 is the 64-bit ARM architecture used by Apple Silicon and many phones and servers. x86-64 is the 64-bit architecture used by most desktop PCs and many servers.
-
-Both use two's complement, fixed-width integer operations. Both normally keep the low bits when an unsigned calculation is too large, and neither normally traps just because addition overflows. The CPU can still record that a carry or signed overflow happened.
-
-There are a few hardware differences. x86-64 has more direct support for scalar 8- and 16-bit arithmetic, while AArch64 generally works with 32- and 64-bit registers. x86-64 integer division can trap on division by zero or an unrepresentable quotient; AArch64's integer division instructions normally return zero for division by zero.
-
-These differences are mostly hidden by C. Division by zero and signed overflow are undefined in C, so portable C code must not depend on either processor's behavior.
-
 ## Signed Integers
 
 Unsigned integers use every bit for magnitude. Signed integers need to represent negative values too.
 
-Machines most programmers use, including AArch64 and x86-64, use **two's complement** for signed integers.
+Modern machines use **two's complement** for signed integers.
 
 For 8 bits:
 
@@ -217,7 +211,7 @@ uint32_t unsigned_value;
 
 These types exist only when the platform provides a suitable representation.
 
-On common AArch64 and x86-64 systems, `int` is 32 bits, but the sizes of types such as `long` depend on the platform and its C ABI. Do not infer a C type's size from the CPU's name alone.
+On common systems, `int` is 32 bits, but the sizes of types such as `long` depend on the platform and its C ABI. Do not infer a C type's size from the CPU's name alone.
 
 ## C's Third Weirdness: Small Integers Become `int`
 

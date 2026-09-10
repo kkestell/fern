@@ -1,62 +1,75 @@
 ---
 name: kreview
-description: "Review a completed milestone for omissions, correctness problems, and unnecessary complexity. Use once after all milestone slices are implemented, not after each plan. Do not use it to review prose alone."
-argument-hint: "[milestone description] [--base <commit-or-ref>]"
+description: "Review a Rust code change through one focused quality lens in depth, or sweep every lens at survey depth. Use when the user asks for a Rust code review of a diff, branch, commit, or set of files."
+argument-hint: "[general|ownership|error-handling|api-design|performance|testing|readability|concurrency|security|correctness|unsafe|architecture|dependencies|documentation] [review scope]"
 ---
 
 ## Workflow
 
-Run this skill once from a fresh session after every planned slice in a
-milestone has been implemented and validated. Perform the review directly; do
-not spawn additional review agents.
+Review the change directly. Do not edit files or delegate the review.
 
-### Establish scope
+1. Resolve the topic and review scope from
+   `<input_document> $ARGUMENTS </input_document>`. The first argument may be
+   one topic from the list below. Default to `general` when none is given.
+2. Read the repository instructions, then inspect the diff and changed-file
+   list. Ask one focused question only when the review scope remains ambiguous.
+3. Read the chosen topic's section in
+   [references/topics.md](references/topics.md), then run the mode below.
+4. Review intentional `clone`, `unwrap`, `unsafe`, allocation, and dependency
+   choices in context rather than treating them as automatic defects.
+5. Report actionable findings ordered by severity. Give each finding a path,
+   line, consequence, and suggested fix. Name the mode and topics reviewed. If
+   there are no findings, say so plainly and mention any material validation
+   gap.
 
-1. Resolve the milestone and comparison range from
-   `<input_document> $ARGUMENTS </input_document>`.
-   - Prefer an explicit base ref when supplied.
-   - Otherwise use the roadmap, milestone plans, and repository history to find
-     the commit immediately before the milestone began.
-   - Ask one focused question only when the range remains ambiguous.
-2. Read the milestone's authoritative specification and roadmap sections, then
-   the plans for its slices.
-3. Inspect the cumulative diff and changed-file list before opening files.
-   - Read changed code and nearby context needed to judge the diff.
-   - Do not dump every changed file end to end when the diff and focused context
-     are sufficient.
+### General mode
 
-### Completeness and correctness
+A survey across every topic. Read the `General` section of
+`references/topics.md`, then work through all thirteen topics in the order
+listed, spending a bounded pass on each.
 
-4. Check the complete milestone against its specification, roadmap gates, and
-   plans.
-   - Find omitted behavior, partial slices, disabled checks, workarounds, and
-     contract drift.
-   - Check interactions between slices that a per-plan review would miss.
-   - Check likely correctness errors at public and semantic boundaries.
+- Cover every topic, including ones the change does not obviously touch. A
+  topic with nothing to report is a normal outcome; say so in one line.
+- Judge each topic from the diff plus the immediate surrounding code. Do not
+  open the wider call graph, trace whole execution paths, or read a topic's
+  detailed checklist.
+- Report a finding when the diff plainly shows the problem. Note a suspicion
+  worth a deep pass as a follow-up rather than investigating it now.
+- Close with a one-line verdict per topic and a recommendation of which topics
+  deserve their own deep review.
 
-### Simplification
+### Topic mode
 
-5. Review the cumulative implementation for unnecessary complexity.
-   - Look for abstractions without current clients, duplicated machinery,
-     speculative flexibility, hidden state, and code that can be made direct.
-   - Preserve required behavior and established repository boundaries.
+An exhaustive review of one lens. Read that topic's section in
+`references/topics.md` and apply every check it lists.
 
-### Report
+- Examine every changed line the topic touches, plus the code it calls, the
+  code that calls it, and the invariants it depends on. Follow the call graph
+  out of the diff until the topic's questions are answered.
+- Trace representative success, boundary, and failure paths concretely, naming
+  the values that reach each branch.
+- Verify each suspicion with a focused search, a test, or a build rather than
+  reasoning alone. Prefer `cargo test`, `cargo clippy`, a targeted `grep`, or a
+  small reproduction over speculation.
+- Check the change against the contract that owns the behavior, and against
+  the repository's own rules for that topic.
+- Report confirmed findings, then suspicions you could not settle and what
+  would settle them, then the checks you ran and what they showed.
+- Depth is the point. Stay within the one topic and do not drift into others.
 
-6. Return one concise report:
-   - comparison range and milestone reviewed;
-   - `PASS` or `ISSUES FOUND`;
-   - actionable issues only, each with path, line, consequence, and suggested
-     fix;
-   - separate completeness/correctness and simplification headings when both
-     have findings.
-7. Do not edit files or rerun the project's validation suite. The caller fixes
-   findings and reruns affected gates.
+## Topics
 
-## Principles
-
-- **Milestone-wide** — review the integrated result once, after all slices.
-- **Independent** — start fresh and judge the final diff rather than the
-  implementer's transcript.
-- **Diff-first** — load only the context needed to assess changed behavior.
-- **Actionable** — omit reassurance, style nits, and cosmetic suggestions.
+- `general` — one survey pass over every topic below.
+- `ownership` — ownership, borrowing, clones, and lifetimes.
+- `error-handling` — `Result`, propagation, context, and panic policy.
+- `api-design` — naming, visibility, signatures, and ergonomics.
+- `performance` — algorithms, allocations, copies, and hot loops.
+- `testing` — edge cases, failure paths, interactions, and assertions.
+- `readability` — local reasoning, function length, nesting, and naming.
+- `concurrency` — races, locks, atomics, async behavior, and cancellation.
+- `security` — trust boundaries, validation, authorization, and secrets.
+- `correctness` — invariants, boundaries, arithmetic, and state transitions.
+- `unsafe` — unsafe Rust, FFI, layout, aliasing, and soundness.
+- `architecture` — boundaries, coupling, duplication, and needless machinery.
+- `dependencies` — crates, features, portability, and supply-chain exposure.
+- `documentation` — public contracts and non-obvious invariants.

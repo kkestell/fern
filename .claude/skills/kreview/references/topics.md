@@ -1,8 +1,8 @@
 # Review topics
 
-Each section below serves both modes. In general mode, read only the topic's
-first paragraph and treat it as a survey prompt. In topic mode, work the whole
-section: the checklist is the review, and each item deserves an answer.
+Each section below serves both modes. In general mode, work every section in
+order. In topic mode, work only the selected section. In either mode, the
+relevant checklist is the review and each applicable item deserves an answer.
 
 For a diff, commit, or branch review, “the diff” and “changed” below mean that
 change. For a directory or whole-codebase review, they mean the requested
@@ -13,12 +13,11 @@ review.
 
 ## General
 
-Sweep all thirteen topics in the order they appear here. For each one, read its
-opening paragraph, judge the diff and its immediate surroundings against it, and
-record either a finding or a one-line "nothing to report". Keep each pass short;
-a suspicion that needs the call graph is a recommendation for a deep pass, not
-work to do now. Finish with the per-topic verdict list and the topics you would
-review deeply next.
+Review all thirteen topics in the order they appear here. Apply every relevant
+checklist to the full requested corpus, follow the call paths and invariants it
+names, and verify suspicions with focused evidence. Record either confirmed
+findings or a one-line "nothing to report" for each topic. Finish with the
+per-topic verdict list and any follow-up requiring evidence outside the corpus.
 
 ## Ownership
 

@@ -1,6 +1,6 @@
 ---
 name: kreview
-description: "Review a Rust code change through one focused quality lens in depth, or sweep every lens at survey depth. Use when the user asks for a Rust code review of a diff, branch, commit, or set of files."
+description: "Review a Rust code change through one focused quality lens in depth, or review every lens thoroughly. Use when the user asks for a Rust code review of a diff, branch, commit, or set of files."
 argument-hint: "[general|ownership|error-handling|api-design|performance|testing|readability|concurrency|security|correctness|unsafe|architecture|dependencies|documentation] [review scope]"
 ---
 
@@ -16,6 +16,10 @@ delegate the review. Write its report under `eng/reviews/`.
    - For a diff, branch, or commit, inspect its diff and changed-file list.
    - For explicit files, directories, or the whole codebase, inventory that
      scope. Do not reduce it to the current diff.
+   - For a feature or milestone, map its owning contracts and repository
+     completion rules to the implementation, tests, fixtures, examples, and
+     documentation they require. A required artifact missing from the diff is
+     still part of the review.
    Ask one focused question only when the review scope remains ambiguous.
 3. Read the chosen topic's section in
    [references/topics.md](references/topics.md), then run the mode below.
@@ -32,19 +36,21 @@ delegate the review. Write its report under `eng/reviews/`.
 
 ### General mode
 
-A survey across every topic. Read the `General` section of
-`references/topics.md`, then work through all thirteen topics in the order
-listed, spending a bounded pass on each.
+An exhaustive review across every topic. Read the `General` section and every
+topic section of `references/topics.md`, then work through all thirteen topics
+in the listed order.
 
-- Cover every topic, including ones the change does not obviously touch. A
-  topic with nothing to report is a normal outcome; say so in one line.
-- Judge each topic from the requested corpus plus the immediate surrounding
-  code. Do not open the wider call graph, trace whole execution paths, or read
-  a topic's detailed checklist.
-- Report a finding when the diff plainly shows the problem. Note a suspicion
-  worth a deep pass as a follow-up rather than investigating it now.
-- Close with a one-line verdict per topic and a recommendation of which topics
-  deserve their own deep review.
+- Breadth does not reduce depth. Inventory every changed production file and
+  its relevant tests, then examine the code each topic touches, its callers and
+  callees, and the invariants it depends on.
+- Apply every relevant checklist item. Trace representative success, boundary,
+  and failure paths, and verify suspicions with focused searches, tests, builds,
+  or small reproductions.
+- Cover topics the change does not obviously touch without forcing irrelevant
+  checklist items. A topic with nothing to report is a normal outcome; say so
+  in one line.
+- Close with a one-line verdict per topic and recommend any follow-up that
+  needs evidence outside the requested corpus.
 
 ### Topic mode
 
@@ -70,7 +76,7 @@ An exhaustive review of one lens. Read that topic's section in
 
 ## Topics
 
-- `general` — one survey pass over every topic below.
+- `general` — one thorough review across every topic below.
 - `ownership` — ownership, borrowing, clones, and lifetimes.
 - `error-handling` — `Result`, propagation, context, and panic policy.
 - `api-design` — naming, visibility, signatures, and ergonomics.

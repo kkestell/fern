@@ -1,7 +1,7 @@
 # <Plan Title>
 
 Delete every section that does not earn its place. When the specification and
-roadmap settle the work, a complete plan may be a source link and a few task and
+TODO settle the work, a complete plan may be a source link and a few task and
 test bullets.
 
 ## Sources
@@ -11,7 +11,7 @@ test bullets.
 ## Goal
 
 One or two sentences describing this task's result, its required starting state,
-and whether it leaves integration unfinished or completes the milestone.
+and whether it leaves integration unfinished or completes the parent task.
 
 ## Implementation
 
@@ -29,5 +29,5 @@ source. Omit this section when there are none.
 ## Extra validation
 
 Include only checks unique to the change. Broad validation belongs at the
-feature or milestone completion boundary unless a concrete risk warrants it
+integrated feature completion boundary unless a concrete risk warrants it
 earlier. Omit when there are no extra checks.

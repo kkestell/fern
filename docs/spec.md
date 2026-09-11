@@ -11,7 +11,7 @@ Implementations may impose documented limits on source nesting and compile-time
 resource use. Source exceeding such a limit must be rejected with a compilation
 diagnostic, rather than crashing the compiler or silently changing a value.
 
-The [roadmap](../eng/roadmap.md) records implementation status.
+The [TODO](../eng/todo.md) records implementation status.
 
 Fern is a low-level programming language in the spirit of C. Its goals are
 clarity, defined behavior, and safe default semantics.
@@ -642,7 +642,7 @@ computing a different result.
 ### Indexing and lengths
 
 Slices and strings are specified ahead of their implementation; the
-[roadmap](../eng/roadmap.md) records implementation status. [Arrays](#arrays)
+[TODO](../eng/todo.md) records implementation status. [Arrays](#arrays)
 specifies array types, their values, and their operations.
 
 The length of any array, slice, or string has type `int`. Indices and slice

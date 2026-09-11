@@ -38,6 +38,20 @@ require it.
 Use general knowledge for prior art. Consult an official reference only when a
 technical detail is both uncertain and material to the decision.
 
+When a decision needs a detailed account of how another language specifies or
+compiles a feature, read the local checkouts under `reference/` at the
+repository root, when that directory is present:
+
+- `reference/go` — Go. The specification is `doc/go_spec.html`; the compiler is
+  under `src/cmd/compile`.
+- `reference/odin` — Odin. The grammar is `odin.ebnf`; the compiler is under
+  `src`.
+- `reference/hare-specification` — the Hare specification, in LaTeX.
+- `reference/harec` — the Hare compiler. `reference/hare` holds Hare's standard
+  library and tooling.
+
+Cite specified behavior and implementation-specific behavior distinctly.
+
 ### Write docs/spec.md
 
 7. Write `docs/spec.md` once, after the last decision of the session, carrying

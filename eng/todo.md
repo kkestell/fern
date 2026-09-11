@@ -1,0 +1,114 @@
+# TODO
+
+- [x] Executable integer subset
+  - [x] Establish the Rust compiler
+  - [x] Parse and check entry syntax
+  - [x] Lower and execute integer programs
+- [x] Assignment and nested scopes
+  - [x] Parse local assignments and nested statement blocks
+  - [x] Check assignment targets and lexical scopes
+  - [x] Lower and execute assignments and nested scopes
+- [x] Integer types
+  - [x] Check integer types
+  - [x] Lower typed integers
+  - [x] Execute typed integer programs
+- [x] Integer conversions
+  - [x] Validate literal syntax and reserved names
+  - [x] Check integer compatibility
+  - [x] Parse and check explicit integer conversions
+  - [x] Lower and execute explicit integer conversions
+  - [x] Add examples and validate integer conversions
+- [x] Integer expressions
+  - [x] Parse integer operators and grouping
+  - [x] Check integer expression types
+  - [x] Evaluate integer constant expressions
+  - [x] Check shift and wrapping boundaries
+  - [x] Lower checked integer operations
+  - [x] Execute integer expressions and failures
+- [x] Operator spelling and precedence
+  - [x] Lex and parse operator spellings
+  - [x] Apply operator precedence levels
+  - [x] Check and execute the operators
+- [x] Module-level declarations
+  - [x] Parse top-level bindings
+  - [x] Resolve and check module-level bindings
+  - [x] Lower and execute module-level bindings
+- [x] Branches and loops
+  - [x] Parse boolean expressions and control-flow statements
+  - [x] Check boolean expressions
+  - [x] Check structured control flow
+  - [x] Represent and verify control flow in Fern IR
+  - [x] Compile and execute branches and loops
+- [x] Parameters, calls, and return values
+  - [x] Parse function signatures, calls, and returns
+  - [x] Resolve and check function calls
+  - [x] Check returns and function reachability
+  - [x] Represent and verify functions in Fern IR
+  - [x] Compile and execute calls and returns
+- [x] Modules and imports
+  - [x] Parse `pub`, `use`, and qualified names
+  - [x] Compile a module from multiple source files
+  - [x] Resolve imports to modules
+  - [x] Check visibility and imported names
+  - [x] Represent multi-module programs in Fern IR
+  - [x] Compile and execute multi-module programs
+- [x] Arrays
+  - [x] Parse array syntax
+  - [x] Represent array types across the compiler
+  - [x] Check array values and literals
+  - [x] Check indexing, length, comparison, and iteration
+  - [x] Represent arrays in Fern IR
+  - [x] Compile and execute array programs
+- [x] Compiler phase decomposition
+  - [x] Decompose compiler phase modules
+- [x] Compiler architecture hardening
+  - [x] Make program identity explicit and record the compiler architecture
+- [x] Floating-point numbers
+  - [x] Lex and parse floating-point literals
+  - [x] Represent floating-point types and numeric conversions across the compiler
+  - [x] Check floating-point expressions and constant expressions
+  - [x] Lower and emit floating-point values, operations, and comparisons
+  - [x] Compile and execute floating-point programs and failures
+- [x] Structs
+  - [x] Parse named struct declarations, literals, and field selection
+  - [x] Resolve struct fields and check struct values, assignments, and equality
+  - [x] Represent structs and field access in Fern IR
+  - [x] Lay out, copy, compare, and access structs in native code
+  - [x] Compile and execute struct programs and failures
+- [ ] Pointers
+  - [ ] Parse pointer types, address-of, and dereference
+  - [ ] Represent pointer types across the compiler
+  - [ ] Check addressability, pointer values, and indirect assignment
+  - [ ] Represent pointers and indirect access in Fern IR
+  - [ ] Load, store, and compare pointers in native code
+  - [ ] Compile and execute pointer programs and failures
+- [ ] Slices
+  - [ ] Parse slice types and slicing expressions
+  - [ ] Represent slice types across the compiler
+  - [ ] Check slice values, bounds, length, comparison, and iteration
+  - [ ] Represent slices in Fern IR
+  - [ ] Lay out, slice, and access slices in native code
+  - [ ] Compile and execute slice programs and failures
+- [ ] Strings
+  - [ ] Lex string and character literals and their escapes
+  - [ ] Represent the string type across the compiler
+  - [ ] Check string values, comparison, indexing, and slicing
+  - [ ] Represent strings and string constants in Fern IR
+  - [ ] Emit string data and string operations in native code
+  - [ ] Compile and execute string programs and failures
+- [ ] Foreign functions
+  - [ ] Parse foreign function declarations
+  - [ ] Resolve and check foreign signatures and calls
+  - [ ] Represent foreign functions in Fern IR
+  - [ ] Emit C ABI calls and link foreign symbols
+  - [ ] Compile and execute programs that call foreign functions
+- [ ] Heap allocation
+  - [ ] Parse and check the allocation, release, and size built-ins
+  - [ ] Represent allocation and release in Fern IR
+  - [ ] Emit allocation, release, and size queries in native code
+  - [ ] Compile and execute heap programs and failures
+- [ ] Standard library core
+  - [ ] Establish the standard library module search root
+  - [ ] Implement byte and memory operations
+  - [ ] Implement formatted output
+  - [ ] Add examples and validate standard library programs

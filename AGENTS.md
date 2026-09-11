@@ -14,15 +14,17 @@ described as "behavior" or a "specification."
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
 | `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
-| `eng/roadmap.md`      | Milestones, their tasks, scope, order, and completion gates. Reference behavior contracts rather than defining them here.                                                              |
-| `eng/plans/`          | Implementation plans for individual roadmap tasks: concrete file changes, focused tests, and decisions the owning documents leave open.                                                |
+| `eng/todo.md`         | Ordered implementation tasks and their completion state. A task may have subtasks; mark the task complete when all its subtasks are complete.                                           |
+| `eng/plans/`          | Implementation plans for a single TODO task or a defect repair: concrete file changes, focused tests, and decisions the owning documents leave open.                                    |
 | `eng/reviews/`        | Code-review reports: scope, findings, unresolved suspicions, and checks run.                                                                                                           |
 | `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
 
-Use `kspec` when creating or modifying `docs/spec.md`. Use `kroadmap` to
-add or revise roadmap milestones and tasks; `kwork` only checks off completed
-tasks in `eng/roadmap.md`. Reading either document does not require its skill.
-Generic skill wording about "product behavior" does not expand the language
+Use `kspec` when creating or modifying `docs/spec.md`. `kplan` plans either the
+next incomplete TODO task or a confirmed defect; `eng/todo.md` tracks feature
+scope, so defect repair needs no entry there. `kwork` only checks off completed
+tasks in `eng/todo.md`, marking a parent task when all of its subtasks are
+complete. Reading any of these documents does not require its skill. Generic
+skill wording about "product behavior" does not expand the language
 specification's scope.
 
 Document ownership governs decisions, not obvious mistakes. When any document
@@ -32,9 +34,9 @@ owning skill when the fix changes what the project intends.
 
 Plans in `eng/plans/` are produced by `kplan` and executed by `kwork`.
 
-The specification and roadmap are created when the project needs them. `kplan`
-requires both and will direct the user to the appropriate skill when either is
-missing. The architecture document is not required to begin planning.
+The specification and TODO are created when the project needs them. `kplan`
+requires both and will direct the user to `kspec` or to add `eng/todo.md` when
+either is missing. The architecture document is not required to begin planning.
 
 ## Codebase Map
 
@@ -74,19 +76,6 @@ Native tests require the tools documented in [README.md](README.md).
 
 Be short. Say the thing and stop.
 
-A few sentences is the normal length of a reply. Most questions need one or two.
-Never write five paragraphs where one would do. If a reply is running long, cut
-whole points rather than compressing them into denser sentences.
-
-Write plainly. Ordinary words, ordinary sentences, one idea each. Say it the way
-you would say it out loud to someone sitting next to you. No throat-clearing
-before the answer, no summary of what you just did after it, no restating the
-question, no listing the options you considered and rejected.
-
-Do not be clever or cryptic. Do not stack clauses onto a sentence with dashes
-and semicolons; start a new sentence. Do not invent names for things that
-already have names. Prefer the concrete: name the file, the function, the value.
-
 When you need a decision, ask one plain question. Write it as prose in your
 reply. Never ask through a multiple-choice or option-picker tool.
 
@@ -99,99 +88,21 @@ from implementation-specific behavior.
 This governs replies. Files you write follow the repository's documentation
 rules.
 
-### Project priorities
+### Implementation principles
 
-This project is optimized for clarity, correctness, and ease of reasoning rather
-than execution speed. Treat simplicity as a maintained project invariant, not a
-cleanup activity.
+This project is optimized for clarity, correctness, and ease of reasoning.
 
-Keep one implementation path for each behavior. Do not add a fast path, legacy
-path, fallback path, or representation selector when the same pipeline can
-handle every case. Parallel lowering, checking, verification, or emission paths
-for the same language rule are a correctness bug unless their semantics or
-ownership genuinely differ. When they do differ, make the boundary explicit in
-the owning document.
+### Design decisions
 
-Treat duplicated logic as shared behavior waiting to drift. Extract a small
-helper or abstraction when it gives one home to a real rule, even when two
-callers are the only current users. Prefer an abstraction that names the shared
-contract over two locally simple copies. Do not use this as permission for
-speculative frameworks, extension points, or layers without a present caller.
-
-When removing a special case, enum variant, or separate code path, inspect the
-surrounding code for structure it made redundant. Collapse newly identical paths
-and use existing helpers in the same change.
-
-Before completing a milestone, search for mode flags, optional representations,
-path-selection predicates, duplicated phase logic, and stale suppressions added
-during its tasks. Test combinations of the milestone's features, not only each
-feature in isolation. Include cases where one new expression or statement is
-nested inside another.
-
-Describe Fern and roadmap work in terms of the intended end state. Do not record
-superseded syntax, migration steps, compatibility behavior, or design history.
-Fern has no source-compatibility constraints until real users and programs create
-them.
+Describe Fern work in terms of the intended end state. Do not record superseded
+syntax, migration steps, compatibility behavior, or design history. Fern has no
+source-compatibility constraints until real users and programs create them.
 
 Read the owning document before making a behavioral decision. For language
 changes, use `kspec` to resolve missing rules in `docs/spec.md` before
 implementation depends on them.
 
-When `eng/architecture.md` exists, read it before changing the program's
-structure. Do not invent architectural constraints when it does not exist.
-
-Finish one roadmap task at a time. A task may leave the feature partially
-implemented across compiler phases. Preserve existing supported behavior and
-state unfinished integration clearly. Add temporary guards only when needed to
-prevent incorrect execution, not to make each task a standalone deliverable.
-
-Use focused checks during implementation. Run broad validation when the feature
-or milestone is integrated, or earlier when a concrete risk warrants it. Review
-the completed milestone once for correctness and architectural simplicity. A
-feature is complete only when its affected phases and tests agree.
-
-Do not reserve names, add extension points, or build infrastructure for
-hypothetical future features.
-
-Use `kplan` to write an implementation plan for one roadmap task, then `kwork`
-to execute that plan and validate it. Both `docs/spec.md` and `eng/roadmap.md`
-must exist before planning begins.
-
-Do not use `kwork` to fix a review finding unless the user names the plan to
-execute. A small, clearly scoped review follow-up is a one-off task and is
-implemented directly. Create a roadmap task and plan first only when the
-finding is too complex for a small change.
-
-The roadmap is a list of named milestones in implementation order, with task
-checkboxes recording progress. Preserve completed tasks and milestone details.
-
-Each milestone must have a complete Fern program in the roadmap when its scope
-is planned. Demonstrate its new capabilities, include the expected result, and
-name its future completion fixture under `tests/fixtures/programs/`. When the
-milestone is implemented, create that fixture. `kroadmap` maintains the
-roadmap's program snippets and links. For milestones awaiting language
-decisions, write the program when those decisions are settled.
-
-Public programs under `examples/` are documentation organized by language
-topic. Do not use them as semantic regression fixtures. Behavioral coverage
-belongs in focused test sources or `tests/fixtures/programs/`; tests may check
-that the public examples remain valid as documentation.
-
-### Work records
-
-Every code review writes `eng/reviews/YYYY-MM-DD-NNN-slug.md`. The report names
-its scope and mode, records its findings or no-finding result, unresolved
-suspicion, and checks. A review reports only. It does not implement findings.
-
-An implementation commit from a plan includes that plan. An implementation
-commit from a review includes that review. Include both when a review leads to
-a planned task. A small one-off task needs neither document. For a one-off that
-is too complex for a small change, use the user request as the scope and create
-the roadmap task and plan before implementing; do not wait for separate consent
-to plan it.
-
-Preserve unrelated working-tree changes. Never commit unless the user asks for a
-commit explicitly.
+Read `eng/architecture.md` before changing the program's structure.
 
 ### One home for every fact
 

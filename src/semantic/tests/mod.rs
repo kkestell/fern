@@ -120,6 +120,14 @@ fn pointer_type(constant: bool, target: Type) -> Type {
     }
 }
 
+/// A slice type with the written element type and mutability.
+fn slice_type(constant: bool, element: Type) -> Type {
+    Type::Slice {
+        constant,
+        element: Box::new(element),
+    }
+}
+
 /// A `geometry` module beside the `app` root module, with one public struct
 /// type, one private struct type, and one public `const`.
 const GEOMETRY: &str = "pub type Point struct {

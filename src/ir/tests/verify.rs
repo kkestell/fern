@@ -2,6 +2,193 @@ use super::*;
 use crate::types::{ComparisonOperator, MAX_STRUCT_CONTAINMENT_DEPTH, UnaryOperator};
 
 #[test]
+fn verification_checks_slice_literals_places_and_values() {
+    let ints = slice(false, Scalar::Int.into());
+    let values = vec![
+        Value {
+            span: None,
+            ty: ints.clone(),
+            kind: ValueKind::Load(Place::Local(LocalId(0))),
+        },
+        Value {
+            span: Some(0..1),
+            ty: ints.clone(),
+            kind: ValueKind::SliceRange {
+                slice: Operand::Value(ValueId(0)),
+                low: integer(0, Scalar::Int),
+                high: integer(1, Scalar::Int),
+            },
+        },
+        Value {
+            span: None,
+            ty: Scalar::Int.into(),
+            kind: ValueKind::Load(Place::SliceElement {
+                slice: Operand::Value(ValueId(1)),
+                index: integer(0, Scalar::Int),
+                span: 0..1,
+            }),
+        },
+        Value {
+            span: None,
+            ty: slice(true, Scalar::Int.into()),
+            kind: ValueKind::WholeSlice(Place::Local(LocalId(1))),
+        },
+        Value {
+            span: None,
+            ty: Scalar::Int.into(),
+            kind: ValueKind::SliceLength {
+                slice: Operand::Value(ValueId(3)),
+            },
+        },
+        // Equality compares two slices of one element type whatever their
+        // constness.
+        Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: Operand::Value(ValueId(1)),
+                right: Operand::Value(ValueId(3)),
+            },
+        },
+    ];
+    let function = main_function(
+        values,
+        vec![ints.clone(), array(2, Scalar::Int.into())],
+        vec![Block {
+            instructions: vec![
+                Instruction::Store {
+                    place: Place::Local(LocalId(0)),
+                    operand: empty_slice(ints.clone()),
+                },
+                Instruction::Value(ValueId(0)),
+                Instruction::Value(ValueId(1)),
+                Instruction::Value(ValueId(2)),
+                Instruction::Value(ValueId(3)),
+                Instruction::Value(ValueId(4)),
+                Instruction::Value(ValueId(5)),
+            ],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    );
+    one_function(function).verify().unwrap();
+}
+
+#[test]
+fn verification_rejects_malformed_slice_values_and_places() {
+    let ints = slice(false, Scalar::Int.into());
+    let bytes = slice(false, Scalar::U8.into());
+
+    let error = program(vec![], empty_slice(Scalar::Int.into()))
+        .verify()
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR empty slice has non-slice type `int`"),
+        "{error}"
+    );
+
+    for (value, expected) in [
+        (
+            Value {
+                span: None,
+                ty: Scalar::Int.into(),
+                kind: ValueKind::Load(Place::SliceElement {
+                    slice: integer(0, Scalar::Int),
+                    index: integer(0, Scalar::Int),
+                    span: 0..1,
+                }),
+            },
+            "IR indexes slice value `int`",
+        ),
+        (
+            Value {
+                span: None,
+                ty: Scalar::Int.into(),
+                kind: ValueKind::Load(Place::SliceElement {
+                    slice: empty_slice(ints.clone()),
+                    index: integer(0, Scalar::U8),
+                    span: 0..1,
+                }),
+            },
+            "IR index has type `u8`, expected `int`",
+        ),
+        (
+            Value {
+                span: None,
+                ty: Scalar::Int.into(),
+                kind: ValueKind::SliceLength {
+                    slice: integer(0, Scalar::Int),
+                },
+            },
+            "invalid IR value 0",
+        ),
+        (
+            Value {
+                span: Some(0..1),
+                ty: ints.clone(),
+                kind: ValueKind::SliceRange {
+                    slice: empty_slice(ints.clone()),
+                    low: integer(0, Scalar::U8),
+                    high: integer(1, Scalar::Int),
+                },
+            },
+            "invalid IR value 0",
+        ),
+        (
+            Value {
+                span: Some(0..1),
+                ty: bytes.clone(),
+                kind: ValueKind::SliceRange {
+                    slice: empty_slice(ints.clone()),
+                    low: integer(0, Scalar::Int),
+                    high: integer(1, Scalar::Int),
+                },
+            },
+            "invalid IR value 0",
+        ),
+        (
+            Value {
+                span: Some(0..1),
+                ty: Scalar::Bool.into(),
+                kind: ValueKind::Comparison {
+                    operator: ComparisonOperator::Equal,
+                    left: empty_slice(ints.clone()),
+                    right: empty_slice(bytes.clone()),
+                },
+            },
+            "invalid IR value 0",
+        ),
+    ] {
+        let error = program(vec![value], integer(0, Scalar::Int))
+            .verify()
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    let mismatched_whole = Value {
+        span: None,
+        ty: bytes.clone(),
+        kind: ValueKind::WholeSlice(Place::Local(LocalId(0))),
+    };
+    let function = main_function(
+        vec![mismatched_whole],
+        vec![array(2, Scalar::Int.into())],
+        vec![Block {
+            instructions: vec![Instruction::Value(ValueId(0))],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    );
+    let error = one_function(function).verify().unwrap_err();
+    assert!(error.to_string().contains("invalid IR value 0"), "{error}");
+}
+
+#[test]
 fn verification_rejects_non_pointer_nulls_and_indirect_places() {
     let invalid_null = Global {
         ty: Scalar::Int.into(),

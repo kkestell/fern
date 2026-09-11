@@ -319,7 +319,7 @@ fn len_reads_the_length_from_the_operands_type() {
     );
     rejects_root(
         "fn main() -> void { var x = 1; const n = len(«x»); }",
-        "`len` requires an array operand, found `int`",
+        "`len` requires an array or slice operand, found `int`",
     );
     // Reaching the operand's type through a call means the length does not
     // fold, because the call is still evaluated.
@@ -1347,6 +1347,150 @@ fn pointer_values_take_context_and_reject_non_pointer_operations() {
         "p",
         "cannot implicitly convert `*const int` to `*int`",
     );
+}
+
+#[test]
+fn slicing_checks_types_locations_and_bounds() {
+    for (source, expected) in [
+        (
+            "fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var s = a[1:3]; }",
+            slice_type(false, value_type(Scalar::Int)),
+        ),
+        (
+            "fn main() -> void { const a: [4]int = [1, 2, 3, 4]; var s = a[:]; }",
+            slice_type(true, value_type(Scalar::Int)),
+        ),
+        (
+            "fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var s = a[1:][0:1]; }",
+            slice_type(false, value_type(Scalar::Int)),
+        ),
+        (
+            "fn main() -> void { var g: [2][3]int = [[1...], [2...]]; var s = g[0][1:2]; }",
+            slice_type(false, value_type(Scalar::Int)),
+        ),
+        (
+            "fn main() -> void { var s: []const int; var t = s[1:]; }",
+            slice_type(true, value_type(Scalar::Int)),
+        ),
+    ] {
+        assert_eq!(
+            checked_bindings(source).last().unwrap().0,
+            expected,
+            "{source}"
+        );
+    }
+    accepts_source(
+        "fn take(s: []int) -> []int { return s[1:]; }
+         fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var s = take(a[:]); }",
+    );
+    for (source, offending, message) in [
+        (
+            "fn main() -> void { var e = [1, 2][0:1]; }",
+            "[1, 2]",
+            "cannot slice an expression that is not a location",
+        ),
+        (
+            "fn main() -> void { var a: [2]int = [1, 2]; var e = (a + a)[0:1]; }",
+            "a + a",
+            "cannot slice an expression that is not a location",
+        ),
+        (
+            "fn main() -> void { var n = 1; var e = n[0:]; }",
+            "n",
+            "cannot slice `int`",
+        ),
+        (
+            "type Point struct { x: int } fn main() -> void { var p = Point { x = 1 }; var e = p[:]; }",
+            "p",
+            "cannot slice `Point`",
+        ),
+        (
+            "fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var e = a[5:]; }",
+            "5",
+            "slice bound 5 is out of range for `[4]int`",
+        ),
+        (
+            "fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var e = a[3:1]; }",
+            "1",
+            "slice lower bound 3 exceeds upper bound 1",
+        ),
+        (
+            "fn main() -> void { var a: [4]int = [1, 2, 3, 4]; var u: u8 = 1; var e = a[u:]; }",
+            "u",
+            "cannot implicitly convert `u8` to `int`",
+        ),
+        (
+            "var a: [4]int;
+             fn view(n: int) -> []int { return a[:n]; }
+             fn main() -> void { var e = view(true)[:]; }",
+            "true",
+            "cannot implicitly convert `bool` to `int`",
+        ),
+    ] {
+        rejects_source(source, offending, message);
+    }
+    accepts_source(
+        "fn main() -> void {
+             var a: [4]int = [1, 2, 3, 4];
+             var empty = a[4:];
+             var s: []int;
+             var e = s[9:1];
+             var i = 9;
+             var t = s[i:i];
+         }",
+    );
+}
+
+#[test]
+fn slices_index_measure_and_compare_without_folding() {
+    for (source, expected) in [
+        (
+            "fn main() -> void { var s: []int; var e = s[9]; }",
+            value_type(Scalar::Int),
+        ),
+        (
+            "fn main() -> void { var s: [][3]int; var e = s[9]; }",
+            array_type(3, value_type(Scalar::Int)),
+        ),
+        (
+            "fn main() -> void { var s: []int; var n = len(s); }",
+            value_type(Scalar::Int),
+        ),
+        (
+            "fn main() -> void { var s: []int; var t: []const int; var b = s == t; }",
+            value_type(Scalar::Bool),
+        ),
+    ] {
+        assert_eq!(
+            checked_bindings(source).last().unwrap().0,
+            expected,
+            "{source}"
+        );
+    }
+    for (source, offending, message) in [
+        (
+            "fn main() -> void { var s: []int; var u: u8 = 1; var e = s[u]; }",
+            "u",
+            "cannot implicitly convert `u8` to `int`",
+        ),
+        (
+            "fn main() -> void { var s: []int; var t: []i64; var b = s == t; }",
+            "==",
+            "comparison operands have different types `[]int` and `[]i64`",
+        ),
+        (
+            "fn main() -> void { var s: []int; var t: []int; var b = s < t; }",
+            "<",
+            "only `==` and `!=` are defined on `[]int`",
+        ),
+        (
+            "var s: []int; const n = len(s); fn main() -> void {}",
+            "len(s)",
+            "module-level initializer must be a constant expression",
+        ),
+    ] {
+        rejects_source(source, offending, message);
+    }
 }
 
 #[test]

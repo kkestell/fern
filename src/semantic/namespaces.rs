@@ -822,9 +822,42 @@ impl CheckedProgram<'_> {
                 }
                 self.collect_annotation_references(element, visited, references);
             }
-            // A pointer's target is reached through the pointer rather than
-            // stored in it, so a target type is not a size dependency.
-            AnnotationKind::Pointer { .. } => {}
+            // A pointer or slice's target is reached through it rather than
+            // stored inline, so the target type is not a size dependency,
+            // though an array length written inside it still has to be known.
+            AnnotationKind::Pointer { target, .. } => {
+                self.collect_referenced_lengths(*target, visited, references);
+            }
+            AnnotationKind::Slice { element, .. } => {
+                self.collect_referenced_lengths(*element, visited, references);
+            }
+        }
+    }
+
+    /// The names an annotation behind a pointer or slice reaches through its
+    /// array lengths. A named struct it reaches contributes nothing, because
+    /// only that struct's size would depend on it.
+    fn collect_referenced_lengths(
+        &self,
+        annotation: Idx<TypeAnnotation>,
+        visited: &mut HashSet<StructId>,
+        references: &mut References,
+    ) {
+        match &self.syntax.annotations[annotation].kind {
+            AnnotationKind::Scalar(_) | AnnotationKind::Named(_) => {}
+            AnnotationKind::Array { length, element } => {
+                let (length, element) = (*length, *element);
+                if let Some(length) = length {
+                    self.collect_references(length, visited, references);
+                }
+                self.collect_referenced_lengths(element, visited, references);
+            }
+            AnnotationKind::Pointer { target, .. } => {
+                self.collect_referenced_lengths(*target, visited, references);
+            }
+            AnnotationKind::Slice { element, .. } => {
+                self.collect_referenced_lengths(*element, visited, references);
+            }
         }
     }
 

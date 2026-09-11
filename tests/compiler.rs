@@ -116,6 +116,14 @@ fn typed_integer_diagnostics_precede_emission_and_preserve_output() {
             "{ exit(0); } const x: u64 = 18446744073709551616;",
             "integer literal out of range for `u64`",
         ),
+        (
+            "var a: [4]int = [1, 2, 3, 4]; var e = a[5:];",
+            "slice bound 5 is out of range for `[4]int`",
+        ),
+        (
+            "var s: []const int; s[0] = 1;",
+            "cannot assign to an immutable location",
+        ),
     ] {
         let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
         fs::write(&output, "old executable").unwrap();
@@ -134,6 +142,56 @@ fn pointer_programs_compile_and_execute() {
     let (_dir, input, output) = fixture(include_str!("fixtures/programs/pointers.fern"));
     fern::compile(&input, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn slice_programs_compile_and_execute() {
+    let (_dir, input, output) = fixture(include_str!("fixtures/programs/slices.fern"));
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(44));
+}
+
+#[test]
+fn slice_failures_abort_with_the_original_source_location() {
+    for (source, expected) in [
+        (
+            "fn main() -> void { var values: [2]int = [1, 2]; var slice = values[:]; exit(slice[2]); }",
+            "slice index out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var values: [2]int = [1, 2]; var slice = values[:]; exit(slice[-1]); }",
+            "slice index out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var slice: []int; exit(slice[0]); }",
+            "slice index out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var values: [2]int = [1, 2]; var low = 2; var high = 1; var slice = values[low:high]; exit(len(slice)); }",
+            "slice bounds out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var values: [2]int = [1, 2]; var high = 3; var slice = values[:high]; exit(len(slice)); }",
+            "slice bounds out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var values: [2]int = [1, 2]; var low = -1; var slice = values[low:1]; exit(len(slice)); }",
+            "slice bounds out of range for `[]int`",
+        ),
+        (
+            "fn main() -> void { var pointer: *[2]int = null; var slice = pointer[:]; exit(len(slice)); }",
+            "null pointer dereference",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        fs::remove_file(&input).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert!(!result.status.success(), "{source}");
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(stderr.contains(expected), "{source}: {stderr}");
+        assert!(stderr.contains("input.fern:"), "{source}: {stderr}");
+    }
 }
 
 #[test]

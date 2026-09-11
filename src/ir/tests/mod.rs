@@ -136,6 +136,17 @@ pub(super) fn array(length: u64, element: Type) -> Type {
     }
 }
 
+pub(super) fn slice(constant: bool, element: Type) -> Type {
+    Type::Slice {
+        constant,
+        element: Box::new(element),
+    }
+}
+
+pub(super) fn empty_slice(ty: Type) -> Operand {
+    Operand::Literal(Literal::EmptySlice(ty))
+}
+
 /// The type of struct `id`, spelled `name` the way diagnostics show it.
 pub(super) fn declared(id: usize, name: &str) -> Type {
     Type::Struct(StructType {
@@ -171,12 +182,27 @@ pub(super) fn describe(place: &Place) -> String {
                     unreachable!("an index has type `int`")
                 }
                 Operand::Literal(Literal::Null(_)) => unreachable!("an index has type `int`"),
+                Operand::Literal(Literal::EmptySlice(_)) => {
+                    unreachable!("an index has type `int`")
+                }
                 Operand::Value(ValueId(id)) => format!("v{id}"),
             };
             format!("{}[{index}]", describe(base))
         }
         Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
         Place::Indirect { .. } => "*pointer".to_owned(),
+        Place::SliceElement { slice, index, .. } => {
+            let slice = match slice {
+                Operand::Value(ValueId(id)) => format!("v{id}"),
+                Operand::Literal(_) => "slice".to_owned(),
+            };
+            let index = match index {
+                Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
+                Operand::Value(ValueId(id)) => format!("v{id}"),
+                Operand::Literal(_) => unreachable!("an index has type `int`"),
+            };
+            format!("{slice}[{index}]")
+        }
     }
 }
 

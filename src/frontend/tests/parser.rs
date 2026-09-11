@@ -974,3 +974,94 @@ fn pointer_nesting_obeys_the_source_limit() {
         );
     }
 }
+
+#[test]
+fn slice_types_and_slicing_expressions_snapshot() {
+    let source = "\
+type Node struct {
+    children: []Node,
+    values: []const int,
+    pointers: []*int,
+    frozen_pointers: []const *const int,
+    rows: [3][]int,
+}
+fn take(
+    values: []int,
+    frozen: []const int,
+    matrix: [][]int,
+    frozen_matrix: []const []int,
+    row: [][3]int,
+    pointer: *[]int,
+) -> []int {
+    return values[1:];
+}
+fn main() -> void {
+    var writable: []int;
+    const first = a[1:3];
+    const rest = a[1:];
+    const prefix = a[:3];
+    const all = a[:];
+    const nested = m[0][1:2];
+    const element = s[1:3][0];
+    const field = s[1:3].f;
+    const through_pointer = p[1:2];
+    const returned = take(a, a, grid, rows, p)[1:];
+    const dereferenced = *p[1:2];
+    const address = &s[1:2];
+    const count = len(s[1:3]);
+    const same = s[1:3] == t[:];
+    const bounds = a[i + 1:len(a) - 1];
+    const qualified_low = a[m::n:];
+    const qualified_high = a[:m::n];
+    const indexed_bounds = a[b[0]:b[1]];
+    s[1:2] = e;
+    for v in s[1:3] {}
+}
+";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn malformed_slice_syntax_reports_the_offending_token() {
+    for (marked, message) in [
+        ("var x: []«;»", "expected a type"),
+        ("var x: []const «;»", "expected a type"),
+        ("const x = a[«]»;", "expected an expression"),
+        ("const x = a[:«;»];", "expected an expression"),
+        ("const x = a[1:2«:»3];", "expected `]` after slice bounds"),
+        ("const x = a[1 «2»];", "expected `]` after index"),
+        ("var x: []«void»;", "expected a type"),
+    ] {
+        let prefix = "/* 🌿 */ fn main() -> void { ";
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(
+            error.span,
+            prefix.len() + start..prefix.len() + end,
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn slice_nesting_obeys_the_source_limit() {
+    // A function body already holds one level, so 127 more are accepted.
+    let annotation =
+        |count: usize| format!("fn main() -> void {{ var x: {}int; }}", "[]".repeat(count));
+    let slicing = |count: usize| {
+        format!(
+            "fn main() -> void {{ const x = a{}; }}",
+            "[:]".repeat(count)
+        )
+    };
+    for build in [annotation, slicing] {
+        parse(&build(127)).unwrap();
+        assert_eq!(
+            parse(&build(128)).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+    }
+}

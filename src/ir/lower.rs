@@ -160,6 +160,7 @@ fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
         },
         Constant::Float(value) => Literal::Floating(*value),
         Constant::Null => unreachable!("a null constant has a pointer type"),
+        Constant::EmptySlice => unreachable!("a slice constant does not reach lowering"),
         Constant::Rational(_) => {
             unreachable!("an untyped constant is contextualized before lowering")
         }
@@ -173,6 +174,13 @@ fn pointer_literal(constant: &Constant, ty: &Type) -> Literal {
     match constant {
         Constant::Null => Literal::Null(ty.clone()),
         _ => unreachable!("a pointer constant is null"),
+    }
+}
+
+fn slice_literal(constant: &Constant, ty: &Type) -> Literal {
+    match constant {
+        Constant::EmptySlice => Literal::EmptySlice(ty.clone()),
+        _ => unreachable!("a slice constant is empty"),
     }
 }
 
@@ -190,6 +198,7 @@ fn flatten(
             values.push(scalar_literal(scalar_constant, *scalar));
         }
         (Type::Pointer { .. }, constant) => values.push(pointer_literal(constant, ty)),
+        (Type::Slice { .. }, constant) => values.push(slice_literal(constant, ty)),
         (Type::Array { element, .. }, Constant::Array(elements)) => {
             for value in elements {
                 flatten(checked, value, element, values);
@@ -519,11 +528,49 @@ fn lower_location(
             root: Some(bindings[binding].clone()),
             steps: Vec::new(),
         },
+        CheckedLocationKind::SliceValue { .. } => {
+            unreachable!("a slice value is only the operand of an index step")
+        }
         CheckedLocationKind::Index {
             operand,
             index,
             implicit_dereference,
         } => {
+            let reached = if implicit_dereference.is_some() {
+                let Type::Pointer { target, .. } = &operand.ty else {
+                    unreachable!("implicit index dereferences a pointer")
+                };
+                &**target
+            } else {
+                &operand.ty
+            };
+            if matches!(reached, Type::Slice { .. }) {
+                let syntax_index = *index;
+                let slice = if let Some(span) = implicit_dereference {
+                    let mut held = lower_location(checked, operand, bindings, builder);
+                    let place = held.read(builder);
+                    let pointer = load_place(builder, place, operand.ty.clone());
+                    load_place(
+                        builder,
+                        Place::Indirect {
+                            pointer,
+                            span: span.clone(),
+                        },
+                        reached.clone(),
+                    )
+                } else {
+                    lower_location_slice(checked, operand, bindings, builder)
+                };
+                let index = lower_flow_operand(checked, syntax_index, bindings, builder);
+                return HeldPlace {
+                    root: None,
+                    steps: vec![HeldStep::SliceIndex {
+                        slice: hold_operand(builder, slice, reached.clone()),
+                        index: hold_operand(builder, index, Scalar::Int.into()),
+                        span: checked.syntax.expressions[syntax_index].span.clone(),
+                    }],
+                };
+            }
             let mut held = lower_location(checked, operand, bindings, builder);
             if let Some(span) = implicit_dereference {
                 let place = held.read(builder);
@@ -567,6 +614,27 @@ fn lower_location(
                     location.span.clone(),
                 )],
             }
+        }
+    }
+}
+
+/// Reads the slice value an index location consumes. A slicing expression has
+/// no storage, while a binding, field, or element does; both become the same
+/// slice operand before `SliceElement` is built.
+fn lower_location_slice(
+    checked: &CheckedProgram<'_>,
+    location: &CheckedLocation,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    match &location.kind {
+        CheckedLocationKind::SliceValue { operand } => {
+            lower_flow_operand(checked, *operand, bindings, builder)
+        }
+        _ => {
+            let mut held = lower_location(checked, location, bindings, builder);
+            let place = held.read(builder);
+            load_place(builder, place, location.ty.clone())
         }
     }
 }
@@ -658,11 +726,16 @@ fn lower_if(
     then_terminated && else_terminated
 }
 
-/// A `for … in` loop's storage: the array it walks, captured once before the
-/// first iteration, and the counter driving it.
+/// The captured value a `for … in` walks.
+enum IterationSource {
+    Array { place: Place, length: u64 },
+    Slice { local: LocalId, ty: Type },
+}
+
+/// A `for … in` loop's storage, captured once before the first iteration, and
+/// the counter driving it.
 struct Iteration {
-    array: Place,
-    length: u64,
+    source: IterationSource,
     element: Type,
     counter: LocalId,
     value: LocalId,
@@ -676,13 +749,24 @@ impl Iteration {
 
     fn condition(&self, builder: &mut FlowBuilder) -> Operand {
         let counter = self.counter(builder);
+        let right = match &self.source {
+            IterationSource::Array { length, .. } => integer(i128::from(*length), Scalar::Int),
+            IterationSource::Slice { local, ty } => {
+                let slice = load_place(builder, Place::Local(*local), ty.clone());
+                builder.value(Value {
+                    span: None,
+                    ty: Scalar::Int.into(),
+                    kind: ValueKind::SliceLength { slice },
+                })
+            }
+        };
         builder.value(Value {
             span: Some(self.span.clone()),
             ty: Scalar::Bool.into(),
             kind: ValueKind::Comparison {
                 operator: ComparisonOperator::Less,
                 left: counter,
-                right: integer(i128::from(self.length), Scalar::Int),
+                right,
             },
         })
     }
@@ -690,10 +774,17 @@ impl Iteration {
     /// Binds the value to a copy of the element the counter reaches.
     fn bind(&self, builder: &mut FlowBuilder) {
         let index = self.counter(builder);
-        let element = Place::Element {
-            base: Box::new(self.array.clone()),
-            index,
-            span: self.span.clone(),
+        let element = match &self.source {
+            IterationSource::Array { place, .. } => Place::Element {
+                base: Box::new(place.clone()),
+                index,
+                span: self.span.clone(),
+            },
+            IterationSource::Slice { local, ty } => Place::SliceElement {
+                slice: load_place(builder, Place::Local(*local), ty.clone()),
+                index,
+                span: self.span.clone(),
+            },
         };
         let operand = load_place(builder, element, self.element.clone());
         builder.store(Place::Local(self.value), operand);
@@ -774,8 +865,8 @@ fn lower_for_header(
     }
 }
 
-/// Copies the array a `for … in` walks into a local, so assigning to the
-/// original inside the body cannot change the remaining iterations.
+/// Captures the value a `for … in` walks, so assigning to its original binding
+/// inside the body cannot change the remaining iterations.
 fn capture(
     checked: &CheckedProgram<'_>,
     statement: Idx<Statement>,
@@ -784,18 +875,38 @@ fn capture(
     builder: &mut FlowBuilder,
 ) -> Iteration {
     let ty = checked.expressions[operand].ty.clone();
-    let Type::Array { length, element } = &ty else {
-        unreachable!("checking requires an array operand for `for … in`")
-    };
     let span = checked.syntax.expressions[operand].span.clone();
-    let source = lower_aggregate_place(checked, operand, bindings, builder);
-    let loaded = load_place(builder, source, ty.clone());
-    let array = Place::Local(builder.local(ty.clone()));
-    builder.store(array.clone(), loaded);
+    let (source, element) = match &ty {
+        Type::Array { length, element } => {
+            let source = lower_aggregate_place(checked, operand, bindings, builder);
+            let loaded = load_place(builder, source, ty.clone());
+            let place = Place::Local(builder.local(ty.clone()));
+            builder.store(place.clone(), loaded);
+            (
+                IterationSource::Array {
+                    place,
+                    length: *length,
+                },
+                (**element).clone(),
+            )
+        }
+        Type::Slice { element, .. } => {
+            let loaded = lower_flow_operand(checked, operand, bindings, builder);
+            let local = builder.local(ty.clone());
+            builder.store(Place::Local(local), loaded);
+            (
+                IterationSource::Slice {
+                    local,
+                    ty: ty.clone(),
+                },
+                (**element).clone(),
+            )
+        }
+        _ => unreachable!("checking requires an array or slice operand for `for … in`"),
+    };
 
     let counter = builder.local(Scalar::Int.into());
     builder.store(Place::Local(counter), integer(0, Scalar::Int));
-    let element = (**element).clone();
     let value = builder.local(element.clone());
 
     let iteration = &checked.iterations[statement];
@@ -806,8 +917,7 @@ fn capture(
         bindings.insert(index, Place::Local(counter));
     }
     Iteration {
-        array,
-        length: *length,
+        source,
         element,
         counter,
         value,
@@ -946,6 +1056,9 @@ fn store_constant(
                 place.clone(),
                 Operand::Literal(pointer_literal(constant, ty)),
             );
+        }
+        (Type::Slice { .. }, constant) => {
+            builder.store(place.clone(), Operand::Literal(slice_literal(constant, ty)));
         }
         (Type::Array { element, .. }, Constant::Array(elements)) => {
             for (index, value) in elements.iter().enumerate() {
@@ -1086,10 +1199,107 @@ fn lower_aggregate_place(
             builder.store(place.clone(), operand);
             place
         }
+        ExpressionValue::Slice { .. } => {
+            let operand = lower_slicing(checked, id, bindings, builder);
+            let place = Place::Local(builder.local(ty.clone()));
+            builder.store(place.clone(), operand);
+            place
+        }
         _ => unreachable!(
             "an aggregate value is a reference, a literal, an element, a field, or a call"
         ),
     }
+}
+
+/// Lowers a slicing expression into a range of a two-word slice value.
+fn lower_slicing(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    let ExpressionValue::Slice {
+        operand,
+        low,
+        high,
+        implicit_dereference,
+    } = &checked.expressions[id].value
+    else {
+        unreachable!("a slice value is lowered from a slicing expression")
+    };
+    let operand_ty = &checked.expressions[*operand].ty;
+    let reached = if *implicit_dereference {
+        let Type::Pointer { target, .. } = operand_ty else {
+            unreachable!("implicit slicing dereferences a pointer")
+        };
+        &**target
+    } else {
+        operand_ty
+    };
+    let (slice, array_length) = match reached {
+        Type::Array { length, .. } => {
+            let place = if *implicit_dereference {
+                Place::Indirect {
+                    pointer: lower_flow_operand(checked, *operand, bindings, builder),
+                    span: checked.syntax.expressions[*operand].span.clone(),
+                }
+            } else {
+                lower_aggregate_place(checked, *operand, bindings, builder)
+            };
+            let ty = checked.expressions[id].ty.clone();
+            (
+                builder.value(Value {
+                    span: None,
+                    ty,
+                    kind: ValueKind::WholeSlice(place),
+                }),
+                Some(*length),
+            )
+        }
+        Type::Slice { .. } => {
+            let slice = if *implicit_dereference {
+                let pointer = lower_flow_operand(checked, *operand, bindings, builder);
+                load_place(
+                    builder,
+                    Place::Indirect {
+                        pointer,
+                        span: checked.syntax.expressions[*operand].span.clone(),
+                    },
+                    reached.clone(),
+                )
+            } else {
+                lower_flow_operand(checked, *operand, bindings, builder)
+            };
+            (slice, None)
+        }
+        _ => unreachable!("checking requires an array or slice operand for slicing"),
+    };
+    let mut slice = hold_operand(builder, slice, checked.expressions[id].ty.clone());
+    let low = low
+        .map(|low| lower_flow_operand(checked, low, bindings, builder))
+        .unwrap_or_else(|| integer(0, Scalar::Int));
+    let mut low = hold_operand(builder, low, Scalar::Int.into());
+    let high = match high {
+        Some(high) => lower_flow_operand(checked, *high, bindings, builder),
+        None => match array_length {
+            Some(length) => integer(i128::from(length), Scalar::Int),
+            None => {
+                let slice = slice.read(builder);
+                builder.value(Value {
+                    span: None,
+                    ty: Scalar::Int.into(),
+                    kind: ValueKind::SliceLength { slice },
+                })
+            }
+        },
+    };
+    let slice = slice.read(builder);
+    let low = low.read(builder);
+    builder.value(Value {
+        span: Some(checked.syntax.expressions[id].span.clone()),
+        ty: checked.expressions[id].ty.clone(),
+        kind: ValueKind::SliceRange { slice, low, high },
+    })
 }
 
 fn element_place(
@@ -1106,6 +1316,33 @@ fn element_place(
     else {
         unreachable!("an element place is lowered from an index expression")
     };
+    let span = checked.syntax.expressions[*index].span.clone();
+    let operand_ty = &checked.expressions[*operand].ty;
+    let reached = if *implicit_dereference {
+        let Type::Pointer { target, .. } = operand_ty else {
+            unreachable!("implicit index dereferences a pointer")
+        };
+        &**target
+    } else {
+        operand_ty
+    };
+    if matches!(reached, Type::Slice { .. }) {
+        let slice = if *implicit_dereference {
+            let pointer = lower_flow_operand(checked, *operand, bindings, builder);
+            load_place(
+                builder,
+                Place::Indirect {
+                    pointer,
+                    span: checked.syntax.expressions[*operand].span.clone(),
+                },
+                reached.clone(),
+            )
+        } else {
+            lower_flow_operand(checked, *operand, bindings, builder)
+        };
+        let index = lower_flow_operand(checked, *index, bindings, builder);
+        return Place::SliceElement { slice, index, span };
+    }
     let base = if *implicit_dereference {
         Place::Indirect {
             pointer: lower_flow_operand(checked, *operand, bindings, builder),
@@ -1114,7 +1351,6 @@ fn element_place(
     } else {
         lower_aggregate_place(checked, *operand, bindings, builder)
     };
-    let span = checked.syntax.expressions[*index].span.clone();
     let index = lower_flow_operand(checked, *index, bindings, builder);
     Place::Element {
         base: Box::new(base),
@@ -1182,17 +1418,39 @@ fn lower_length(
         Type::Pointer { target, .. } => (&**target, true),
         _ => (operand_ty, false),
     };
-    let Type::Array { length, .. } = array else {
-        unreachable!("checking requires an array operand for `len`")
-    };
-    let value = lower_flow_operand(checked, operand, bindings, builder);
-    if implicit {
-        builder.check(Place::Indirect {
-            pointer: value,
-            span: checked.syntax.expressions[operand].span.clone(),
-        });
+    match array {
+        Type::Array { length, .. } => {
+            let value = lower_flow_operand(checked, operand, bindings, builder);
+            if implicit {
+                builder.check(Place::Indirect {
+                    pointer: value,
+                    span: checked.syntax.expressions[operand].span.clone(),
+                });
+            }
+            integer(i128::from(*length), Scalar::Int)
+        }
+        Type::Slice { .. } => {
+            let slice = if implicit {
+                let pointer = lower_flow_operand(checked, operand, bindings, builder);
+                load_place(
+                    builder,
+                    Place::Indirect {
+                        pointer,
+                        span: checked.syntax.expressions[operand].span.clone(),
+                    },
+                    array.clone(),
+                )
+            } else {
+                lower_flow_operand(checked, operand, bindings, builder)
+            };
+            builder.value(Value {
+                span: None,
+                ty: Scalar::Int.into(),
+                kind: ValueKind::SliceLength { slice },
+            })
+        }
+        _ => unreachable!("checking requires an array or slice operand for `len`"),
     }
-    integer(i128::from(*length), Scalar::Int)
 }
 
 /// Lowers the evaluation a folded expression still owes. `len` reads its
@@ -1234,6 +1492,7 @@ fn lower_folded_effects(
         | ExpressionValue::Call { .. }
         | ExpressionValue::Index { .. }
         | ExpressionValue::Field { .. } => {}
+        ExpressionValue::Slice { .. } => unreachable!("a slicing expression is never constant"),
         ExpressionValue::AddressOf { .. } | ExpressionValue::Dereference { .. } => {
             unreachable!("pointers stop before IR lowering")
         }
@@ -1296,6 +1555,25 @@ fn lower_flow_operand(
             }
             ExpressionValue::Call { .. } => lower_call_expression(checked, id, bindings, builder),
             _ => unreachable!("a pointer value is a reference, null, address, grouping, or call"),
+        };
+    }
+    if matches!(expression.ty, Type::Slice { .. }) {
+        if let Some(constant) = expression.constant.as_ref() {
+            lower_folded_effects(checked, id, bindings, builder);
+            return Operand::Literal(slice_literal(constant, &expression.ty));
+        }
+        return match &expression.value {
+            ExpressionValue::Grouping { expression } => {
+                lower_flow_operand(checked, *expression, bindings, builder)
+            }
+            ExpressionValue::Conversion { operand, .. } => {
+                lower_flow_operand(checked, *operand, bindings, builder)
+            }
+            ExpressionValue::Slice { .. } => lower_slicing(checked, id, bindings, builder),
+            _ => {
+                let place = lower_aggregate_place(checked, id, bindings, builder);
+                load_place(builder, place, expression.ty.clone())
+            }
         };
     }
     let Some(scalar) = expression.ty.scalar() else {
@@ -1446,6 +1724,7 @@ fn lower_flow_operand(
         ExpressionValue::Null | ExpressionValue::AddressOf { .. } => {
             unreachable!("pointer expressions are handled above")
         }
+        ExpressionValue::Slice { .. } => unreachable!("slice values are handled above"),
     }
 }
 
@@ -1491,6 +1770,11 @@ impl HeldOperand {
 /// before the assigned value; a field is just its ordinal.
 enum HeldStep {
     Index(HeldOperand, std::ops::Range<usize>),
+    SliceIndex {
+        slice: HeldOperand,
+        index: HeldOperand,
+        span: std::ops::Range<usize>,
+    },
     Field(usize),
     Indirect(HeldOperand, std::ops::Range<usize>),
 }
@@ -1509,6 +1793,11 @@ impl HeldPlace {
             place = Some(match step {
                 HeldStep::Index(index, span) => Place::Element {
                     base: Box::new(place.expect("an index follows a base place")),
+                    index: index.read(builder),
+                    span: span.clone(),
+                },
+                HeldStep::SliceIndex { slice, index, span } => Place::SliceElement {
+                    slice: slice.read(builder),
                     index: index.read(builder),
                     span: span.clone(),
                 },

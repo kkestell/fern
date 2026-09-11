@@ -1,0 +1,76 @@
+type Node struct {
+    children: []Node,
+}
+
+type Holder struct {
+    values: []int,
+}
+
+var zero: []int;
+
+fn echo(values: []int) -> []int {
+    return values;
+}
+
+fn count_read_only(values: []const int) -> int {
+    return len(values);
+}
+
+fn main() -> void {
+    var mutable: [4]int = [1, 2, 3, 4];
+    const immutable: [4]int = [5, 6, 7, 8];
+    var pointer: *[4]int = &mutable;
+
+    var full = mutable[:];
+    var from_low = mutable[1:];
+    var to_high = mutable[:3];
+    var middle = mutable[1:3];
+    var through_pointer = pointer[1:3];
+    var frozen = immutable[:];
+    var empty: []int;
+
+    middle[0] = 20;
+    if mutable[1] != 20 || full[1] != 20 || through_pointer[0] != 20 {
+        exit(1);
+    }
+    if len(full) != 4 || len(mutable[1:3]) != 2 || len(from_low) != 3 {
+        exit(2);
+    }
+    if len(to_high) != 3 || len(frozen) != 4 || len(empty) != 0 || len(zero) != 0 {
+        exit(3);
+    }
+
+    var copied = middle;
+    var returned = echo(copied);
+    var holder = Holder { values = returned };
+    var slots: [2][]int;
+    slots[0] = holder.values;
+    slots[1] = mutable[:];
+    if slots[0][0] != 20 || count_read_only(slots[1]) != 4 {
+        exit(4);
+    }
+
+    var total = 0;
+    for value in returned {
+        total += value;
+    }
+    for value, index in returned {
+        total += value - index;
+    }
+    if total != 45 {
+        exit(5);
+    }
+
+    var same: [2]int = [20, 3];
+    var different: [2]int = [20, 4];
+    const frozen_same: [2]int = [20, 3];
+    if returned != same[:] || returned == different[:] || empty != zero || returned != frozen_same[:] {
+        exit(6);
+    }
+
+    var node: Node;
+    if len(node.children) != 0 {
+        exit(7);
+    }
+    exit(44);
+}

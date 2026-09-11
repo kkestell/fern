@@ -886,7 +886,8 @@ impl Parser<'_> {
 
     /// Parses a type annotation, which is a built-in scalar name, a declared
     /// type name, one or more `[ … ]` lengths in front of an element
-    /// annotation, or `*` or `*const` in front of a target annotation.
+    /// annotation, a slice annotation, or `*` or `*const` in front of a target
+    /// annotation.
     fn type_annotation(&mut self) -> Result<Idx<TypeAnnotation>, Diagnostic> {
         let start = self.span.start;
         if self.current == Some(Token::Star) {
@@ -920,6 +921,20 @@ impl Parser<'_> {
         }
         self.enter_nesting()?;
         self.advance()?;
+        if self.current == Some(Token::RightBracket) {
+            self.advance()?;
+            let constant = self.current == Some(Token::Const);
+            if constant {
+                self.advance()?;
+            }
+            let element = self.type_annotation()?;
+            self.nesting -= 1;
+            let span = start..self.syntax.annotations[element].span.end;
+            return Ok(self.syntax.annotations.alloc(TypeAnnotation {
+                kind: AnnotationKind::Slice { constant, element },
+                span,
+            }));
+        }
         let length = if self.current == Some(Token::Name) && self.lexer.slice() == "_" {
             self.advance()?;
             None
@@ -1086,19 +1101,44 @@ impl Parser<'_> {
         let mut operand = self.primary_expression(literals)?;
         loop {
             let step_span = self.span.clone();
-            // Each step's own depth is its index expression's, and a field
-            // selection carries no subexpression of its own.
+            // Each step's own depth is its bound or index expression's, and a
+            // field selection carries no subexpression of its own.
             let (kind, end, step_depth) = match self.current {
                 Some(Token::LeftBracket) => {
                     self.enter_nesting()?;
                     self.advance()?;
-                    let index = self.expression()?;
-                    let end = self
-                        .expect(Token::RightBracket, "expected `]` after index")?
-                        .end;
+                    let low = if self.current == Some(Token::Colon) {
+                        None
+                    } else {
+                        Some(self.expression()?)
+                    };
+                    let (kind, end, depth) = if self.current == Some(Token::Colon) {
+                        self.advance()?;
+                        let high = if self.current == Some(Token::RightBracket) {
+                            None
+                        } else {
+                            Some(self.expression()?)
+                        };
+                        let end = self
+                            .expect(Token::RightBracket, "expected `]` after slice bounds")?
+                            .end;
+                        let depth = low
+                            .iter()
+                            .chain(high.iter())
+                            .map(|&bound| self.syntax.expressions[bound].depth)
+                            .max()
+                            .unwrap_or(0);
+                        (ExpressionKind::Slice { operand, low, high }, end, depth)
+                    } else {
+                        let index = low.expect("an index expression is present without `:`");
+                        let end = self
+                            .expect(Token::RightBracket, "expected `]` after index")?
+                            .end;
+                        let depth = self.syntax.expressions[index].depth;
+                        (ExpressionKind::Index { operand, index }, end, depth)
+                    };
                     self.nesting -= 1;
-                    let depth = self.syntax.expressions[index].depth;
-                    (ExpressionKind::Index { operand, index }, end, depth)
+                    (kind, end, depth)
                 }
                 Some(Token::Dot) => {
                     self.advance()?;

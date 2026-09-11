@@ -196,6 +196,11 @@ pub(crate) enum AnnotationKind {
         constant: bool,
         target: Idx<TypeAnnotation>,
     },
+    /// `[]T`, or `[]const T` when `constant` is set.
+    Slice {
+        constant: bool,
+        element: Idx<TypeAnnotation>,
+    },
 }
 
 /// One `field = e` initializer of a struct literal.
@@ -292,6 +297,11 @@ pub(crate) enum ExpressionKind {
         operand: Idx<Expression>,
         index: Idx<Expression>,
     },
+    Slice {
+        operand: Idx<Expression>,
+        low: Option<Idx<Expression>>,
+        high: Option<Idx<Expression>>,
+    },
     Length {
         operand: Idx<Expression>,
     },
@@ -378,6 +388,15 @@ pub(crate) fn walk_expression(
         } => {
             walk_expression(syntax, *left, visit);
             walk_expression(syntax, *right, visit);
+        }
+        ExpressionKind::Slice { operand, low, high } => {
+            walk_expression(syntax, *operand, visit);
+            if let Some(low) = low {
+                walk_expression(syntax, *low, visit);
+            }
+            if let Some(high) = high {
+                walk_expression(syntax, *high, visit);
+            }
         }
         ExpressionKind::Call(call) => {
             for &argument in &call.arguments {

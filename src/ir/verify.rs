@@ -34,6 +34,14 @@ fn verify_literal(literal: &Literal) -> Result<Type, CompileError> {
         }
         return Ok(ty.clone());
     }
+    if let Literal::EmptySlice(ty) = literal {
+        if !matches!(ty, Type::Slice { .. }) {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR empty slice has non-slice type `{ty}`"
+            )));
+        }
+        return Ok(ty.clone());
+    }
     let Literal::Integer { value, ty } = literal else {
         return Ok(literal.ty());
     };
@@ -89,6 +97,10 @@ fn valid_value(
                             (&left, &right),
                             (Type::Pointer { target: left, .. }, Type::Pointer { target: right, .. }) if left == right
                         )
+                        || matches!(
+                            (&left, &right),
+                            (Type::Slice { element: left, .. }, Type::Slice { element: right, .. }) if left == right
+                        )
                 } else {
                     left == operand_type(right.clone())? && left.scalar().is_some()
                 })
@@ -97,6 +109,28 @@ fn valid_value(
             value.span.is_some()
                 && value.ty == Scalar::Bool.into()
                 && operand_type(operand.clone())? == Scalar::Bool.into()
+        }
+        ValueKind::WholeSlice(place) => {
+            let place = place_type(place)?;
+            value.span.is_none()
+                && matches!(
+                    (&place, &value.ty),
+                    (Type::Array { element: source, .. }, Type::Slice { element: destination, .. })
+                        if source == destination
+                )
+        }
+        ValueKind::SliceRange { slice, low, high } => {
+            let source = operand_type(slice.clone())?;
+            value.span.is_some()
+                && operand_type(low.clone())? == Scalar::Int.into()
+                && operand_type(high.clone())? == Scalar::Int.into()
+                && matches!(&source, Type::Slice { .. })
+                && source.value_compatible(&value.ty)
+        }
+        ValueKind::SliceLength { slice } => {
+            value.span.is_none()
+                && value.ty == Scalar::Int.into()
+                && matches!(operand_type(slice.clone())?, Type::Slice { .. })
         }
         ValueKind::Convert { .. } | ValueKind::Unary { .. } | ValueKind::Binary { .. } => {
             valid_numeric_operation(value, operand_type)?
@@ -189,6 +223,7 @@ fn contained_struct(ty: &Type) -> Option<usize> {
     match ty {
         Type::Scalar(_) => None,
         Type::Pointer { .. } => None,
+        Type::Slice { .. } => None,
         Type::Array { element, .. } => contained_struct(element),
         Type::Struct(declared) => Some(declared.id.0),
     }
@@ -305,6 +340,21 @@ impl Program {
                 };
                 Ok(*target)
             }
+            Place::SliceElement { slice, index, .. } => {
+                let slice = operand_type(slice.clone())?;
+                let Type::Slice { element, .. } = slice else {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR indexes slice value `{slice}`"
+                    )));
+                };
+                let index = operand_type(index.clone())?;
+                if index != Scalar::Int.into() {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR index has type `{index}`, expected `int`"
+                    )));
+                }
+                Ok(*element)
+            }
         }
     }
 
@@ -371,6 +421,7 @@ impl Program {
         match ty {
             Type::Scalar(_) => Ok(()),
             Type::Pointer { target, .. } => self.verify_type(target),
+            Type::Slice { element, .. } => self.verify_type(element),
             Type::Array { element, .. } => self.verify_type(element),
             Type::Struct(declared) if declared.id.0 < self.structs.len() => Ok(()),
             Type::Struct(declared) => Err(CompileError::new(format!(
@@ -405,6 +456,7 @@ impl Program {
         match ty {
             Type::Scalar(scalar) => types.push((*scalar).into()),
             Type::Pointer { .. } => types.push(ty.clone()),
+            Type::Slice { .. } => types.push(ty.clone()),
             Type::Array { length, element } => {
                 for _ in 0..*length {
                     self.scalar_types(element, types);
@@ -450,6 +502,7 @@ impl Program {
         match ty {
             Type::Scalar(_) => Some(1),
             Type::Pointer { .. } => Some(1),
+            Type::Slice { .. } => Some(1),
             Type::Array { length, element } => length.checked_mul(self.scalar_count(element)?),
             Type::Struct(declared) => self.structs[declared.id.0]
                 .fields

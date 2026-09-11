@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn slices_lower_as_values_ranges_elements_lengths_and_iteration() {
+    let program = lowered(
+        "fn main() -> void {
+             var a: [3]int = [1, 2, 3];
+             var s = a[1:];
+             s[0] = 4;
+             var n = len(s);
+             for value in s { n += value; }
+         }",
+    );
+    let main = main_of(&program);
+    assert!(
+        main.values
+            .iter()
+            .any(|value| matches!(value.kind, ValueKind::WholeSlice(_)))
+    );
+    assert!(
+        main.values
+            .iter()
+            .any(|value| matches!(value.kind, ValueKind::SliceRange { .. }))
+    );
+    assert!(
+        main.values
+            .iter()
+            .any(|value| matches!(value.kind, ValueKind::SliceLength { .. }))
+    );
+    assert!(
+        stores(main)
+            .iter()
+            .any(|(place, _)| matches!(place, Place::SliceElement { .. }))
+    );
+    assert!(
+        main.values
+            .iter()
+            .any(|value| matches!(value.kind, ValueKind::Load(Place::SliceElement { .. })))
+    );
+}
+
+#[test]
+fn slice_zero_values_lower_to_typed_empty_literals() {
+    let program = lowered(
+        "var global: []int;
+         fn main() -> void { var local: []int; }",
+    );
+    assert!(matches!(
+        program.program().globals[0].values.as_slice(),
+        [Literal::EmptySlice(Type::Slice { .. })]
+    ));
+    assert!(
+        stores(main_of(&program))
+            .iter()
+            .any(|(_, operand)| matches!(
+                operand,
+                Operand::Literal(Literal::EmptySlice(Type::Slice { .. }))
+            ))
+    );
+}
+
+#[test]
 fn pointers_lower_to_typed_nulls_addresses_and_indirect_places() {
     let program = lowered(
         "var global: *int;

@@ -291,6 +291,20 @@ fn module_bindings_resolve_forward_references_and_enclose_every_function() {
 }
 
 #[test]
+fn an_annotation_orders_the_array_lengths_behind_a_pointer_or_slice() {
+    for annotation in ["[][n]int", "*[n]int", "[]*[n]int", "[][2][n]int"] {
+        for text in [
+            format!("var value: {annotation}; const n = 2; fn main() -> void {{}}"),
+            format!("const n = 2; var value: {annotation}; fn main() -> void {{}}"),
+        ] {
+            check_root(&parse(&text).unwrap()).unwrap_or_else(|error| {
+                panic!("{text}: {}", error.message);
+            });
+        }
+    }
+}
+
+#[test]
 fn module_binding_failures_identify_the_declaration_contract() {
     for (text, offending, message) in [
         (

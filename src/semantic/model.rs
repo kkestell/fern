@@ -37,6 +37,7 @@ pub(super) const MAX_AGGREGATE_INITIALIZER_VALUES: u64 = 1_000_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Constant {
     Null,
+    EmptySlice,
     Integer(BigInt),
     Rational(BigRational),
     Float(Float),
@@ -51,9 +52,12 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Null | Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => {
-                None
-            }
+            Self::Null
+            | Self::EmptySlice
+            | Self::Rational(_)
+            | Self::Float(_)
+            | Self::Array(_)
+            | Self::Struct(_) => None,
         }
     }
 
@@ -61,9 +65,12 @@ impl Constant {
     pub(crate) fn rational(&self) -> Option<&BigRational> {
         match self {
             Self::Rational(value) => Some(value),
-            Self::Null | Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => {
-                None
-            }
+            Self::Null
+            | Self::EmptySlice
+            | Self::Integer(_)
+            | Self::Float(_)
+            | Self::Array(_)
+            | Self::Struct(_) => None,
         }
     }
 
@@ -72,6 +79,7 @@ impl Constant {
         match self {
             Self::Float(value) => Some(*value),
             Self::Null
+            | Self::EmptySlice
             | Self::Integer(_)
             | Self::Rational(_)
             | Self::Array(_)
@@ -169,6 +177,12 @@ pub(crate) enum ExpressionValue {
         index: Idx<Expression>,
         implicit_dereference: bool,
     },
+    Slice {
+        operand: Idx<Expression>,
+        low: Option<Idx<Expression>>,
+        high: Option<Idx<Expression>>,
+        implicit_dereference: bool,
+    },
     /// A struct literal. `initializers` are the written fields in source
     /// order, which is the order they are evaluated in, and `filled` holds
     /// the zero value `...` gives each field the literal omits.
@@ -242,6 +256,11 @@ pub(crate) struct CheckedLocation {
 #[derive(Debug)]
 pub(crate) enum CheckedLocationKind {
     Binding(Idx<Binding>),
+    /// A slice value that is not itself a location. Its elements remain
+    /// locations, so an index may start from it.
+    SliceValue {
+        operand: Idx<Expression>,
+    },
     Index {
         operand: Box<CheckedLocation>,
         index: Idx<Expression>,
@@ -399,6 +418,7 @@ impl CheckedProgram<'_> {
             Type::Scalar(Scalar::F64) => Constant::Float(Float::Binary64(0)),
             Type::Scalar(_) => Constant::Integer(BigInt::ZERO),
             Type::Pointer { .. } => Constant::Null,
+            Type::Slice { .. } => Constant::EmptySlice,
             Type::Array { length, element } => {
                 let length = usize::try_from(*length)
                     .expect("the checked aggregate initializer limit fits usize");
@@ -418,6 +438,7 @@ impl CheckedProgram<'_> {
         match ty {
             Type::Scalar(_) => Some(1),
             Type::Pointer { .. } => Some(1),
+            Type::Slice { .. } => Some(1),
             Type::Array { length, element } => {
                 length.checked_mul(self.aggregate_value_count(element)?)
             }

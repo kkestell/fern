@@ -56,7 +56,11 @@ impl CheckedProgram<'_> {
             }
             AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
                 constant: *constant,
-                target: Box::new(self.resolve_pointer_target(*target, scopes)?),
+                target: Box::new(self.resolve_referenced_type(*target, scopes)?),
+            }),
+            AnnotationKind::Slice { constant, element } => Ok(Type::Slice {
+                constant: *constant,
+                element: Box::new(self.resolve_referenced_type(*element, scopes)?),
             }),
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
@@ -73,16 +77,19 @@ impl CheckedProgram<'_> {
                 })
             }
         }?;
-        if !matches!(&written.kind, AnnotationKind::Pointer { .. }) {
+        if !matches!(
+            &written.kind,
+            AnnotationKind::Pointer { .. } | AnnotationKind::Slice { .. }
+        ) {
             self.validate_aggregate_layout(&ty, &written.span)?;
         }
         Ok(ty)
     }
 
-    /// Resolves the type a pointer reaches without following its inline layout.
-    /// A pointer's representation is independent of that target, so a pointer
-    /// field may be the edge that breaks a recursive struct declaration.
-    fn resolve_pointer_target(
+    /// Resolves a type a pointer targets or a slice contains without following
+    /// its inline layout. Both are reached through the value rather than stored
+    /// in it, so either kind of field may break a recursive struct declaration.
+    fn resolve_referenced_type(
         &mut self,
         annotation: Idx<TypeAnnotation>,
         scopes: &ScopeStack<'_>,
@@ -97,7 +104,11 @@ impl CheckedProgram<'_> {
             }
             AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
                 constant: *constant,
-                target: Box::new(self.resolve_pointer_target(*target, scopes)?),
+                target: Box::new(self.resolve_referenced_type(*target, scopes)?),
+            }),
+            AnnotationKind::Slice { constant, element } => Ok(Type::Slice {
+                constant: *constant,
+                element: Box::new(self.resolve_referenced_type(*element, scopes)?),
             }),
             AnnotationKind::Array { length, element } => {
                 let Some(length) = length else {
@@ -108,7 +119,7 @@ impl CheckedProgram<'_> {
                 };
                 Ok(Type::Array {
                     length: self.array_length(*length, scopes)?,
-                    element: Box::new(self.resolve_pointer_target(*element, scopes)?),
+                    element: Box::new(self.resolve_referenced_type(*element, scopes)?),
                 })
             }
         }

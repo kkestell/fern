@@ -51,6 +51,7 @@ impl Layouts {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
             Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
+            Type::Slice { .. } => scalar_bytes(Scalar::Uint).checked_mul(2),
             Type::Array { length, element } => length.checked_mul(self.size(table, element)?),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.size),
         }
@@ -62,6 +63,7 @@ impl Layouts {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
             Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
+            Type::Slice { .. } => Some(scalar_bytes(Scalar::Uint)),
             Type::Array { element, .. } => self.alignment(table, element),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.alignment),
         }

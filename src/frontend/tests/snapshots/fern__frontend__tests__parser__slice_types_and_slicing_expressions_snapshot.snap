@@ -1,0 +1,263 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+type Node struct name=5..9 span=0..150
+  field children name=23..31
+    slice constant=false span=33..39
+      element
+        named Node span=35..39
+  field values name=45..51
+    slice constant=true span=53..64
+      element
+        scalar int span=61..64
+  field pointers name=70..78
+    slice constant=false span=80..86
+      element
+        pointer constant=false span=82..86
+          target
+            scalar int span=83..86
+  field frozen_pointers name=92..107
+    slice constant=true span=109..127
+      element
+        pointer constant=true span=117..127
+          target
+            scalar int span=124..127
+  field rows name=133..137
+    array span=139..147
+      length
+        integer 3 span=140..141
+      element
+        slice constant=false span=142..147
+          element
+            scalar int span=144..147
+fn take name=154..158 span=151..336
+  parameter values name=164..170
+    slice constant=false span=172..177
+      element
+        scalar int span=174..177
+  parameter frozen name=183..189
+    slice constant=true span=191..202
+      element
+        scalar int span=199..202
+  parameter matrix name=208..214
+    slice constant=false span=216..223
+      element
+        slice constant=false span=218..223
+          element
+            scalar int span=220..223
+  parameter frozen_matrix name=229..242
+    slice constant=true span=244..257
+      element
+        slice constant=false span=252..257
+          element
+            scalar int span=254..257
+  parameter row name=263..266
+    slice constant=false span=268..276
+      element
+        array span=270..276
+          length
+            integer 3 span=271..272
+          element
+            scalar int span=273..276
+  parameter pointer name=282..289
+    pointer constant=false span=291..297
+      target
+        slice constant=false span=292..297
+          element
+            scalar int span=294..297
+  result
+    slice constant=false span=304..309
+      element
+        scalar int span=306..309
+  return span=316..334
+    slice span=323..333
+      operand
+        reference values span=323..329
+      low
+        integer 1 span=330..331
+      high omitted
+fn main name=340..344 span=337..978
+  result void
+  var writable name=365..373 span=361..381
+    slice constant=false span=375..380
+      element
+        scalar int span=377..380
+  const first name=392..397 span=386..407
+    slice span=400..406
+      operand
+        reference a span=400..401
+      low
+        integer 1 span=402..403
+      high
+        integer 3 span=404..405
+  const rest name=418..422 span=412..431
+    slice span=425..430
+      operand
+        reference a span=425..426
+      low
+        integer 1 span=427..428
+      high omitted
+  const prefix name=442..448 span=436..457
+    slice span=451..456
+      operand
+        reference a span=451..452
+      low omitted
+      high
+        integer 3 span=454..455
+  const all name=468..471 span=462..479
+    slice span=474..478
+      operand
+        reference a span=474..475
+      low omitted
+      high omitted
+  const nested name=490..496 span=484..509
+    slice span=499..508
+      operand
+        index span=499..503
+          reference m span=499..500
+          integer 0 span=501..502
+      low
+        integer 1 span=504..505
+      high
+        integer 2 span=506..507
+  const element name=520..527 span=514..540
+    index span=530..539
+      slice span=530..536
+        operand
+          reference s span=530..531
+        low
+          integer 1 span=532..533
+        high
+          integer 3 span=534..535
+      integer 0 span=537..538
+  const field name=551..556 span=545..568
+    field f name=566..567 span=559..567
+      slice span=559..565
+        operand
+          reference s span=559..560
+        low
+          integer 1 span=561..562
+        high
+          integer 3 span=563..564
+  const through_pointer name=579..594 span=573..604
+    slice span=597..603
+      operand
+        reference p span=597..598
+      low
+        integer 1 span=599..600
+      high
+        integer 2 span=601..602
+  const returned name=615..623 span=609..656
+    slice span=626..655
+      operand
+        call take target=626..630 left_paren=630..631 right_paren=650..651 span=626..651
+          reference a span=631..632
+          reference a span=634..635
+          reference grid span=637..641
+          reference rows span=643..647
+          reference p span=649..650
+      low
+        integer 1 span=652..653
+      high omitted
+  const dereferenced name=667..679 span=661..690
+    dereference operator=682..683 span=682..689
+      slice span=683..689
+        operand
+          reference p span=683..684
+        low
+          integer 1 span=685..686
+        high
+          integer 2 span=687..688
+  const address name=701..708 span=695..719
+    address-of operator=711..712 span=711..718
+      slice span=712..718
+        operand
+          reference s span=712..713
+        low
+          integer 1 span=714..715
+        high
+          integer 2 span=716..717
+  const count name=730..735 span=724..750
+    len span=738..749
+      slice span=742..748
+        operand
+          reference s span=742..743
+        low
+          integer 1 span=744..745
+        high
+          integer 3 span=746..747
+  const same name=761..765 span=755..783
+    comparison Equal operator=775..777 span=768..782
+      slice span=768..774
+        operand
+          reference s span=768..769
+        low
+          integer 1 span=770..771
+        high
+          integer 3 span=772..773
+      slice span=778..782
+        operand
+          reference t span=778..779
+        low omitted
+        high omitted
+  const bounds name=794..800 span=788..823
+    slice span=803..822
+      operand
+        reference a span=803..804
+      low
+        binary Add operator=807..808 span=805..810
+          reference i span=805..806
+          integer 1 span=809..810
+      high
+        binary Subtract operator=818..819 span=811..821
+          len span=811..817
+            reference a span=815..816
+          integer 1 span=820..821
+  const qualified_low name=834..847 span=828..859
+    slice span=850..858
+      operand
+        reference a span=850..851
+      low
+        reference m::n span=852..856 qualifier=852..853
+      high omitted
+  const qualified_high name=870..884 span=864..896
+    slice span=887..895
+      operand
+        reference a span=887..888
+      low omitted
+      high
+        reference m::n span=890..894 qualifier=890..891
+  const indexed_bounds name=907..921 span=901..937
+    slice span=924..936
+      operand
+        reference a span=924..925
+      low
+        index span=926..930
+          reference b span=926..927
+          integer 0 span=928..929
+      high
+        index span=931..935
+          reference b span=931..932
+          integer 1 span=933..934
+  assign span=942..953
+    target
+      slice span=942..948
+        operand
+          reference s span=942..943
+        low
+          integer 1 span=944..945
+        high
+          integer 2 span=946..947
+    value
+      reference e span=951..952
+  for label=- label_span=None span=958..976
+    iteration value=v index=- index_span=None
+      slice span=967..973
+        operand
+          reference s span=967..968
+        low
+          integer 1 span=969..970
+        high
+          integer 3 span=971..972
+    body

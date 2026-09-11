@@ -1,0 +1,35 @@
+// Slices are lightweight views of contiguous array storage. Their type records
+// whether writes through the view are allowed.
+fn total(values: []const int) -> int {
+    var result = 0;
+    for value, index in values {
+        result += value + index;
+    }
+    return result;
+}
+
+fn main() -> void {
+    var values: [4]int = [1, 2, 3, 4];
+
+    // The four slicing forms select an inclusive-low, exclusive-high range.
+    var all = values[:];
+    var tail = values[1:];
+    var head = values[:3];
+    var middle = values[1:3];
+
+    // A copied slice still views the same elements, so writes are shared.
+    var copied = middle;
+    copied[0] = 20;
+    if all[1] != 20 || len(tail) != 3 || len(head) != 3 {
+        exit(1);
+    }
+
+    // The zero value is an empty slice. Mutable slices pass as read-only ones.
+    var empty: []int;
+    const read_only: []const int = copied;
+    if len(empty) != 0 || copied != values[1:3] {
+        exit(2);
+    }
+
+    exit(total(read_only));
+}

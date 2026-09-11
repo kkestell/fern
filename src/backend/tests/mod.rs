@@ -151,4 +151,5 @@ mod emitter;
 mod floating;
 mod integer;
 mod pointers;
+mod slices;
 mod structs;

@@ -27,6 +27,8 @@ The examples form a tour of the currently supported language, grouped by topic:
 - [Pointers](examples/pointers.fern) covers mutable and const pointer types,
   `null`, address-of, explicit and implicit dereference, indirect assignment,
   pointer copies, comparison, and conversion to `uint`.
+- [Slices](examples/slices.fern) covers mutable and const slice types, slicing,
+  indexing, `len`, copying, iteration, and comparison.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is

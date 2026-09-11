@@ -36,6 +36,105 @@ fn annotations_resolve_to_array_types() {
 }
 
 #[test]
+fn slice_annotations_are_accepted_in_every_position() {
+    for source in [
+        "var values: []int; fn main() -> void {}",
+        "fn main() -> void { var values: []int; }",
+        "fn take(values: []int) -> void {} fn main() -> void {}",
+        "fn make() -> []int { for {} } fn main() -> void {}",
+        "type Node struct { children: []Node } fn main() -> void {}",
+        "var rows: [3][]int; fn main() -> void {}",
+        "var values: [][]int; fn main() -> void {}",
+    ] {
+        accepts_source(source);
+    }
+}
+
+#[test]
+fn slice_annotations_resolve_to_their_written_types() {
+    assert_eq!(
+        checked_bindings(
+            "var mutable: []int;
+             const immutable: []const int;
+             var nested: [][]int;
+             var pointers: []*const int;
+             var slice_pointer: *[]int;
+             var rows: [3][]int;
+             type Point struct { x: int }
+             var points: []Point;
+             fn main() -> void {}"
+        ),
+        [
+            (slice_type(false, value_type(Scalar::Int)), None),
+            (
+                slice_type(true, value_type(Scalar::Int)),
+                Some(Constant::EmptySlice)
+            ),
+            (
+                slice_type(false, slice_type(false, value_type(Scalar::Int))),
+                None
+            ),
+            (
+                slice_type(false, pointer_type(true, value_type(Scalar::Int))),
+                None
+            ),
+            (
+                pointer_type(false, slice_type(false, value_type(Scalar::Int))),
+                None
+            ),
+            (
+                array_type(3, slice_type(false, value_type(Scalar::Int))),
+                None
+            ),
+            (slice_type(false, struct_type(0, "Point")), None),
+        ]
+    );
+}
+
+#[test]
+fn slices_break_struct_containment_and_have_a_fixed_layout() {
+    let syntax = parse(
+        "type Node struct { children: []Node }
+         fn main() -> void {}",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let node = struct_type(0, "Node");
+    assert_eq!(
+        struct_fields(&checked, 0),
+        [("children".to_owned(), slice_type(false, node.clone()))]
+    );
+    assert_eq!(
+        checked.layouts.size(&checked, &node),
+        Some(2 * crate::layout::scalar_bytes(Scalar::Uint))
+    );
+
+    for source in [
+        "type Node struct { child: Node } fn main() -> void {}",
+        "type Node struct { children: [2]Node } fn main() -> void {}",
+    ] {
+        rejects_source(source, "Node", "recursive struct type `Node`");
+    }
+}
+
+#[test]
+fn slice_elements_retain_annotation_element_rules() {
+    rejects_root(
+        "var values: []«[_]int»; fn main() -> void {}",
+        "`[_]` requires an array-literal initializer",
+    );
+}
+
+#[test]
+fn slice_layouts_count_as_two_pointer_width_words() {
+    accepts_source("fn take(value: [70368744177664][]int) -> void {} fn main() -> void {}");
+    rejects_root(
+        "fn take(value: «[70368744177665][]int») -> void {} fn main() -> void {}",
+        "aggregate layout exceeds compiler limit of 1 PiB",
+    );
+}
+
+#[test]
 fn an_underscore_length_comes_from_an_array_literal_initializer() {
     assert_eq!(
         checked_bindings("var a: [_]int = [1, 2, 3]; fn main() -> void {}")[0].0,

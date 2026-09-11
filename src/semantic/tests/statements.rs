@@ -49,7 +49,7 @@ fn for_in_binds_an_element_and_an_optional_index() {
     );
     rejects_root(
         "fn main() -> void { var x = 1; for v in «x» {} }",
-        "`for … in` requires an array, found `int`",
+        "`for … in` requires an array or slice, found `int`",
     );
 }
 
@@ -635,7 +635,9 @@ fn checked_target_steps(source: &str) -> Vec<Vec<String>> {
         .map(|(_, target)| {
             fn steps(location: &CheckedLocation, found: &mut Vec<String>) {
                 match &location.kind {
-                    CheckedLocationKind::Binding(_) | CheckedLocationKind::Dereference { .. } => {}
+                    CheckedLocationKind::Binding(_)
+                    | CheckedLocationKind::SliceValue { .. }
+                    | CheckedLocationKind::Dereference { .. } => {}
                     CheckedLocationKind::Index { operand, .. } => {
                         steps(operand, found);
                         found.push("index".to_owned());
@@ -863,4 +865,47 @@ fn an_assignment_target_must_be_a_location() {
         "type Point struct { x: int }
          fn main() -> void { var p = Point { x = 1 }; (p).x = 2; }",
     );
+}
+
+#[test]
+fn a_slicing_expression_is_not_an_assignment_location() {
+    rejects_source(
+        "fn main() -> void { var values: [3]int = [1, 2, 3]; values[1:2] = values[0]; }",
+        "values[1:2]",
+        "cannot assign to an expression that is not a location",
+    );
+}
+
+#[test]
+fn slice_elements_follow_slice_mutability_and_iteration_rules() {
+    accepts_source(
+        "fn main() -> void {
+             var s: []int;
+             const c: []int;
+             s[0] = 1;
+             c[0] += 1;
+             for v, i in s { exit(i); }
+         }",
+    );
+    accepts_source(
+        "fn main() -> void {
+             var a: [3]int = [1, 2, 3];
+             a[1:][0] = 1;
+             for v in a[1:] { exit(v); }
+         }",
+    );
+    for (source, offending, message) in [
+        (
+            "fn main() -> void { var s: []const int; s[0] = 1; }",
+            "s[0]",
+            "cannot assign to an immutable location",
+        ),
+        (
+            "fn main() -> void { var s: []int; for v in s { v = 1; } }",
+            "v",
+            "cannot assign to immutable binding `v`",
+        ),
+    ] {
+        rejects_source(source, offending, message);
+    }
 }

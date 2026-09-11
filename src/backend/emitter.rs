@@ -67,6 +67,9 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
                 Operand::Literal(Literal::Null(_)) => {
                     unreachable!("a verified index has type `int`")
                 }
+                Operand::Literal(Literal::EmptySlice(_)) => {
+                    unreachable!("a verified index has type `int`")
+                }
                 Operand::Value(_) => false,
             };
             let index = operand(index.clone());
@@ -151,6 +154,65 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
             };
             (pointer_text, *target)
         }
+        Place::SliceElement { slice, index, span } => {
+            let access = emitter.accesses;
+            emitter.accesses += 1;
+            let slice_text = operand(slice.clone());
+            let slice_ty = operand_type(function, slice.clone());
+            let spelling = slice_ty.to_string();
+            let Type::Slice { element, .. } = slice_ty else {
+                unreachable!("a verified slice element place has a slice operand")
+            };
+            let index = operand(index.clone());
+            writeln!(
+                emitter.text,
+                "    %access{access}_base =l loadl {slice_text}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %access{access}_lengthaddress =l add {slice_text}, {}",
+                emitter.layout.slice_length_offset()
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %access{access}_length =l loadl %access{access}_lengthaddress"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %access{access}_out =w {} {index}, %access{access}_length",
+                comparison_operation("ge", false, Scalar::Int)
+            )
+            .unwrap();
+            let message = operation_message(
+                Some(span),
+                emitter.diagnostics.as_ref(),
+                &format!("slice index out of range for `{spelling}`"),
+            );
+            emit_conditional_trap(
+                &mut emitter.text,
+                &mut emitter.data,
+                emitter.function,
+                access,
+                "bounds",
+                &format!("%access{access}_out"),
+                message,
+            );
+            writeln!(
+                emitter.text,
+                "    %access{access}_offset =l mul {index}, {}",
+                emitter.layout.size(&element)
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %access{access}_address =l add %access{access}_base, %access{access}_offset"
+            )
+            .unwrap();
+            (format!("%access{access}_address"), *element)
+        }
     }
 }
 
@@ -159,6 +221,8 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
+        helpers: String::new(),
+        slice_equalities: Vec::new(),
         layout: Layout::new(&program.structs),
         globals: &program.globals,
         functions: &program.functions,
@@ -169,6 +233,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         comparisons: 0,
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
+    emitter.data.push_str("data $emptyslice = { l 0, l 0 }\n");
     for (id, global) in program.globals.iter().enumerate() {
         // A global holds its scalars where the layout puts them, so the gaps
         // between them and the padding after the last one are zeroed.
@@ -231,7 +296,10 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emit_control_flow(&mut emitter, function, &function.flow);
         emitter.text.push_str("}\n");
     }
-    emitter.layout.type_definitions(&program.functions) + &emitter.data + &emitter.text
+    emitter.layout.type_definitions(&program.functions)
+        + &emitter.data
+        + &emitter.text
+        + &emitter.helpers
 }
 
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
@@ -248,7 +316,12 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     // once per `alloc` it executes, so the storage is allocated here rather
     // than where the load runs, which may be inside a loop.
     for (id, value) in function.values.iter().enumerate() {
-        if matches!(value.kind, ValueKind::Load(_)) && value.ty.scalar().is_none() {
+        if (matches!(value.kind, ValueKind::Load(_)) && value.ty.scalar().is_none())
+            || matches!(
+                value.kind,
+                ValueKind::WholeSlice(_) | ValueKind::SliceRange { .. }
+            )
+        {
             writeln!(
                 emitter.text,
                 "    %v{id}_storage =l {} {}",
@@ -270,7 +343,7 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
             Type::Pointer { .. } => {
                 writeln!(emitter.text, "    storel %param{index}, %local{index}")
             }
-            Type::Array { .. } | Type::Struct(_) => writeln!(
+            Type::Slice { .. } | Type::Array { .. } | Type::Struct(_) => writeln!(
                 emitter.text,
                 "    blit %param{index}, %local{index}, {}",
                 emitter.layout.size(ty)
@@ -308,7 +381,7 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
                     qbe_type(scalar)
                 ),
                 Type::Pointer { .. } => writeln!(emitter.text, "    storel {source}, {address}"),
-                Type::Array { .. } | Type::Struct(_) => writeln!(
+                Type::Slice { .. } | Type::Array { .. } | Type::Struct(_) => writeln!(
                     emitter.text,
                     "    blit {source}, {address}, {}",
                     emitter.layout.size(&ty)
@@ -421,6 +494,11 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                     writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
                 }
                 Type::Pointer { .. } => writeln!(emitter.text, "    %v{id} =l loadl {address}"),
+                Type::Slice { .. } => writeln!(
+                    emitter.text,
+                    "    blit {address}, %v{id}_storage, {}\n    %v{id} =l copy %v{id}_storage",
+                    emitter.layout.size(&value.ty)
+                ),
                 // Loading an aggregate copies it, so a later call in the same
                 // expression cannot change what the value holds.
                 Type::Array { .. } | Type::Struct(_) => writeln!(
@@ -545,6 +623,106 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                 operand(source.clone())
             )
             .unwrap();
+        }
+        ValueKind::WholeSlice(place) => {
+            let (base, ty) = place_address(emitter, function, place);
+            let Type::Array { length, .. } = ty else {
+                unreachable!("a verified whole slice has an array place")
+            };
+            writeln!(emitter.text, "    storel {base}, %v{id}_storage").unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_lengthaddress =l add %v{id}_storage, {}",
+                emitter.layout.slice_length_offset()
+            )
+            .unwrap();
+            writeln!(emitter.text, "    storel {length}, %v{id}_lengthaddress").unwrap();
+            writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage").unwrap();
+        }
+        ValueKind::SliceRange { slice, low, high } => {
+            let source = operand(slice.clone());
+            let Type::Slice { element, .. } = operand_type(function, slice.clone()) else {
+                unreachable!("a verified slice range has a slice operand")
+            };
+            let low = operand(low.clone());
+            let high = operand(high.clone());
+            writeln!(emitter.text, "    %v{id}_base =l loadl {source}").unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_lengthaddress =l add {source}, {}",
+                emitter.layout.slice_length_offset()
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_length =l loadl %v{id}_lengthaddress"
+            )
+            .unwrap();
+            let greater = comparison_operation("gt", false, Scalar::Int);
+            writeln!(
+                emitter.text,
+                "    %v{id}_backwards =w {greater} {low}, {high}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_past =w {greater} {high}, %v{id}_length"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_out =w or %v{id}_backwards, %v{id}_past"
+            )
+            .unwrap();
+            let message = operation_message(
+                value.span.as_ref(),
+                emitter.diagnostics.as_ref(),
+                &format!("slice bounds out of range for `{}`", value.ty),
+            );
+            emit_conditional_trap(
+                &mut emitter.text,
+                &mut emitter.data,
+                emitter.function,
+                id,
+                "slicebounds",
+                &format!("%v{id}_out"),
+                message,
+            );
+            writeln!(
+                emitter.text,
+                "    %v{id}_offset =l mul {low}, {}",
+                emitter.layout.size(&element)
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_rangebase =l add %v{id}_base, %v{id}_offset"
+            )
+            .unwrap();
+            writeln!(emitter.text, "    %v{id}_rangelength =l sub {high}, {low}").unwrap();
+            writeln!(emitter.text, "    storel %v{id}_rangebase, %v{id}_storage").unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id}_storagelength =l add %v{id}_storage, {}",
+                emitter.layout.slice_length_offset()
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    storel %v{id}_rangelength, %v{id}_storagelength"
+            )
+            .unwrap();
+            writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage").unwrap();
+        }
+        ValueKind::SliceLength { slice } => {
+            let slice = operand(slice.clone());
+            writeln!(
+                emitter.text,
+                "    %v{id}_lengthaddress =l add {slice}, {}",
+                emitter.layout.slice_length_offset()
+            )
+            .unwrap();
+            writeln!(emitter.text, "    %v{id} =l loadl %v{id}_lengthaddress").unwrap();
         }
     }
 }

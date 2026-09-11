@@ -82,13 +82,13 @@
   - [x] Represent pointers and indirect access in Fern IR
   - [x] Load, store, and compare pointers in native code
   - [x] Compile and execute pointer programs and failures
-- [ ] Slices
-  - [ ] Parse slice types and slicing expressions
-  - [ ] Represent slice types across the compiler
-  - [ ] Check slice values, bounds, length, comparison, and iteration
-  - [ ] Represent slices in Fern IR
-  - [ ] Lay out, slice, and access slices in native code
-  - [ ] Compile and execute slice programs and failures
+- [x] Slices
+  - [x] Parse slice types and slicing expressions
+  - [x] Represent slice types across the compiler
+  - [x] Check slice values, bounds, length, comparison, and iteration
+  - [x] Represent slices in Fern IR
+  - [x] Lay out, slice, and access slices in native code
+  - [x] Compile and execute slice programs and failures
 - [ ] Strings
   - [ ] Lex string and character literals and their escapes
   - [ ] Represent the string type across the compiler

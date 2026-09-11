@@ -293,13 +293,18 @@ impl CheckedProgram<'_> {
         scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let checked = self.infer_expression(operand, scopes)?;
-        let Type::Array { element, .. } = &checked.ty else {
-            return Err(Diagnostic::new(
-                self.syntax.expressions[operand].span.clone(),
-                format!("`for … in` requires an array, found `{}`", checked.ty),
-            ));
+        let element = match &checked.ty {
+            Type::Array { element, .. } | Type::Slice { element, .. } => (**element).clone(),
+            _ => {
+                return Err(Diagnostic::new(
+                    self.syntax.expressions[operand].span.clone(),
+                    format!(
+                        "`for … in` requires an array or slice, found `{}`",
+                        checked.ty
+                    ),
+                ));
+            }
         };
-        let element = (**element).clone();
         if let Some((name, span)) = index
             && *name == value
         {
@@ -391,7 +396,7 @@ impl CheckedProgram<'_> {
         if !location.mutable {
             if let Some(binding) = Self::location_binding(&location)
                 && !self.bindings[binding].mutable
-                && !Self::location_uses_pointer(&location)
+                && !Self::location_uses_reference(&location)
             {
                 return Err(Diagnostic::new(
                     location.span.clone(),
@@ -438,15 +443,17 @@ impl CheckedProgram<'_> {
     fn location_binding(location: &CheckedLocation) -> Option<Idx<Binding>> {
         match &location.kind {
             CheckedLocationKind::Binding(binding) => Some(*binding),
+            CheckedLocationKind::SliceValue { .. } => None,
             CheckedLocationKind::Index { operand, .. }
             | CheckedLocationKind::Field { operand, .. } => Self::location_binding(operand),
             CheckedLocationKind::Dereference { .. } => None,
         }
     }
 
-    fn location_uses_pointer(location: &CheckedLocation) -> bool {
+    fn location_uses_reference(location: &CheckedLocation) -> bool {
         match &location.kind {
             CheckedLocationKind::Binding(_) => false,
+            CheckedLocationKind::SliceValue { .. } => true,
             CheckedLocationKind::Index {
                 operand,
                 implicit_dereference,
@@ -456,7 +463,11 @@ impl CheckedProgram<'_> {
                 operand,
                 implicit_dereference,
                 ..
-            } => implicit_dereference.is_some() || Self::location_uses_pointer(operand),
+            } => {
+                implicit_dereference.is_some()
+                    || matches!(operand.ty, Type::Slice { .. })
+                    || Self::location_uses_reference(operand)
+            }
             CheckedLocationKind::Dereference { .. } => true,
         }
     }

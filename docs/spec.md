@@ -23,7 +23,7 @@ clarity, defined behavior, and safe default semantics.
 ### Source text
 
 Source text is encoded in UTF-8. Source text that is not valid UTF-8 is invalid.
-Unicode characters are permitted in comments.
+Unicode characters are permitted where the grammar below allows them.
 
 Outside comments, ASCII space, horizontal tab, line feed, carriage return,
 vertical tab, and form feed are whitespace. Whitespace and comments separate
@@ -61,8 +61,8 @@ var x = 10; // int
 `for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `null`, `true`, and
 `false` are reserved.
 The ten integer type names listed under Integer types, the two floating-point
-type names listed under Floating-point types, and `bool` are also reserved.
-Reserved words cannot be identifiers.
+type names listed under Floating-point types, and `bool`, `rune`, and `string`
+are also reserved. Reserved words cannot be identifiers.
 
 ### Integer literals
 
@@ -105,7 +105,80 @@ hexadecimal floating-point literals, and type suffixes are not allowed.
 
 `1` is an integer literal, while `1.` and `1e0` are floating-point literals.
 Floating-point literals are untyped. Floating-point constant expressions
-defines how they acquire an `f32` or `f64` type.
+define how they acquire an `f32` or `f64` type.
+
+### Escape sequences
+
+Interpreted string literals and character literals recognize these named
+escape sequences:
+
+| Escape | Value |
+|--------|-------|
+| `\0` | U+0000 null |
+| `\a` | U+0007 alert |
+| `\b` | U+0008 backspace |
+| `\f` | U+000C form feed |
+| `\n` | U+000A line feed |
+| `\r` | U+000D carriage return |
+| `\t` | U+0009 horizontal tab |
+| `\v` | U+000B vertical tab |
+| `\\` | U+005C backslash |
+| `\"` | U+0022 double quote |
+| `\'` | U+0027 single quote |
+
+`\u{h}` denotes the Unicode scalar value written by `h`. The braces contain
+one to six hexadecimal digits, using `0`-`9`, `a`-`f`, or `A`-`F`, with no
+digit separators. The value must be no greater than U+10FFFF and must not be a
+surrogate in U+D800-U+DFFF. In a string literal, the scalar is encoded as
+UTF-8. In a character literal, it is the literal's value.
+
+There are no octal or raw-byte escapes. Any unrecognized or incomplete escape
+sequence is invalid.
+
+### Character literals
+
+A character literal is one Unicode scalar value between single quotes. Its
+contents are either one source character or one escape sequence. A direct
+single quote or backslash must be escaped. A line feed or carriage return is
+not permitted within a character literal.
+
+```fern
+'A'
+'é'
+'\n'
+'\u{1F642}'
+```
+
+A character literal is an untyped rune constant.
+[Rune constants](#rune-constants) specifies how it acquires a type. A literal
+containing no scalar or more than one scalar is invalid; Unicode normalization
+is not performed.
+
+### String literals
+
+An interpreted string literal is a sequence of Unicode scalar values and
+escape sequences between double quotes. A direct double quote or backslash
+must be escaped. A line feed or carriage return is not permitted within an
+interpreted string literal. Each scalar is encoded as UTF-8, so every
+interpreted string literal contains valid UTF-8. Literal text is not Unicode
+normalized.
+
+A raw string literal is a sequence of source characters between backticks.
+Every character except a backtick is permitted, including backslashes, line
+feeds, and carriage returns. Its contents are preserved exactly as their UTF-8
+bytes; escape sequences have no special meaning.
+
+```fern
+"hello, 世界\n"
+`C:\new\file`
+`first line
+second line`
+```
+
+A string literal is an untyped string constant.
+[String constants](#string-constants) specifies how it acquires a type.
+Adjacent string literals do not concatenate; without an operator or separator
+between them, the source is invalid.
 
 ## Declarations
 
@@ -190,13 +263,14 @@ type. A typed initializer must have that same type, while an untyped constant
 must be representable by the annotated type;
 [Pointer conversion and comparison](#pointer-conversion-and-comparison) gives
 the one exception. Other numeric conversions must be explicit. Without an
-annotation, the binding takes the initializer's type, with
-untyped integer constants defaulting to `int` and untyped floating-point
-constants defaulting to `f64`. A declaration without an initializer must have a
-type annotation and receives that type's zero value.
+annotation, the binding takes the initializer's type. Untyped integer,
+floating-point, boolean, rune, and string constants default to `int`, `f64`,
+`bool`, `rune`, and `string`, respectively. A declaration without an
+initializer must have a type annotation and receives that type's zero value.
 Zero values are `0` for integer and floating-point types, `false` for `bool`,
-`null` for pointer types, the empty slice for slice types, and recursive zero
-values for arrays and structs. A binding reference has the binding's type.
+U+0000 for `rune`, the empty string for `string`, `null` for pointer types, the
+empty slice for slice types, and recursive zero values for arrays and structs.
+A binding reference has the binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
 
@@ -522,6 +596,9 @@ constant rounds once to the nearest value of the destination floating-point
 type, using round-to-nearest, ties-to-even, and that value must be finite.
 Conversions of a constant expression that would trap are compile-time errors.
 
+`rune` is not a numeric type. [Rune conversions](#rune-conversions) specifies
+its explicit conversions to and from integer types.
+
 #### Truncating conversion
 
 `T.truncate(x)` is defined only when `T` is an integer type and `x` has an
@@ -646,9 +723,9 @@ computing a different result.
 
 ### Indexing and lengths
 
-Slices and strings are specified ahead of their implementation; the
-[TODO](../eng/todo.md) records implementation status. [Arrays](#arrays) and
-[Slices](#slices) specify those types, their values, and their operations.
+The [TODO](../eng/todo.md) records implementation status. [Arrays](#arrays),
+[Slices](#slices), and [Strings](#strings) specify those types, their values,
+and their operations.
 [Implicit dereference](#implicit-dereference) specifies indexing, slicing, and
 `len` through a pointer.
 
@@ -772,6 +849,8 @@ rule.
 
 [Array comparison](#array-comparison) specifies `==` and `!=` on arrays,
 [Slice comparison](#slice-comparison) specifies that slices are not comparable,
+[String comparison](#string-comparison) specifies bytewise string ordering,
+[Rune comparison](#rune-comparison) specifies code-point rune ordering,
 and [Pointer conversion and comparison](#pointer-conversion-and-comparison)
 specifies them on pointers.
 
@@ -833,13 +912,15 @@ specific width should use fixed-width types; their distinctness from `int` and
 |-----------|----------|
 | Constant does not fit target type | Compile error |
 | Constant index out of range | Compile error |
-| Constant slice bound out of range for an array | Compile error |
+| Constant slice bound out of range for an array or constant string | Compile error |
 | Integer constant expression would trap | Compile error |
 | Floating-point constant expression is non-finite | Compile error |
+| Constant integer-to-rune conversion receives a non-scalar value | Compile error |
 | `+ - *` overflow | Trap |
 | Integer `/` or `%` by zero | Trap |
 | `MIN / -1`, `MIN % -1`, `-MIN` | Trap |
 | Checked conversion would discard information | Trap |
+| Runtime integer-to-rune conversion receives a non-scalar value | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
 | Out-of-range slice bounds | Trap |
@@ -978,6 +1059,61 @@ Short-circuiting does not exempt an unevaluated constant operand from the
 compile-time checks that apply to constant expressions. `false && 1 / 0 == 0` is
 rejected.
 
+## Rune Semantics
+
+### The rune type
+
+`rune` is a distinct value type whose values are the Unicode scalar values
+U+0000-U+D7FF and U+E000-U+10FFFF. It has the same 32-bit representation and
+alignment as `u32`, but it is not an integer type. Its zero value is U+0000.
+
+### Rune constants
+
+A character literal is an untyped rune constant. An untyped rune constant may
+acquire type `rune` or a named type whose underlying type is `rune`; it cannot
+acquire an integer type. Without a contextual type, it defaults to `rune`.
+Character literals, rune conversions of integer constant expressions,
+parentheses around rune constant expressions, and references to `const`
+bindings initialized by rune constant expressions are rune constant
+expressions.
+
+```fern
+type Letter rune;
+
+var r = 'A';        // rune
+var letter: Letter = 'A';
+var byte: u8 = 'A'; // invalid: a rune constant does not acquire u8
+```
+
+### Rune conversions
+
+`R(x)`, where `R` is `rune` or a named type whose underlying type is `rune`,
+converts an integer value to that rune type. The value must be in
+U+0000-U+D7FF or U+E000-U+10FFFF; otherwise the conversion traps. `T(r)`
+converts a rune value or untyped rune constant `r` to integer type `T` and
+traps when the scalar value is not representable by `T`. Either conversion is
+a compile-time error instead when its operand is constant and the conversion
+would trap.
+
+```fern
+var ascii = u8('A');
+var face = rune(0x1F642);
+var invalid = rune(0xD800); // compile error: surrogate
+```
+
+Truncating conversions to or from `rune` are not defined. There is no built-in
+conversion from a rune to a string.
+
+### Rune comparison
+
+`==`, `!=`, `<`, `<=`, `>`, and `>=` compare two rune values by Unicode scalar
+value and yield `bool`. An untyped rune constant adopts the other operand's
+rune type. A comparison is a constant expression when both operands are
+constant expressions, and its result is then an untyped boolean constant.
+
+Arithmetic, wrapping, bitwise, shift, and logical operators are not defined on
+runes.
+
 ## Arrays
 
 ### Array types
@@ -1109,11 +1245,12 @@ len(a)
 ```
 
 `len` is a reserved word and uses call syntax without being a call, as an
-integer conversion does. Its operand is an expression of array or slice type,
-or a pointer to one under [Implicit dereference](#implicit-dereference). A
-trailing comma after that operand is permitted, and the result has type `int`.
-The rest of this section specifies the array case;
-[Slice length](#slice-length) specifies the slice case.
+integer conversion does. Its operand is an expression of array, slice, or
+string type, or a pointer to one under
+[Implicit dereference](#implicit-dereference). A trailing comma after that
+operand is permitted, and the result has type `int`. The rest of this section
+specifies the array case; [Slice length](#slice-length) and
+[String length](#string-length) specify the other cases.
 
 `len(a)` yields the length recorded in the operand's type. The operand is still
 evaluated, so a trap inside it, such as an out-of-range index, still occurs.
@@ -1262,12 +1399,13 @@ means `(*p)[lo:hi]`, and `len(p)` means `len(*p)`. Each traps when `p` is
 `null`. Because a pointer operand can trap, `len(p)` is never a constant
 expression.
 
-The result is a location whose mutability follows the pointer, so `p.x = e;` is
-valid when `p` has type `*Point` and invalid when it has type `*const Point`.
+When the corresponding non-pointer expression produces a location, its
+mutability follows the pointer. For example, `p.x = e;` is valid when `p` has
+type `*Point` and invalid when `p` has type `*const Point`.
 
 One level is dereferenced, not a chain: for `pp` of type `**Point`, write
 `(*pp).x`. Implicit dereference applies to these four forms and nowhere else;
-iterating the array a pointer refers to is written `for v in *p`.
+iterating the value a pointer refers to is written `for v in *p`.
 
 ```fern
 type Point struct {
@@ -1400,12 +1538,13 @@ a[:hi]
 a[:]
 ```
 
-A slicing expression yields a slice of the elements of `a` from index `lo` up
-to but not including index `hi`. Its length is `hi - lo`. An omitted `lo` means
-`0` and an omitted `hi` means `len(a)`, so `a[:]` covers all of `a`. `lo` and
-`hi` have the type given under
+For an array or slice operand, a slicing expression yields a slice of the
+elements of `a` from index `lo` up to but not including index `hi`. Its length
+is `hi - lo`. An omitted `lo` means `0` and an omitted `hi` means `len(a)`, so
+`a[:]` covers all of `a`. `lo` and `hi` have the type given under
 [Indexing and lengths](#indexing-and-lengths). There is no third bound, because
-a slice has no capacity to set.
+a slice has no capacity to set. [String slicing](#string-slicing) specifies the
+string case.
 
 The operand may be an array that is a location, a slice, or a pointer to an
 array under [Implicit dereference](#implicit-dereference). An array that is not
@@ -1490,11 +1629,124 @@ neither are `<`, `<=`, `>`, `>=`, nor the arithmetic, bitwise, and logical
 operators. A slice is never `null`, so it is not compared to `null` either;
 `len(s) == 0` tests for emptiness.
 
-Comparability follows the types whose size is part of their type. A slice's
-length is part of its value instead, so a slice is not comparable, and neither
-is a struct with a slice field nor an array whose element type is a slice, by
-the rules under [Struct literals](#struct-literals) and
+A struct with a slice field and an array whose element type is a slice are also
+not comparable, by the rules under [Struct literals](#struct-literals) and
 [Array comparison](#array-comparison).
+
+## Strings
+
+### The string type
+
+`string` is a distinct value type whose values are arbitrary, possibly empty
+sequences of bytes. A string may contain NUL bytes or bytes that are not valid
+UTF-8. Its length is its number of bytes. A string's bytes are immutable: no
+operation can assign through a string value. NUL has no special meaning within
+a string.
+
+A string value holds its byte sequence and length. Initialization, assignment,
+argument passing, and return copy the value without copying its bytes. The copy
+refers to the same immutable bytes. A `var` string binding may be assigned a
+different string value; this does not modify either byte sequence.
+
+The zero value of `string` is the empty string. A string is never `null`, and
+all empty strings behave alike: `len` yields `0`, every index traps, all empty
+strings compare equal, and iteration executes zero times.
+
+`string` may be the type of a binding, parameter, function result, struct
+field, array element, or slice element. A named type may have `string` as its
+underlying type and retains these value semantics and operations.
+
+`[]const u8(s)` produces a slice of the bytes in string `s` without copying
+them. The slice has length `len(s)` and refers to the same immutable storage.
+There is no built-in conversion from a byte slice to a string or between a
+string and a rune or rune slice.
+
+### String constants
+
+A string literal is an untyped string constant. It may acquire type `string` or
+a named type whose underlying type is `string`; without a contextual type it
+defaults to `string`. String literals, explicit conversions between `string`
+and a named string type, parentheses around string constant expressions, and
+references to `const` bindings initialized by string constant expressions are
+string constant expressions.
+
+`len(s)` is a constant expression when `s` is a string constant expression.
+A string comparison is a constant expression when both operands are constant
+expressions. String indexing and slicing are never constant expressions.
+
+```fern
+type Path string;
+
+var text = "fern";       // string
+var path: Path = `src/main.fern`;
+const bytes = len("é"); // 2
+```
+
+### String indexing
+
+`s[i]` is the byte at index `i` in string `s` and has type `u8`.
+[Indexing and lengths](#indexing-and-lengths) gives the type and valid range of
+`i`. An out-of-range index traps, except that an out-of-range constant index
+into a constant string is rejected at compile time.
+
+A string index is neither assignable nor addressable. Use `[]const u8(s)` when
+an immutable byte location or slice is required. String indexing is never a
+constant expression.
+
+```fern
+const s = "é";
+const first = s[0]; // invalid: indexing is not a constant expression
+
+fn main() -> void {
+    exit(s[0]); // reports 195, the first UTF-8 byte
+}
+```
+
+### String slicing
+
+The slicing forms under [Slicing expressions](#slicing-expressions) also
+accept a string operand. They select bytes from `lo` up to but not including
+`hi`, with omitted bounds taking the same defaults, and produce a string that
+refers to those bytes without copying them. The bounds must satisfy
+`0 <= lo <= hi <= len(s)`. Invalid bounds trap, except that invalid constant
+bounds on a constant string are rejected at compile time.
+
+String slicing does not require UTF-8 boundaries. The result may therefore
+contain invalid UTF-8 even when its operand is a valid UTF-8 string literal.
+The operand is evaluated first, then `lo`, then `hi`. A string slicing
+expression is never a constant expression.
+
+```fern
+const text = "é"; // C3 A9
+
+fn main() -> void {
+    const first = text[0:1];
+    exit(first[0]); // reports 195; first is not valid UTF-8
+}
+```
+
+### String length
+
+`len(s)` yields the number of bytes in string `s` and has type `int`.
+[Length](#length) gives the form of `len` and its trailing-comma rule. The
+result is a constant expression exactly when `s` is a string constant
+expression.
+
+### String comparison
+
+`==`, `!=`, `<`, `<=`, `>`, and `>=` compare two strings of identical type
+lexicographically by their unsigned byte values. At the first unequal byte, the
+string with the smaller byte compares less; if every byte of the shorter string
+matches, the shorter string compares less. Two strings are equal when they
+have identical lengths and bytes.
+
+An untyped string constant adopts the other operand's string type. A comparison
+is a constant expression when both operands are constant expressions, and its
+result is then an untyped boolean constant.
+
+Strings have no arithmetic, wrapping, bitwise, shift, or logical operators. In
+particular, `+` does not concatenate strings. Constructing strings from runtime
+data and concatenating strings are not language operations.
 
 ## Statements and Execution
 
@@ -1587,11 +1839,11 @@ fn main() -> void {
 }
 ```
 
-`for v in a { ... }` executes the body once for each element of the array or
-slice `a`, in index order, with `v` bound to a copy of the element.
+For an array or slice `a`, `for v in a { ... }` executes the body once for each
+element in index order, with `v` bound to a copy of the element.
 `for v, i in a { ... }` also binds `i`, of type `int`, to that element's index.
 `in` is a reserved word, and the two names must differ. Iterating an empty slice
-executes the body zero times.
+executes the body zero times. The string case is specified below.
 
 `a` is evaluated once, before the first iteration, and the loop walks that
 value, so the number of iterations is fixed before the first one. When `a` is an
@@ -1614,7 +1866,23 @@ fn main() -> void {
 }
 ```
 
-Iteration over strings is not yet specified.
+When `a` is a string, the loop decodes its bytes as UTF-8 from left to right.
+Each iteration binds `v`, of type `rune`, to the next decoded scalar. The
+optional `i`, of type `int`, is that scalar's starting byte index. Each byte
+that cannot begin a valid encoding yields U+FFFD and advances the next
+iteration by one byte. The string value is evaluated once before iteration;
+its immutable byte sequence fixes every iteration value and index.
+
+```fern
+fn main() -> void {
+    const text = "Aé";
+    var last = 0;
+    for r, i in text {
+        last = i;
+    }
+    exit(last); // reports 1, the byte index of é
+}
+```
 
 ### Loop control and labels
 

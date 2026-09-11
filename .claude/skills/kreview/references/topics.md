@@ -1,23 +1,32 @@
 # Review topics
 
-Each section below serves both modes. In general mode, work every section in
-order. In topic mode, work only the selected section. In either mode, the
-relevant checklist is the review and each applicable item deserves an answer.
+Each section below serves both modes. In general mode, select the sections that
+fit the corpus after inventorying it. In specific-topic mode, work only the
+explicitly selected sections. In either mode, the relevant checklist is the
+review and each applicable item deserves an answer.
 
 For a diff, commit, or branch review, “the diff” and “changed” below mean that
 change. For a directory or whole-codebase review, they mean the requested
-corpus. Inventory that corpus first. In topic mode, read every production file
-in it and the relevant tests; then apply each checklist to the matching code.
-A search identifies candidates to inspect. It does not complete an exhaustive
-review.
+corpus. Inventory that corpus first. In specific-topic mode, read every
+production file in it and the relevant tests; then apply each selected checklist
+to the matching code. A search identifies candidates to inspect. It does not
+complete an exhaustive review.
 
 ## General
 
-Review all thirteen topics in the order they appear here. Apply every relevant
-checklist to the full requested corpus, follow the call paths and invariants it
-names, and verify suspicions with focused evidence. Record either confirmed
-findings or a one-line "nothing to report" for each topic. Finish with the
-per-topic verdict list and any follow-up requiring evidence outside the corpus.
+After inventorying the corpus and its contracts, select the topics that its
+changed behavior, boundaries, and risks make material. For example, select
+`unsafe` only when unsafe Rust or FFI is involved; select `api-design` and
+`documentation` for public or shared contract changes; and select
+`dependencies` for dependency configuration changes. Do not select a topic
+solely because it exists.
+
+Apply every relevant checklist in each selected section to the requested corpus,
+follow its call paths and invariants, and verify suspicions with focused
+evidence. Record the selection and its reasons, then either confirmed findings
+or a one-line "nothing to report" for each selected topic. Finish with the
+selected-topic verdict list and any follow-up requiring evidence outside the
+corpus.
 
 ## Ownership
 

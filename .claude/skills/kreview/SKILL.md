@@ -1,7 +1,7 @@
 ---
 name: kreview
-description: "Review a Rust code change through one focused quality lens in depth, or review every lens thoroughly. Use when the user asks for a Rust code review of a diff, branch, commit, or set of files."
-argument-hint: "[general|ownership|error-handling|api-design|performance|testing|readability|concurrency|security|correctness|unsafe|architecture|dependencies|documentation] [review scope]"
+description: "Review a Rust code change through a general, change-directed assessment or one or more focused quality lenses. Use when the user asks for a Rust code review of a diff, branch, commit, or set of files."
+argument-hint: "[general|topic[,topic...]] [review scope]"
 ---
 
 ## Workflow
@@ -9,9 +9,16 @@ argument-hint: "[general|ownership|error-handling|api-design|performance|testing
 Review the requested corpus directly. Do not edit implementation files or
 delegate the review. Write its report under `eng/reviews/`.
 
-1. Resolve the topic and review scope from
-   `<input_document> $ARGUMENTS </input_document>`. The first argument may be
-   one topic from the list below. Default to `general` when none is given.
+1. Resolve the review mode and scope from
+   `<input_document> $ARGUMENTS </input_document>`.
+   - The first argument may be `general`, or a comma-separated list of one or
+     more specific topics below, such as `performance,ownership`. Preserve the
+     listed order and remove duplicates.
+   - `general` is mutually exclusive with specific topics. If a topic list
+     combines it with another topic, or names an unknown topic, ask one focused
+     question rather than silently changing the requested review.
+   - Default to `general` when no topic is given. The remaining arguments are
+     the review scope.
 2. Read the repository instructions, then identify the review corpus.
    - For a diff, branch, or commit, inspect its diff and changed-file list.
    - For explicit files, directories, or the whole codebase, inventory that
@@ -21,43 +28,55 @@ delegate the review. Write its report under `eng/reviews/`.
      documentation they require. A required artifact missing from the diff is
      still part of the review.
    Ask one focused question only when the review scope remains ambiguous.
-3. Read the chosen topic's section in
-   [references/topics.md](references/topics.md), then run the mode below.
+3. Read the relevant sections in
+   [references/topics.md](references/topics.md), then run the requested mode:
+   the `General` section followed by the selected topic sections in general
+   mode, or every requested topic section in specific-topic mode.
 4. Review intentional `clone`, `unwrap`, `unsafe`, allocation, and dependency
    choices in context rather than treating them as automatic defects.
 5. Write `eng/reviews/YYYY-MM-DD-NNN-slug.md`, using the next sequence for the
-   day. Name the scope and mode, then record findings ordered by severity with
-   path, line, consequence, and suggested fix. Record unresolved suspicions and
-   checks run. When there are no findings, say so plainly and note any material
-   validation gap.
+   day. Name the scope, mode, and reviewed topics, then record findings ordered
+   by severity with path, line, consequence, and suggested fix. In general
+   mode, record the selected topics and why they fit the change. Record
+   unresolved suspicions and checks run. When there are no findings, say so
+   plainly and note any material validation gap.
 6. Report the review concisely and link its document. Do not implement findings
    in the review turn. A later implementation commit includes this report, and
    includes its plan too when the finding becomes a planned task.
 
 ### General mode
 
-An exhaustive review across every topic. Read the `General` section and every
-topic section of `references/topics.md`, then work through all thirteen topics
-in the listed order.
+Choose a thorough, change-directed set of topics. Read the `General` section,
+inventory the corpus and its contracts, then select the topic sections that
+the change materially touches or risks. Read and review every selected section
+in full; do not read or report on irrelevant topics merely to make the review
+look comprehensive.
+
+- Let the actual change determine the selection. For example, skip `unsafe`
+  when there is no unsafe Rust or FFI boundary, `api-design` and
+  `documentation` when no public or shared contract changes, and
+  `dependencies` when no dependency configuration changes. Apply the same
+  judgment to concurrency, security, performance, ownership, and every other
+  topic.
+- State the selected topics and concise reasons before reporting findings. Do
+  not claim that skipped topics were reviewed.
 
 - Breadth does not reduce depth. Inventory every changed production file and
-  its relevant tests, then examine the code each topic touches, its callers and
-  callees, and the invariants it depends on.
+  its relevant tests, then examine the selected topics' code, callers, callees,
+  and invariants.
 - Apply every relevant checklist item. Trace representative success, boundary,
   and failure paths, and verify suspicions with focused searches, tests, builds,
   or small reproductions.
-- Cover topics the change does not obviously touch without forcing irrelevant
-  checklist items. A topic with nothing to report is a normal outcome; say so
-  in one line.
-- Close with a one-line verdict per topic and recommend any follow-up that
-  needs evidence outside the requested corpus.
+- A selected topic with nothing to report is a normal outcome; say so in one
+  line. Close with a one-line verdict for each selected topic and recommend any
+  follow-up that needs evidence outside the requested corpus.
 
-### Topic mode
+### Specific-topic mode
 
-An exhaustive review of one lens. Read that topic's section in
+An exhaustive review of each requested lens. Read each selected section in
 `references/topics.md` and apply every check it lists.
 
-- For a change review, examine every changed line the topic touches, plus the
+- For a change review, examine every changed line each topic touches, plus the
   code it calls, the code that calls it, and the invariants it depends on.
   For a whole-codebase or directory review, read every production file in the
   corpus and the relevant tests before following the topic's call paths.
@@ -72,11 +91,12 @@ An exhaustive review of one lens. Read that topic's section in
   the repository's own rules for that topic.
 - Report confirmed findings, then suspicions you could not settle and what
   would settle them, then the checks you ran and what they showed.
-- Depth is the point. Stay within the one topic and do not drift into others.
+- Depth is the point. Stay within the requested topics and do not drift into
+  others.
 
 ## Topics
 
-- `general` — one thorough review across every topic below.
+- `general` — a thorough review that selects the topics relevant to the change.
 - `ownership` — ownership, borrowing, clones, and lifetimes.
 - `error-handling` — `Result`, propagation, context, and panic policy.
 - `api-design` — naming, visibility, signatures, and ergonomics.

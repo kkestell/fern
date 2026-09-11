@@ -85,7 +85,7 @@
 - [x] Slices
   - [x] Parse slice types and slicing expressions
   - [x] Represent slice types across the compiler
-  - [x] Check slice values, bounds, length, comparison, and iteration
+  - [x] Check slice values, bounds, length, and iteration
   - [x] Represent slices in Fern IR
   - [x] Lay out, slice, and access slices in native code
   - [x] Compile and execute slice programs and failures

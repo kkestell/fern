@@ -766,9 +766,13 @@ expressions, and its result is then an untyped boolean constant. A comparison
 with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
+`==` and `!=` further require comparable operand types. Comparability follows
+the types whose size is part of their type; each type's own section gives its
+rule.
+
 [Array comparison](#array-comparison) specifies `==` and `!=` on arrays,
-[Slice comparison](#slice-comparison) specifies them on slices, and
-[Pointer conversion and comparison](#pointer-conversion-and-comparison)
+[Slice comparison](#slice-comparison) specifies that slices are not comparable,
+and [Pointer conversion and comparison](#pointer-conversion-and-comparison)
 specifies them on pointers.
 
 ### Assignment
@@ -1131,6 +1135,9 @@ every pair of corresponding elements is equal, and `!=` is its negation. Arrays
 of different lengths or different element types are different types and cannot
 be compared. `<`, `<=`, `>`, and `>=` are not defined on arrays.
 
+An array is comparable when its element type is comparable. An array whose
+element type is a slice is therefore not comparable.
+
 An implementation may compare the elements in any order. Element comparison
 cannot trap, so the order is not observable.
 
@@ -1374,11 +1381,11 @@ itself through a slice field, as it may through a pointer field.
 
 A `[]T` may be used wherever a `[]const T` with the same element type is
 expected: as the initializer of an annotated binding, a call argument, a
-`return` expression, an assigned value, or the other operand of a comparison.
-The value is unchanged; the conversion only withdraws the ability to write
-through the slice. There is no conversion in the other direction, no conversion
-between slices with different element types, no conversion between an array and
-a slice, and no conversion between a slice and an integer.
+`return` expression, or an assigned value. The value is unchanged; the
+conversion only withdraws the ability to write through the slice. There is no
+conversion in the other direction, no conversion between slices with different
+element types, no conversion between an array and a slice, and no conversion
+between a slice and an integer.
 
 A slice refers to storage it does not own, so
 [Pointer validity](#pointer-validity) governs it unchanged: using a slice whose
@@ -1478,27 +1485,36 @@ fn main() -> void {
 
 ### Slice comparison
 
-`==` and `!=` compare two slices with the same element type, whether or not
-their constness matches. `==` yields `true` when the two lengths are equal and
-every pair of corresponding elements is equal, and `!=` is its negation. Two
-empty slices are equal. Comparison does not consider where the elements are
-stored, so slices of two different arrays holding the same elements are equal.
+A slice type is not comparable. `==` and `!=` are not defined on slices, and
+neither are `<`, `<=`, `>`, `>=`, nor the arithmetic, bitwise, and logical
+operators. A slice is never `null`, so it is not compared to `null` either;
+`len(s) == 0` tests for emptiness.
 
-A slice is comparable when its element type is comparable. An array and a slice
-are different types and cannot be compared; compare `a[:]` with the slice
-instead. `<`, `<=`, `>`, and `>=` are not defined on slices, and neither are the
-arithmetic, bitwise, and logical operators.
+Comparability follows the types whose size is part of their type. A slice's
+length is part of its value instead, so a slice is not comparable, and neither
+is a struct with a slice field nor an array whose element type is a slice, by
+the rules under [Struct literals](#struct-literals) and
+[Array comparison](#array-comparison).
 
-An implementation may compare the elements in any order and may stop as soon as
-a pair differs. Element comparison cannot trap, so neither choice is observable.
-
-A comparison of two slices is never a constant expression.
+Comparing the elements of two slices is written as a loop over their lengths.
 
 ```fern
+fn equal(a: []const int, b: []const int) -> bool {
+    if len(a) != len(b) {
+        return false;
+    }
+    for v, i in a {
+        if v != b[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn main() -> void {
-    const a: [3]int = [1, 2, 3];
-    const b: [4]int = [0, 1, 2, 3];
-    if a[:] == b[1:] {
+    const x: [3]int = [1, 2, 3];
+    const y: [4]int = [0, 1, 2, 3];
+    if equal(x[:], y[1:]) {
         exit(0); // reports 0
     }
     exit(1);

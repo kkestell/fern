@@ -195,8 +195,8 @@ untyped integer constants defaulting to `int` and untyped floating-point
 constants defaulting to `f64`. A declaration without an initializer must have a
 type annotation and receives that type's zero value.
 Zero values are `0` for integer and floating-point types, `false` for `bool`,
-`null` for pointer types, and recursive zero values for arrays and structs. A binding reference has the
-binding's type.
+`null` for pointer types, the empty slice for slice types, and recursive zero
+values for arrays and structs. A binding reference has the binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
 
@@ -313,8 +313,9 @@ struct type is accessible.
 
 A struct declaration is invalid when following struct fields and array element
 types can reach that same struct type, directly or indirectly. Every struct
-therefore has a finite value size. A [pointer](#pointer-types) field breaks
-such a cycle, because a pointer's size does not depend on its target type.
+therefore has a finite value size. A [pointer](#pointer-types) or
+[slice](#slice-types) field breaks such a cycle, because neither one's size
+depends on the type it refers to.
 
 Type declarations whose right-hand side is a struct end at the closing `}` and
 do not have a semicolon. Other type declarations end with `;`. Anonymous struct
@@ -646,10 +647,10 @@ computing a different result.
 ### Indexing and lengths
 
 Slices and strings are specified ahead of their implementation; the
-[TODO](../eng/todo.md) records implementation status. [Arrays](#arrays)
-specifies array types, their values, and their operations.
-[Implicit dereference](#implicit-dereference) specifies indexing and `len`
-through a pointer.
+[TODO](../eng/todo.md) records implementation status. [Arrays](#arrays) and
+[Slices](#slices) specify those types, their values, and their operations.
+[Implicit dereference](#implicit-dereference) specifies indexing, slicing, and
+`len` through a pointer.
 
 The length of any array, slice, or string has type `int`. Indices and slice
 bounds have type `int`. An index must have type `int` or be an untyped constant
@@ -765,7 +766,8 @@ expressions, and its result is then an untyped boolean constant. A comparison
 with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
-[Array comparison](#array-comparison) specifies `==` and `!=` on arrays, and
+[Array comparison](#array-comparison) specifies `==` and `!=` on arrays,
+[Slice comparison](#slice-comparison) specifies them on slices, and
 [Pointer conversion and comparison](#pointer-conversion-and-comparison)
 specifies them on pointers.
 
@@ -777,22 +779,25 @@ converted under
 [Pointer conversion and comparison](#pointer-conversion-and-comparison).
 Assignment is a statement and ends with a semicolon.
 
-A *location* is a binding, a field of a location, an element of a location, or
-a dereference `*p`. A location is *mutable* when it is a `var` binding, a field
-or element of a mutable location, or `*p` where `p` has type `*T`. A `const`
-binding, a parameter, and `*p` where `p` has type `*const T` are immutable, and
-so is every field and element of an immutable location. An expression that is
-not a location, such as a call result or an arithmetic result, is neither
-assignable nor addressable.
+A *location* is a binding, a field of a location, an element of an array
+location, an element of a slice, or a dereference `*p`. A location is *mutable*
+when it is a `var` binding, a field or array element of a mutable location, an
+element of a slice of type `[]T`, or `*p` where `p` has type `*T`. A `const`
+binding, a parameter, `*p` where `p` has type `*const T`, and an element of a
+slice of type `[]const T` are immutable, and so is every field and array element
+of an immutable location. A slice element's mutability comes from the slice's
+type alone. An expression that is not a location, such as a call result or an
+arithmetic result, is neither assignable nor addressable.
 
 An assignment target is a mutable location. `a[i] = e;` stores into the element
 of `a` at index `i`. `p.x = e;` stores into field `x` of `p`. `*p = e;` stores
 into the location `p` refers to. Whether the binding `p` is `var` or `const`
-does not affect `*p = e;`: `const` prevents reassigning `p`, not writing through
-it. Every index, field-selection, and dereference expression in the target is
-evaluated left to right, then `e`: in `grid[r][c] = e;` the order is `r`, `c`,
-`e`. A compound assignment to an element, field, or dereference evaluates the
-target once.
+does not affect `*p = e;`, and whether a slice binding `s` is `var` or `const`
+does not affect `s[i] = e;`: `const` prevents reassigning the binding, not
+writing through it. Every index, slice-bound, field-selection, and dereference
+expression in the target is evaluated left to right, then `e`: in
+`grid[r][c] = e;` the order is `r`, `c`, `e`. A compound assignment to an
+element, field, or dereference evaluates the target once.
 
 Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
 `+%= -%= *%=` are equivalent to the corresponding binary operation
@@ -824,6 +829,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 |-----------|----------|
 | Constant does not fit target type | Compile error |
 | Constant index out of range | Compile error |
+| Constant slice bound out of range for an array | Compile error |
 | Integer constant expression would trap | Compile error |
 | Floating-point constant expression is non-finite | Compile error |
 | `+ - *` overflow | Trap |
@@ -832,6 +838,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Checked conversion would discard information | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
+| Out-of-range slice bounds | Trap |
 | Dereference of `null` | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
 | Untyped constant shift result does not fit its target type | Compile error |
@@ -993,7 +1000,8 @@ value.
 
 An array is a value rather than a reference. Initialization, assignment,
 argument passing, and return each copy every element. Modifying one array
-afterward does not modify the other.
+afterward does not modify the other. An array does not implicitly become a
+slice; [Slicing expressions](#slicing-expressions) specifies how to make one.
 
 ```fern
 fn main() -> void {
@@ -1097,9 +1105,11 @@ len(a)
 ```
 
 `len` is a reserved word and uses call syntax without being a call, as an
-integer conversion does. Its operand is an expression of array type, or a
-pointer to one under [Implicit dereference](#implicit-dereference). A trailing
-comma after that operand is permitted, and the result has type `int`.
+integer conversion does. Its operand is an expression of array or slice type,
+or a pointer to one under [Implicit dereference](#implicit-dereference). A
+trailing comma after that operand is permitted, and the result has type `int`.
+The rest of this section specifies the array case;
+[Slice length](#slice-length) specifies the slice case.
 
 `len(a)` yields the length recorded in the operand's type. The operand is still
 evaluated, so a trap inside it, such as an out-of-range index, still occurs.
@@ -1239,16 +1249,17 @@ fn main() -> void {
 
 ### Implicit dereference
 
-Field selection, indexing, and `len` accept a pointer operand and dereference it
-once: `p.x` means `(*p).x`, `p[i]` means `(*p)[i]`, and `len(p)` means
-`len(*p)`. Each traps when `p` is `null`. Because a pointer operand can trap,
-`len(p)` is never a constant expression.
+Field selection, indexing, slicing, and `len` accept a pointer operand and
+dereference it once: `p.x` means `(*p).x`, `p[i]` means `(*p)[i]`, `p[lo:hi]`
+means `(*p)[lo:hi]`, and `len(p)` means `len(*p)`. Each traps when `p` is
+`null`. Because a pointer operand can trap, `len(p)` is never a constant
+expression.
 
 The result is a location whose mutability follows the pointer, so `p.x = e;` is
 valid when `p` has type `*Point` and invalid when it has type `*const Point`.
 
 One level is dereferenced, not a chain: for `pp` of type `**Point`, write
-`(*pp).x`. Implicit dereference applies to these three forms and nowhere else;
+`(*pp).x`. Implicit dereference applies to these four forms and nowhere else;
 iterating the array a pointer refers to is written `for v in *p`.
 
 ```fern
@@ -1318,6 +1329,179 @@ Keeping a pointer no longer than its referent is the programmer's obligation.
 fn escape() -> *int {
     var x = 1;
     return &x; // x ceases to exist when the function returns
+}
+```
+
+## Slices
+
+### Slice types
+
+```text
+[]T
+[]const T
+```
+
+A slice refers to a contiguous run of elements of a single element type `T`. It
+holds the location of the first element and the number of elements, which is its
+*length*. Writing through a `[]T` is permitted; writing through a `[]const T` is
+not. The two are distinct types, and the element type distinguishes them
+further: `[]int`, `[]const int`, and `[]i64` are three distinct types.
+
+A slice carries no capacity and cannot grow. It is a view of storage that
+something else owns, and no operation appends to a slice or reallocates the
+storage it refers to.
+
+A slice type is a value type. It may be the type of a binding, a parameter, a
+function result, a struct field, an array element, or the element type of
+another slice. Its element type may be any value type, including an array type
+or another slice type. `void` is not a value type and cannot be an element type.
+
+A slice is a value. Initialization, assignment, argument passing, and return
+copy its location and its length, and the copy refers to the same elements.
+Copying a slice does not copy the elements.
+
+The zero value of a slice type is the empty slice: length `0`, referring to no
+elements. `null` is a pointer constant and does not take a slice type, so a
+slice is never `null`, and `len(s) == 0` is how a program tests for emptiness.
+Every empty slice behaves alike: it yields `0` from `len`, traps on any index,
+and executes a `for` body zero times.
+
+There is no slice literal. A slice value comes from a slicing expression, from
+the zero value, or from copying another slice.
+
+Because a slice's size does not depend on its element type, a struct may reach
+itself through a slice field, as it may through a pointer field.
+
+A `[]T` may be used wherever a `[]const T` with the same element type is
+expected: as the initializer of an annotated binding, a call argument, a
+`return` expression, an assigned value, or the other operand of a comparison.
+The value is unchanged; the conversion only withdraws the ability to write
+through the slice. There is no conversion in the other direction, no conversion
+between slices with different element types, no conversion between an array and
+a slice, and no conversion between a slice and an integer.
+
+A slice refers to storage it does not own, so
+[Pointer validity](#pointer-validity) governs it unchanged: using a slice whose
+elements no longer exist is invalid, and Fern does not detect it.
+
+### Slicing expressions
+
+```text
+a[lo:hi]
+a[lo:]
+a[:hi]
+a[:]
+```
+
+A slicing expression yields a slice of the elements of `a` from index `lo` up
+to but not including index `hi`. Its length is `hi - lo`. An omitted `lo` means
+`0` and an omitted `hi` means `len(a)`, so `a[:]` covers all of `a`. `lo` and
+`hi` have the type given under
+[Indexing and lengths](#indexing-and-lengths). There is no third bound, because
+a slice has no capacity to set.
+
+The operand may be an array that is a location, a slice, or a pointer to an
+array under [Implicit dereference](#implicit-dereference). An array that is not
+a location, such as a call result or an array literal, cannot be sliced: the
+result would refer to storage that has already ceased to exist. A slice operand
+carries no such restriction, because a slice already holds the location of its
+elements, so the result of a call that returns a slice may be sliced.
+
+The result's element type is the operand's element type. The result is `[]T`
+when the operand is a mutable array location, a `*[N]T`, or a `[]T`, and
+`[]const T` when the operand is an immutable array location, a `*const [N]T`, or
+a `[]const T`. Slicing therefore grants no access the operand did not already
+have.
+
+The bounds must satisfy `0 <= lo <= hi <= len(a)`. `lo == hi` is permitted and
+yields an empty slice. Bounds outside that range trap. When the operand's length
+is part of its type — an array, or a pointer to one — and the offending bound
+is a constant expression, it is rejected at compile time instead, as an
+out-of-range constant index into an array is.
+
+The operand is evaluated first, then `lo`, then `hi`. A slicing expression is
+never a constant expression, because it takes the location of the operand's
+elements. A module-level binding of slice type can therefore hold only the empty
+slice, just as a module-level binding of pointer type can hold only `null`.
+
+```fern
+fn sum(xs: []const int) -> int {
+    var total = 0;
+    for v in xs {
+        total = total + v;
+    }
+    return total;
+}
+
+fn main() -> void {
+    const a: [5]int = [1, 2, 3, 4, 5];
+    exit(sum(a[1:4])); // reports 9
+}
+```
+
+```fern
+fn main() -> void {
+    var a: [4]int = [1, 2, 3, 4];
+    var s = a[1:3]; // []int, length 2
+    s[0] = 99;
+    exit(a[1]); // reports 99
+}
+```
+
+### Slice indexing
+
+`s[i]` is the element of the slice `s` at index `i` and is an expression of the
+element type. [Indexing and lengths](#indexing-and-lengths) gives the type of
+`i` and the range of valid indices; an out-of-range index traps. A slice's
+length is part of its value rather than its type, so a constant index is not
+rejected at compile time, unlike an index into an array.
+
+`s[i]` is a location. It is mutable when `s` has type `[]T` and immutable when
+`s` has type `[]const T`; [Assignment](#assignment) gives the statement form and
+its evaluation order. `&s[i]` yields `*T` or `*const T` accordingly.
+
+`s[i]` is never a constant expression.
+
+### Slice length
+
+`len(s)` yields the length of the slice `s` and has type `int`.
+[Length](#length) gives the form of `len` and its trailing-comma rule. Because a
+slice's length is part of its value rather than its type, `len(s)` is never a
+constant expression.
+
+```fern
+fn main() -> void {
+    const a: [5]int = [1, 2, 3, 4, 5];
+    exit(len(a[1:4])); // reports 3
+}
+```
+
+### Slice comparison
+
+`==` and `!=` compare two slices with the same element type, whether or not
+their constness matches. `==` yields `true` when the two lengths are equal and
+every pair of corresponding elements is equal, and `!=` is its negation. Two
+empty slices are equal. Comparison does not consider where the elements are
+stored, so slices of two different arrays holding the same elements are equal.
+
+A slice is comparable when its element type is comparable. An array and a slice
+are different types and cannot be compared; compare `a[:]` with the slice
+instead. `<`, `<=`, `>`, and `>=` are not defined on slices, and neither are the
+arithmetic, bitwise, and logical operators.
+
+An implementation may compare the elements in any order and may stop as soon as
+a pair differs. Element comparison cannot trap, so neither choice is observable.
+
+A comparison of two slices is never a constant expression.
+
+```fern
+fn main() -> void {
+    const a: [3]int = [1, 2, 3];
+    const b: [4]int = [0, 1, 2, 3];
+    if a[:] == b[1:] {
+        exit(0); // reports 0
+    }
+    exit(1);
 }
 ```
 
@@ -1412,14 +1596,18 @@ fn main() -> void {
 }
 ```
 
-`for v in a { ... }` executes the body once for each element of the array `a`,
-in index order, with `v` bound to a copy of the element. `for v, i in a { ... }`
-also binds `i`, of type `int`, to that element's index. `in` is a reserved word,
-and the two names must differ.
+`for v in a { ... }` executes the body once for each element of the array or
+slice `a`, in index order, with `v` bound to a copy of the element.
+`for v, i in a { ... }` also binds `i`, of type `int`, to that element's index.
+`in` is a reserved word, and the two names must differ. Iterating an empty slice
+executes the body zero times.
 
 `a` is evaluated once, before the first iteration, and the loop walks that
-value. Assigning to an element of the array inside the body does not change the
-remaining iterations.
+value, so the number of iterations is fixed before the first one. When `a` is an
+array, the loop walks a copy, and assigning to an element of that array inside
+the body does not change the remaining iterations. When `a` is a slice, the copy
+refers to the same elements, so assigning through the slice inside the body does
+change what the remaining iterations read.
 
 `v` and `i` are immutable bindings whose scope is the loop body, bound afresh on
 each iteration. The body may shadow them, and neither is visible after the loop.
@@ -1435,7 +1623,7 @@ fn main() -> void {
 }
 ```
 
-Iteration over slices and strings is not yet specified.
+Iteration over strings is not yet specified.
 
 ### Loop control and labels
 

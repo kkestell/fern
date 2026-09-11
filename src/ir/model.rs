@@ -37,6 +37,12 @@ pub(crate) enum Place {
         base: Box<Place>,
         ordinal: usize,
     },
+    /// A location reached by dereferencing `pointer`. The span identifies the
+    /// eventual null-check trap at the native boundary.
+    Indirect {
+        pointer: Operand,
+        span: std::ops::Range<usize>,
+    },
 }
 
 impl Place {
@@ -47,6 +53,7 @@ impl Place {
             Self::Local(local) => Some(*local),
             Self::Global(_) => None,
             Self::Element { base, .. } | Self::Field { base, .. } => base.root_local(),
+            Self::Indirect { .. } => None,
         }
     }
 }
@@ -54,7 +61,7 @@ impl Place {
 /// An immediate value of a scalar type. This is the only way the IR carries a
 /// value that no instruction computes, so an operand and a global's static
 /// data cannot disagree about a value's type or its bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Literal {
     // i128 holds both the signed minima and the full u64 range without bit reinterpretation.
     Integer {
@@ -64,18 +71,22 @@ pub(crate) enum Literal {
     /// A floating-point value, which keeps the bits of its interchange format
     /// rather than the integer they spell.
     Floating(Float),
+    /// A null pointer carries its concrete type because it can appear as an
+    /// operand independently of the destination that contextualized it.
+    Null(Type),
 }
 
 impl Literal {
-    pub(crate) fn ty(self) -> Scalar {
+    pub(crate) fn ty(&self) -> Type {
         match self {
-            Self::Integer { ty, .. } => ty,
-            Self::Floating(value) => value.ty(),
+            Self::Integer { ty, .. } => (*ty).into(),
+            Self::Floating(value) => value.ty().into(),
+            Self::Null(ty) => ty.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Operand {
     Literal(Literal),
     Value(ValueId),
@@ -84,6 +95,7 @@ pub(crate) enum Operand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Load(Place),
+    AddressOf(Place),
     /// The result of the `Instruction::Call` that defines it. The call carries
     /// the arguments and the source span.
     CallResult,
@@ -127,6 +139,10 @@ pub(crate) struct Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Value(ValueId),
+    /// Evaluates a place only for its bounds or null-pointer traps.
+    Check {
+        place: Place,
+    },
     Store {
         place: Place,
         operand: Operand,

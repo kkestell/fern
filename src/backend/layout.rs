@@ -3,7 +3,7 @@
 use crate::{
     ir::model::{Function, Struct},
     layout::{Layouts, StructFields},
-    types::{Scalar, StructId, Type},
+    types::{StructId, Type},
 };
 
 use std::collections::BTreeSet;
@@ -47,6 +47,7 @@ impl<'a> Layout<'a> {
     pub(super) fn class(&self, ty: &Type) -> String {
         match ty {
             Type::Scalar(scalar) => qbe_type(*scalar).to_string(),
+            Type::Pointer { .. } => "l".to_owned(),
             Type::Array { .. } => self.array_class(ty),
             Type::Struct(declared) => format!(":struct{}", declared.id.0),
         }
@@ -81,9 +82,9 @@ impl<'a> Layout<'a> {
             .clone()
     }
 
-    /// Every scalar a value of this type stores and its byte offset, in the
-    /// order IR globals flatten their literals.
-    pub(super) fn scalar_slots(&self, ty: &Type) -> Vec<(u64, Scalar)> {
+    /// Every scalar or pointer storage leaf and its byte offset, in the order
+    /// IR globals flatten their literals.
+    pub(super) fn scalar_slots(&self, ty: &Type) -> Vec<(u64, Type)> {
         let mut slots = Vec::new();
         self.collect_scalar_slots(ty, 0, &mut slots);
         slots
@@ -116,14 +117,16 @@ impl<'a> Layout<'a> {
         let (element, count) = array_parts(ty);
         match element {
             Type::Scalar(scalar) => format!(":array{}{count}", qbe_type(*scalar)),
+            Type::Pointer { .. } => format!(":arrayl{count}"),
             Type::Struct(declared) => format!(":arraystruct{}x{count}", declared.id.0),
             Type::Array { .. } => unreachable!("array parts stop at a scalar or a struct"),
         }
     }
 
-    fn collect_scalar_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Scalar)>) {
+    fn collect_scalar_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Type)>) {
         match ty {
-            Type::Scalar(scalar) => slots.push((base, *scalar)),
+            Type::Scalar(scalar) => slots.push((base, (*scalar).into())),
+            Type::Pointer { .. } => slots.push((base, ty.clone())),
             Type::Array { length, element } => {
                 let stride = self.size(element);
                 for index in 0..*length {
@@ -156,6 +159,7 @@ impl TypeDefinitions<'_> {
     fn define(&mut self, ty: &Type) {
         match ty {
             Type::Scalar(_) => {}
+            Type::Pointer { .. } => {}
             Type::Array { .. } => self.define_array(ty),
             Type::Struct(declared) => self.define_struct(declared.id),
         }

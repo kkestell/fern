@@ -296,3 +296,67 @@ fn a_binary_struct_tree_derives_each_layout_once() {
     let checked = check_root(&syntax).unwrap();
     assert_eq!(checked.structs.len(), 41);
 }
+
+#[test]
+fn pointer_annotations_resolve_and_break_struct_containment_cycles() {
+    assert_eq!(
+        checked_bindings(
+            "var mutable: *int;
+             const immutable: *const [2]u8;
+             var nested: [3]**int;
+             fn main() -> void {}"
+        ),
+        [
+            (pointer_type(false, value_type(Scalar::Int)), None),
+            (
+                pointer_type(true, array_type(2, value_type(Scalar::U8))),
+                Some(Constant::Null),
+            ),
+            (
+                array_type(
+                    3,
+                    pointer_type(false, pointer_type(false, value_type(Scalar::Int))),
+                ),
+                None,
+            ),
+        ]
+    );
+
+    let syntax = parse(
+        "type Node struct { next: *Node }
+         type Pair struct { left: *const Node, right: *[2]*Node }
+         fn take(node: *Node) -> void {}
+         fn main() -> void { var node: Node; }",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let node = struct_type(0, "Node");
+    assert_eq!(
+        struct_fields(&checked, 0),
+        [("next".to_owned(), pointer_type(false, node.clone()))]
+    );
+    assert_eq!(
+        struct_fields(&checked, 1),
+        [
+            ("left".to_owned(), pointer_type(true, node.clone())),
+            (
+                "right".to_owned(),
+                pointer_type(false, array_type(2, pointer_type(false, node.clone()))),
+            ),
+        ]
+    );
+    assert_eq!(
+        checked.layouts.size(&checked, &node),
+        Some(crate::layout::scalar_bytes(Scalar::Uint))
+    );
+    let (_, take) = checked.functions.iter().next().unwrap();
+    assert_eq!(
+        checked.bindings[take.parameters[0]].ty,
+        pointer_type(false, struct_type(0, "Node"))
+    );
+    rejects_source(
+        "fn result() -> *int { return 0; } fn main() -> void {}",
+        "0",
+        "cannot implicitly convert `int` to `*int`",
+    );
+}

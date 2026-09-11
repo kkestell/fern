@@ -104,11 +104,11 @@ pub(crate) enum StatementKind {
         initializer: Option<Idx<Expression>>,
     },
     Assignment {
-        target: AssignmentTarget,
+        target: Idx<Expression>,
         value: Idx<Expression>,
     },
     CompoundAssignment {
-        target: AssignmentTarget,
+        target: Idx<Expression>,
         operator: BinaryOperator,
         operator_span: Range<usize>,
         value: Idx<Expression>,
@@ -147,21 +147,6 @@ pub(crate) enum StatementKind {
 pub(crate) struct Label {
     pub name: Spur,
     pub name_span: Range<usize>,
-}
-
-/// The left side of an assignment: a binding, or the element or field reached
-/// through one step per `[ … ]` group and per `.name` selection.
-#[derive(Debug)]
-pub(crate) struct AssignmentTarget {
-    pub name: QualifiedName,
-    pub steps: Vec<TargetStep>,
-}
-
-/// One `[ … ]` or `.name` step of an assignment target, in source order.
-#[derive(Debug)]
-pub(crate) enum TargetStep {
-    Index(Idx<Expression>),
-    Field { name: Spur, name_span: Range<usize> },
 }
 
 #[derive(Debug)]
@@ -206,6 +191,11 @@ pub(crate) enum AnnotationKind {
         length: Option<Idx<Expression>>,
         element: Idx<TypeAnnotation>,
     },
+    /// `*T`, or `*const T` when `constant` is set.
+    Pointer {
+        constant: bool,
+        target: Idx<TypeAnnotation>,
+    },
 }
 
 /// One `field = e` initializer of a struct literal.
@@ -230,6 +220,8 @@ pub(crate) enum ExpressionKind {
     /// evaluation can read the value the program wrote.
     Floating(String),
     Boolean(bool),
+    /// `null`, the pointer that refers to no location.
+    Null,
     Reference(QualifiedName),
     Grouping {
         expression: Idx<Expression>,
@@ -258,6 +250,18 @@ pub(crate) enum ExpressionKind {
         right: Idx<Expression>,
     },
     LogicalNot {
+        operator_span: Range<usize>,
+        operand: Idx<Expression>,
+    },
+    /// `&x`, a pointer to the location `x`.
+    AddressOf {
+        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
+        operator_span: Range<usize>,
+        operand: Idx<Expression>,
+    },
+    /// `*p`, the location `p` refers to.
+    Dereference {
+        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         operator_span: Range<usize>,
         operand: Idx<Expression>,
     },
@@ -334,6 +338,7 @@ pub(crate) fn walk_expression(
         ExpressionKind::Integer(_)
         | ExpressionKind::Floating(_)
         | ExpressionKind::Boolean(_)
+        | ExpressionKind::Null
         | ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
@@ -345,6 +350,14 @@ pub(crate) fn walk_expression(
             ..
         }
         | ExpressionKind::LogicalNot {
+            operand: expression,
+            ..
+        }
+        | ExpressionKind::AddressOf {
+            operand: expression,
+            ..
+        }
+        | ExpressionKind::Dereference {
             operand: expression,
             ..
         }

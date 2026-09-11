@@ -75,13 +75,13 @@
   - [x] Represent structs and field access in Fern IR
   - [x] Lay out, copy, compare, and access structs in native code
   - [x] Compile and execute struct programs and failures
-- [ ] Pointers
-  - [ ] Parse pointer types, address-of, and dereference
-  - [ ] Represent pointer types across the compiler
-  - [ ] Check addressability, pointer values, and indirect assignment
-  - [ ] Represent pointers and indirect access in Fern IR
-  - [ ] Load, store, and compare pointers in native code
-  - [ ] Compile and execute pointer programs and failures
+- [x] Pointers
+  - [x] Parse pointer types, address-of, and dereference
+  - [x] Represent pointer types across the compiler
+  - [x] Check addressability, pointer values, and indirect assignment
+  - [x] Represent pointers and indirect access in Fern IR
+  - [x] Load, store, and compare pointers in native code
+  - [x] Compile and execute pointer programs and failures
 - [ ] Slices
   - [ ] Parse slice types and slicing expressions
   - [ ] Represent slice types across the compiler

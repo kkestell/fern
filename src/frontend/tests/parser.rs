@@ -482,7 +482,7 @@ fn malformed_expressions_and_calls_have_specific_diagnostics() {
         ("exit(1, 2);", "exit takes one argument"),
         ("var x = int();", "expected an expression"),
         ("var x = 1 + ;", "expected an expression"),
-        ("var x = 1 + * 2;", "expected an expression"),
+        ("var x = 1 + / 2;", "expected an expression"),
         ("var x = ();", "expected an expression"),
         ("var x = (1 + 2;", "expected `)` after grouped expression"),
         // Two decimal points make two literals, not one candidate, and a
@@ -861,6 +861,112 @@ fn struct_nesting_obeys_the_source_limit() {
         )
     };
     for build in [literals, selections, mixed] {
+        parse(&build(127)).unwrap();
+        assert_eq!(
+            parse(&build(128)).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+    }
+}
+
+#[test]
+fn pointer_types_address_of_and_dereference_snapshot() {
+    let source = "\
+type Node struct {
+    value: int,
+    next: *Node,
+    cells: *[3]int,
+    slots: [3]*int,
+}
+fn head(list: *const Node, table: *const *Node) -> *int {
+    return null;
+}
+fn main() -> void {
+    var x = 7;
+    var mask = 3;
+    const p: *int = &x;
+    const frozen: *const int = null;
+    var pp: **Node = null;
+    var node: Node = Node { ... };
+    const element = &node.slots[0];
+    const reached = *node.next.value;
+    const anded = x & mask;
+    const sum = *p + 1;
+    const same = p == null;
+    head(null, null);
+    pp = null;
+    *p = 42;
+    **pp = 1;
+    (*pp).value = 2;
+    *node.slots[0] = 3;
+    *head(null, null) = 4;
+    *p += 5;
+    for *p = 0; x < 1; *p += 1 {}
+    for *p {}
+}
+";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn a_pointer_returning_call_may_head_an_implicit_assignment() {
+    parse(
+        "type Point struct { x: int }
+         fn point(pointer: *Point) -> *Point { return pointer; }
+         fn values(pointer: *[2]int) -> *[2]int { return pointer; }
+         fn main() -> void {
+             var p: Point;
+             var a: [2]int;
+             point(&p).x = 1;
+             values(&a)[0] += 1;
+         }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn malformed_pointer_syntax_reports_the_offending_token() {
+    for (marked, message) in [
+        ("var x: *«;»", "expected a type"),
+        ("var x: *const «;»", "expected a type"),
+        ("var x: **«1»;", "expected a type"),
+        ("var x: *«void»;", "expected a type"),
+        ("const v = &«;»", "expected an expression"),
+        ("const v = *«;»", "expected an expression"),
+        ("const v = &«»", "expected an expression"),
+        (
+            "var «null» = 1;",
+            "reserved word cannot be used as an identifier",
+        ),
+        (
+            "const «null» = 1;",
+            "reserved word cannot be used as an identifier",
+        ),
+        ("* «=» 1;", "expected an expression"),
+        ("*p «1»;", "expected `=`"),
+    ] {
+        let prefix = "/* 🌿 */ fn main() -> void { ";
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(
+            error.span,
+            prefix.len() + start..prefix.len() + end,
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn pointer_nesting_obeys_the_source_limit() {
+    // A function body already holds one level, so 127 more are accepted.
+    let annotation =
+        |count: usize| format!("fn main() -> void {{ var x: {}int; }}", "*".repeat(count));
+    let dereferences =
+        |count: usize| format!("fn main() -> void {{ exit({}42); }}", "*".repeat(count));
+    for build in [annotation, dereferences] {
         parse(&build(127)).unwrap();
         assert_eq!(
             parse(&build(128)).unwrap_err().message,

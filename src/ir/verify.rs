@@ -23,10 +23,17 @@ impl VerifiedProgram {
     }
 }
 
-/// The scalar type a literal has, rejecting one whose value its type cannot
-/// hold. An integer literal spells a two's complement value, so a
-/// floating-point type is not one of its types.
-fn verify_literal(literal: Literal) -> Result<Scalar, CompileError> {
+/// The type a literal has, rejecting an integer whose value its scalar type
+/// cannot hold.
+fn verify_literal(literal: &Literal) -> Result<Type, CompileError> {
+    if let Literal::Null(ty) = literal {
+        if !matches!(ty, Type::Pointer { .. }) {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR null has non-pointer type `{ty}`"
+            )));
+        }
+        return Ok(ty.clone());
+    }
     let Literal::Integer { value, ty } = literal else {
         return Ok(literal.ty());
     };
@@ -35,12 +42,12 @@ fn verify_literal(literal: Literal) -> Result<Scalar, CompileError> {
             "internal compiler error: IR integer {value} has floating-point type {ty:?}"
         )));
     }
-    if value < ty.min() || value > i128::from(ty.max()) {
+    if *value < ty.min() || *value > i128::from(ty.max()) {
         return Err(CompileError::new(format!(
             "internal compiler error: IR integer {value} out of range for {ty:?}"
         )));
     }
-    Ok(ty)
+    Ok((*ty).into())
 }
 
 /// The IR defines arithmetic, conversions, and branching on scalars only.
@@ -59,6 +66,11 @@ fn valid_value(
 ) -> Result<bool, CompileError> {
     Ok(match &value.kind {
         ValueKind::Load(place) => place_type(place)? == value.ty && value.span.is_none(),
+        ValueKind::AddressOf(place) => {
+            let place = place_type(place)?;
+            value.span.is_some()
+                && matches!(&value.ty, Type::Pointer { target, .. } if **target == place)
+        }
         // The defining call checks the result type against the callee's
         // signature, and owns the span the call reports.
         ValueKind::CallResult => value.span.is_none(),
@@ -67,16 +79,24 @@ fn valid_value(
             left,
             right,
         } => {
-            let left = operand_type(*left)?;
+            let left = operand_type(left.clone())?;
             value.span.is_some()
                 && value.ty == Scalar::Bool.into()
-                && left == operand_type(*right)?
-                && (operator.is_equality() || left.scalar().is_some())
+                && (if operator.is_equality() {
+                    let right = operand_type(right.clone())?;
+                    left == right
+                        || matches!(
+                            (&left, &right),
+                            (Type::Pointer { target: left, .. }, Type::Pointer { target: right, .. }) if left == right
+                        )
+                } else {
+                    left == operand_type(right.clone())? && left.scalar().is_some()
+                })
         }
         ValueKind::LogicalNot { operand } => {
             value.span.is_some()
                 && value.ty == Scalar::Bool.into()
-                && operand_type(*operand)? == Scalar::Bool.into()
+                && operand_type(operand.clone())? == Scalar::Bool.into()
         }
         ValueKind::Convert { .. } | ValueKind::Unary { .. } | ValueKind::Binary { .. } => {
             valid_numeric_operation(value, operand_type)?
@@ -92,6 +112,16 @@ fn valid_numeric_operation(
     value: &Value,
     operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
+    if let ValueKind::Convert {
+        operand: source,
+        truncating: false,
+    } = &value.kind
+    {
+        let source = operand_type(source.clone())?;
+        if matches!(source, Type::Pointer { .. }) {
+            return Ok(value.ty == Scalar::Uint.into());
+        }
+    }
     let operand = |operand| scalar(&operand_type(operand)?);
     let ty = scalar(&value.ty)?;
     Ok(match &value.kind {
@@ -99,7 +129,7 @@ fn valid_numeric_operation(
             operand: source,
             truncating,
         } => {
-            let source = operand(*source)?;
+            let source = operand(source.clone())?;
             if *truncating {
                 // Truncation reinterprets a two's complement bit pattern.
                 source.is_integer() && ty.is_integer()
@@ -113,7 +143,7 @@ fn valid_numeric_operation(
             operator,
             operand: source,
         } => {
-            let source = operand(*source)?;
+            let source = operand(source.clone())?;
             value.span.is_some()
                 && source == ty
                 && match operator {
@@ -128,7 +158,7 @@ fn valid_numeric_operation(
             right,
             ..
         } => {
-            let (left, right) = (operand(*left)?, operand(*right)?);
+            let (left, right) = (operand(left.clone())?, operand(right.clone())?);
             value.span.is_some()
                 && left == ty
                 && if ty.is_floating() {
@@ -158,6 +188,7 @@ enum Resolution {
 fn contained_struct(ty: &Type) -> Option<usize> {
     match ty {
         Type::Scalar(_) => None,
+        Type::Pointer { .. } => None,
         Type::Array { element, .. } => contained_struct(element),
         Type::Struct(declared) => Some(declared.id.0),
     }
@@ -240,7 +271,7 @@ impl Program {
                         "internal compiler error: IR indexes `{base}`"
                     )));
                 };
-                let index = operand_type(*index)?;
+                let index = operand_type(index.clone())?;
                 if index != Scalar::Int.into() {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR index has type `{index}`, expected `int`"
@@ -264,6 +295,15 @@ impl Program {
                             "internal compiler error: IR selects field {ordinal} of `{base}`"
                         ))
                     })
+            }
+            Place::Indirect { pointer, .. } => {
+                let pointer = operand_type(pointer.clone())?;
+                let Type::Pointer { target, .. } = pointer else {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR dereferences `{pointer}`"
+                    )));
+                };
+                Ok(*target)
             }
         }
     }
@@ -330,6 +370,7 @@ impl Program {
     fn verify_type(&self, ty: &Type) -> Result<(), CompileError> {
         match ty {
             Type::Scalar(_) => Ok(()),
+            Type::Pointer { target, .. } => self.verify_type(target),
             Type::Array { element, .. } => self.verify_type(element),
             Type::Struct(declared) if declared.id.0 < self.structs.len() => Ok(()),
             Type::Struct(declared) => Err(CompileError::new(format!(
@@ -360,9 +401,10 @@ impl Program {
     /// The scalar types a value of `ty` stores, in memory order. A struct's
     /// fields have their own types, so the sequence is derived from the
     /// program's struct table rather than from one leaf type.
-    fn scalar_types(&self, ty: &Type, types: &mut Vec<Scalar>) {
+    fn scalar_types(&self, ty: &Type, types: &mut Vec<Type>) {
         match ty {
-            Type::Scalar(scalar) => types.push(*scalar),
+            Type::Scalar(scalar) => types.push((*scalar).into()),
+            Type::Pointer { .. } => types.push(ty.clone()),
             Type::Array { length, element } => {
                 for _ in 0..*length {
                     self.scalar_types(element, types);
@@ -392,9 +434,9 @@ impl Program {
         }
         let mut expected = Vec::with_capacity(global.values.len());
         self.scalar_types(&global.ty, &mut expected);
-        for (&value, &expected) in global.values.iter().zip(&expected) {
+        for (value, expected) in global.values.iter().zip(&expected) {
             let ty = verify_literal(value)?;
-            if ty != expected {
+            if !ty.value_compatible(expected) {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR global of type `{}` holds a `{ty}` value where a `{expected}` value belongs",
                     global.ty
@@ -407,6 +449,7 @@ impl Program {
     fn scalar_count(&self, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(_) => Some(1),
+            Type::Pointer { .. } => Some(1),
             Type::Array { length, element } => length.checked_mul(self.scalar_count(element)?),
             Type::Struct(declared) => self.structs[declared.id.0]
                 .fields
@@ -507,10 +550,14 @@ impl Program {
                 }
                 Ok(())
             }
+            Instruction::Check { place } => {
+                self.place_type(flow, place, &operand_type)?;
+                Ok(())
+            }
             Instruction::Store { place, operand } => {
                 let destination = self.place_type(flow, place, &operand_type)?;
-                let source = operand_type(*operand)?;
-                if source != destination {
+                let source = operand_type(operand.clone())?;
+                if !source.value_compatible(&destination) {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR store has type `{source}`, expected `{destination}`"
                     )));
@@ -546,7 +593,7 @@ impl Program {
         }
         match &block.terminator {
             Terminator::Branch { condition, .. } => {
-                if operand_type(*condition)? != Scalar::Bool.into() {
+                if operand_type(condition.clone())? != Scalar::Bool.into() {
                     return Err(CompileError::new(
                         "internal compiler error: IR branch requires bool",
                     ));
@@ -554,7 +601,7 @@ impl Program {
                 Ok(())
             }
             Terminator::Exit { status, .. } => {
-                if operand_type(*status)? != Scalar::Int.into() {
+                if operand_type(status.clone())? != Scalar::Int.into() {
                     return Err(CompileError::new(
                         "internal compiler error: IR exit requires int",
                     ));
@@ -562,7 +609,7 @@ impl Program {
                 Ok(())
             }
             Terminator::Return { value } => {
-                verify_return(function.result.as_ref(), *value, &operand_type)
+                verify_return(function.result.as_ref(), value.clone(), &operand_type)
             }
             Terminator::Jump { .. } | Terminator::Unreachable => Ok(()),
         }
@@ -585,10 +632,10 @@ impl Program {
                 target.parameters
             )));
         }
-        for (index, &argument) in arguments.iter().enumerate() {
-            let source = operand_type(argument)?;
+        for (index, argument) in arguments.iter().enumerate() {
+            let source = operand_type(argument.clone())?;
             let parameter = &target.flow.locals[index];
-            if source != *parameter {
+            if !source.value_compatible(parameter) {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR call argument {index} has type `{source}`, expected `{parameter}`"
                 )));
@@ -817,7 +864,7 @@ fn record_definition(
     let defined = match instruction {
         Instruction::Value(id) => Some((*id, false)),
         Instruction::Call { result, .. } => result.map(|id| (id, true)),
-        Instruction::Store { .. } => None,
+        Instruction::Check { .. } | Instruction::Store { .. } => None,
     };
     let Some((ValueId(id), from_call)) = defined else {
         return Ok(());
@@ -857,7 +904,7 @@ fn verify_return(
         )),
         (Some(result), Some(value)) => {
             let source = operand_type(value)?;
-            if source != *result {
+            if !source.value_compatible(result) {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR returns `{source}`, expected `{result}`"
                 )));
@@ -875,7 +922,7 @@ fn flow_operand_type(
     position: usize,
 ) -> Result<Type, CompileError> {
     match operand {
-        Operand::Literal(literal) => verify_literal(literal).map(Type::from),
+        Operand::Literal(literal) => verify_literal(&literal),
         Operand::Value(ValueId(id)) => {
             let Some(definition) = definitions.get(id) else {
                 return Err(CompileError::new(format!(

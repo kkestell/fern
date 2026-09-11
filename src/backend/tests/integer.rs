@@ -56,7 +56,7 @@ fn full_width_integer_copies_and_conversions_execute() {
                     span: None,
                     ty: source.into(),
                     kind: ValueKind::Convert {
-                        operand: literal,
+                        operand: literal.clone(),
                         truncating: false,
                     },
                 });

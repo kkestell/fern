@@ -184,17 +184,11 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
                 }
             }
             StatementKind::Assignment { target, value } => {
-                writeln!(
-                    output,
-                    "{indent}assign {} name={:?} span={:?}{}",
-                    spell(syntax, &target.name),
-                    target.name.name_span,
-                    statement.span,
-                    qualifier(&target.name)
-                )
-                .unwrap();
-                project_target_steps(syntax, target, depth + 1, output);
-                project_expression(syntax, *value, depth + 1, output);
+                writeln!(output, "{indent}assign span={:?}", statement.span).unwrap();
+                writeln!(output, "{indent}  target").unwrap();
+                project_expression(syntax, *target, depth + 2, output);
+                writeln!(output, "{indent}  value").unwrap();
+                project_expression(syntax, *value, depth + 2, output);
             }
             StatementKind::CompoundAssignment {
                 target,
@@ -204,15 +198,14 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
             } => {
                 writeln!(
                     output,
-                    "{indent}compound assign {} {operator:?}= name={:?} operator={operator_span:?} span={:?}{}",
-                    spell(syntax, &target.name),
-                    target.name.name_span,
-                    statement.span,
-                    qualifier(&target.name)
+                    "{indent}compound assign {operator:?}= operator={operator_span:?} span={:?}",
+                    statement.span
                 )
                 .unwrap();
-                project_target_steps(syntax, target, depth + 1, output);
-                project_expression(syntax, *value, depth + 1, output);
+                writeln!(output, "{indent}  target").unwrap();
+                project_expression(syntax, *target, depth + 2, output);
+                writeln!(output, "{indent}  value").unwrap();
+                project_expression(syntax, *value, depth + 2, output);
             }
             StatementKind::Block { body } => {
                 writeln!(output, "{indent}block span={:?}", statement.span).unwrap();
@@ -336,32 +329,6 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
     }
 }
 
-/// Projects an assignment target's steps, which precede the assigned value
-/// in evaluation order.
-fn project_target_steps(
-    syntax: &Syntax,
-    target: &AssignmentTarget,
-    depth: usize,
-    output: &mut String,
-) {
-    use std::fmt::Write;
-    let indent = "  ".repeat(depth);
-    for step in &target.steps {
-        match step {
-            TargetStep::Index(index) => {
-                writeln!(output, "{indent}index").unwrap();
-                project_expression(syntax, *index, depth + 1, output);
-            }
-            TargetStep::Field { name, name_span } => writeln!(
-                output,
-                "{indent}field {} name={name_span:?}",
-                syntax.names.resolve(name)
-            )
-            .unwrap(),
-        }
-    }
-}
-
 fn project_annotation(syntax: &Syntax, id: Idx<TypeAnnotation>, depth: usize, output: &mut String) {
     use std::fmt::Write;
     let indent = "  ".repeat(depth);
@@ -385,6 +352,16 @@ fn project_annotation(syntax: &Syntax, id: Idx<TypeAnnotation>, depth: usize, ou
                 qualifier(name)
             )
             .unwrap();
+        }
+        AnnotationKind::Pointer { constant, target } => {
+            writeln!(
+                output,
+                "{indent}pointer constant={constant} span={:?}",
+                annotation.span
+            )
+            .unwrap();
+            writeln!(output, "{indent}  target").unwrap();
+            project_annotation(syntax, *target, depth + 2, output);
         }
         AnnotationKind::Array { length, element } => {
             writeln!(output, "{indent}array span={:?}", annotation.span).unwrap();
@@ -420,6 +397,9 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
         .unwrap(),
         ExpressionKind::Boolean(value) => {
             writeln!(output, "{indent}boolean {value} span={:?}", expression.span).unwrap()
+        }
+        ExpressionKind::Null => {
+            writeln!(output, "{indent}null span={:?}", expression.span).unwrap()
         }
         ExpressionKind::Reference(name) => writeln!(
             output,
@@ -498,6 +478,30 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
             writeln!(
                 output,
                 "{indent}logical Not operator={operator_span:?} span={:?}",
+                expression.span
+            )
+            .unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::AddressOf {
+            operator_span,
+            operand,
+        } => {
+            writeln!(
+                output,
+                "{indent}address-of operator={operator_span:?} span={:?}",
+                expression.span
+            )
+            .unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::Dereference {
+            operator_span,
+            operand,
+        } => {
+            writeln!(
+                output,
+                "{indent}dereference operator={operator_span:?} span={:?}",
                 expression.span
             )
             .unwrap();

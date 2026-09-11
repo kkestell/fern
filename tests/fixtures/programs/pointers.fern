@@ -1,0 +1,27 @@
+type Node struct { value: int, next: *Node }
+
+var empty: *Node;
+
+fn echo(pointer: *Node) -> *Node { return pointer; }
+
+fn read(pointer: *const Node) -> int { return pointer.value; }
+
+fn main() -> void {
+    var first: Node;
+    first.value = 7;
+    first.next = &first;
+    var copied = first;
+    var pointers: [2]*Node;
+    pointers[0] = &first;
+    pointers[1] = pointers[0];
+    const immutable: *const Node = pointers[0];
+    if immutable != pointers[1] || empty != null { exit(1); }
+    if uint(pointers[0]) == 0 || uint(empty) != 0 { exit(2); }
+    var returned = echo(pointers[1]);
+    *returned = copied;
+    (*returned).value = 9;
+    echo(returned).value += 1;
+    if (*returned).value != 10 || read(immutable) != 10 { exit(3); }
+    if copied == first { exit(4); }
+    exit(42);
+}

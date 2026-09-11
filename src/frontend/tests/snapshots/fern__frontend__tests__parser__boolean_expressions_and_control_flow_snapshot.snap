@@ -54,8 +54,11 @@ fn main name=3..7 span=0..356
         reference i span=247..248
         integer 4 span=251..252
     post
-      compound assign i Add= name=254..255 operator=256..258 span=254..260
-        integer 1 span=259..260
+      compound assign Add= operator=256..258 span=254..260
+        target
+          reference i span=254..255
+        value
+          integer 1 span=259..260
     body
       if span=263..289
         comparison GreaterEqual operator=268..270 span=266..272
@@ -65,16 +68,22 @@ fn main name=3..7 span=0..356
         break label=rows label_span=Some(282..286) span=275..287
   for label=- label_span=None span=292..354
     initializer
-      assign cursor name=296..302 span=296..307
-        integer 0 span=305..306
+      assign span=296..307
+        target
+          reference cursor span=296..302
+        value
+          integer 0 span=305..306
     condition
       comparison NotEqual operator=315..317 span=308..319
         reference cursor span=308..314
         integer 2 span=318..319
     post
-      assign cursor name=321..327 span=321..340
-        binary Add operator=337..338 span=330..340
-          reference cursor span=330..336
-          integer 1 span=339..340
+      assign span=321..340
+        target
+          reference cursor span=321..327
+        value
+          binary Add operator=337..338 span=330..340
+            reference cursor span=330..336
+            integer 1 span=339..340
     body
       continue label=- label_span=None span=343..352

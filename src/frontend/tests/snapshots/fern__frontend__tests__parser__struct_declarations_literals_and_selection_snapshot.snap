@@ -81,21 +81,30 @@ fn main name=212..216 span=209..732
         named Shape span=627..632
     array literal fill=Some(642..645) span=635..646
       reference nested span=636..642
-  assign grid name=652..656 span=652..673
-    index
-      integer 0 span=657..658
-    field origin name=660..666
-    field x name=667..668
-    integer 9 span=671..672
-  compound assign grid Add= name=678..682 operator=699..701 span=678..705
-    index
-      integer 1 span=683..684
-    field corners name=686..693
-    index
-      integer 1 span=694..695
-    field y name=697..698
-    integer 10 span=702..704
-  assign origin name=710..716 span=710..730
-    field x name=717..718
-    field y name=728..729 span=721..729
-      reference origin span=721..727
+  assign span=652..673
+    target
+      field x name=667..668 span=652..668
+        field origin name=660..666 span=652..666
+          index span=652..659
+            reference grid span=652..656
+            integer 0 span=657..658
+    value
+      integer 9 span=671..672
+  compound assign Add= operator=699..701 span=678..705
+    target
+      field y name=697..698 span=678..698
+        index span=678..696
+          field corners name=686..693 span=678..693
+            index span=678..685
+              reference grid span=678..682
+              integer 1 span=683..684
+          integer 1 span=694..695
+    value
+      integer 10 span=702..704
+  assign span=710..730
+    target
+      field x name=717..718 span=710..718
+        reference origin span=710..716
+    value
+      field y name=728..729 span=721..729
+        reference origin span=721..727

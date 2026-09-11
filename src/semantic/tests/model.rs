@@ -42,7 +42,10 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
     let targets: Vec<_> = checked
         .assignments
         .iter()
-        .map(|(_, target)| target.binding)
+        .map(|(_, target)| match target.location.kind {
+            CheckedLocationKind::Binding(binding) => binding,
+            _ => unreachable!("these fixtures assign directly to bindings"),
+        })
         .collect();
     assert_eq!(targets, [ids[0], ids[2], ids[0]]);
     let references: Vec<_> = checked
@@ -51,6 +54,8 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
         .filter_map(|(_, expression)| match &expression.value {
             ExpressionValue::Reference(id) => Some(*id),
             ExpressionValue::Integer
+            | ExpressionValue::CompoundAssignmentTarget
+            | ExpressionValue::Null
             | ExpressionValue::Floating
             | ExpressionValue::Boolean
             | ExpressionValue::Conversion { .. }
@@ -63,6 +68,8 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             | ExpressionValue::Index { .. }
             | ExpressionValue::Length { .. }
             | ExpressionValue::LogicalNot { .. }
+            | ExpressionValue::AddressOf { .. }
+            | ExpressionValue::Dereference { .. }
             | ExpressionValue::Struct { .. }
             | ExpressionValue::Field { .. }
             | ExpressionValue::Call { .. } => None,

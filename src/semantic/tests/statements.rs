@@ -633,14 +633,24 @@ fn checked_target_steps(source: &str) -> Vec<Vec<String>> {
         .assignments
         .iter()
         .map(|(_, target)| {
-            target
-                .steps
-                .iter()
-                .map(|step| match step {
-                    CheckedStep::Index(_) => "index".to_owned(),
-                    CheckedStep::Field(ordinal) => format!("field {ordinal}"),
-                })
-                .collect()
+            fn steps(location: &CheckedLocation, found: &mut Vec<String>) {
+                match &location.kind {
+                    CheckedLocationKind::Binding(_) | CheckedLocationKind::Dereference { .. } => {}
+                    CheckedLocationKind::Index { operand, .. } => {
+                        steps(operand, found);
+                        found.push("index".to_owned());
+                    }
+                    CheckedLocationKind::Field {
+                        operand, ordinal, ..
+                    } => {
+                        steps(operand, found);
+                        found.push(format!("field {ordinal}"));
+                    }
+                }
+            }
+            let mut found = Vec::new();
+            steps(&target.location, &mut found);
+            found
         })
         .collect()
 }
@@ -798,4 +808,59 @@ fn a_declaration_without_an_initializer_is_still_a_const_or_a_typed_binding() {
         "`[_]` requires an array-literal initializer",
     );
     accepts("var x: int; x = 1; exit(x);");
+}
+
+#[test]
+fn indirect_assignment_observes_pointer_mutability() {
+    accepts("var value = 1; const p = &value; *p = 2; *p += 1;");
+    accepts_source(
+        "type Point struct { x: int } fn main() -> void { var point = Point { x = 1 }; const p = &point; p.x = 2; }",
+    );
+    rejects(
+        "var p: *const int = null; *p = 1;",
+        "*p",
+        "cannot assign to an immutable location",
+    );
+    rejects(
+        "var value = 1; const p = &value; var q: *const int = p; *q = 2;",
+        "*q",
+        "cannot assign to an immutable location",
+    );
+    accepts_source(
+        "type Point struct { x: int }
+         fn point(pointer: *Point) -> *Point { return pointer; }
+         fn values(pointer: *[2]int) -> *[2]int { return pointer; }
+         fn main() -> void {
+             var p: Point;
+             var a: [2]int;
+             point(&p).x = 1;
+             point(&p).x += 1;
+             values(&a)[0] = 2;
+             values(&a)[0] += 1;
+         }",
+    );
+}
+
+#[test]
+fn an_assignment_target_must_be_a_location() {
+    // A statement starts an assignment target at a name, a `*`, or a `(`, so
+    // those are the heads a non-location target can reach checking through.
+    for (body, offending) in [
+        ("var x = 1; int(x) = 2;", "int(x)"),
+        ("var x = 1; i64.truncate(x) = 2;", "i64.truncate(x)"),
+        ("var x = 1; (x + 1) = 2;", "x + 1"),
+        ("var a = [1, 2]; (len(a)) = 2;", "len(a)"),
+    ] {
+        rejects(
+            body,
+            offending,
+            "cannot assign to an expression that is not a location",
+        );
+    }
+    // A grouped location is still a location.
+    accepts_source("fn main() -> void { var x = 1; (x) = 2; }");
+    accepts_source(
+        "type Point struct { x: int }
+         fn main() -> void { var p = Point { x = 1 }; (p).x = 2; }",
+    );
 }

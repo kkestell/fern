@@ -1,7 +1,9 @@
 # Fern Language Specification
 
 This specification defines Fern's language behavior. It is authoritative
-wherever it is explicit. An invalid program must be rejected during compilation.
+wherever it is explicit. An invalid program must be rejected during
+compilation, except where this specification states that a rule is not checked;
+[Pointer validity](#pointer-validity) is the only such rule.
 A trap halts execution with a diagnostic on standard error identifying the
 failing operation and its source location. It terminates the process abnormally
 through the platform's abort mechanism. The resulting termination status is
@@ -56,8 +58,8 @@ var x = 10; // int
 ### Keywords
 
 `fn`, `void`, `var`, `const`, `type`, `struct`, `pub`, `use`, `if`, `else`,
-`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `true`, and `false`
-are reserved.
+`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `null`, `true`, and
+`false` are reserved.
 The ten integer type names listed under Integer types, the two floating-point
 type names listed under Floating-point types, and `bool` are also reserved.
 Reserved words cannot be identifiers.
@@ -185,13 +187,15 @@ const name: T [= e];
 A declaration introduces a binding. When an initializer is present, it is
 initialized to the value of `e`. A type annotation determines the binding's
 type. A typed initializer must have that same type, while an untyped constant
-must be representable by the annotated type. Other numeric conversions must be
-explicit. Without an annotation, the binding takes the initializer's type, with
+must be representable by the annotated type;
+[Pointer conversion and comparison](#pointer-conversion-and-comparison) gives
+the one exception. Other numeric conversions must be explicit. Without an
+annotation, the binding takes the initializer's type, with
 untyped integer constants defaulting to `int` and untyped floating-point
 constants defaulting to `f64`. A declaration without an initializer must have a
 type annotation and receives that type's zero value.
 Zero values are `0` for integer and floating-point types, `false` for `bool`,
-and recursive zero values for arrays and structs. A binding reference has the
+`null` for pointer types, and recursive zero values for arrays and structs. A binding reference has the
 binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
@@ -309,8 +313,8 @@ struct type is accessible.
 
 A struct declaration is invalid when following struct fields and array element
 types can reach that same struct type, directly or indirectly. Every struct
-therefore has a finite value size. Future indirect-storage types may break such
-a cycle when their semantics are specified.
+therefore has a finite value size. A [pointer](#pointer-types) field breaks
+such a cycle, because a pointer's size does not depend on its target type.
 
 Type declarations whose right-hand side is a struct end at the closing `}` and
 do not have a semicolon. Other type declarations end with `;`. Anonymous struct
@@ -644,6 +648,8 @@ computing a different result.
 Slices and strings are specified ahead of their implementation; the
 [TODO](../eng/todo.md) records implementation status. [Arrays](#arrays)
 specifies array types, their values, and their operations.
+[Implicit dereference](#implicit-dereference) specifies indexing and `len`
+through a pointer.
 
 The length of any array, slice, or string has type `int`. Indices and slice
 bounds have type `int`. An index must have type `int` or be an untyped constant
@@ -759,21 +765,34 @@ expressions, and its result is then an untyped boolean constant. A comparison
 with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
-[Array comparison](#array-comparison) specifies `==` and `!=` on arrays.
+[Array comparison](#array-comparison) specifies `==` and `!=` on arrays, and
+[Pointer conversion and comparison](#pointer-conversion-and-comparison)
+specifies them on pointers.
 
 ### Assignment
 
-`x = e;` stores the value of `e` in the mutable binding `x`. It requires
-`e` to have the type of `x`, or to be an untyped constant that fits. Assignment
-is a statement and ends with a semicolon.
+`x = e;` stores the value of `e` in the mutable location `x`. It requires `e` to
+have the type of `x`, to be an untyped constant that fits, or to be a pointer
+converted under
+[Pointer conversion and comparison](#pointer-conversion-and-comparison).
+Assignment is a statement and ends with a semicolon.
 
-An assignment target is a mutable binding, an element of one, or a field of a
-mutable struct. `a[i] = e;` stores into the element of `a` at index `i`, where
-`a` is a `var` array or an element of one. `p.x = e;` stores into field `x` of
-`p`. An element or field of a `const` binding cannot be assigned. Every index
-and field-selection expression in the target is evaluated left to right, then
-`e`: in `grid[r][c] = e;` the order is `r`, `c`, `e`. A compound assignment to
-an element or field evaluates the target once.
+A *location* is a binding, a field of a location, an element of a location, or
+a dereference `*p`. A location is *mutable* when it is a `var` binding, a field
+or element of a mutable location, or `*p` where `p` has type `*T`. A `const`
+binding, a parameter, and `*p` where `p` has type `*const T` are immutable, and
+so is every field and element of an immutable location. An expression that is
+not a location, such as a call result or an arithmetic result, is neither
+assignable nor addressable.
+
+An assignment target is a mutable location. `a[i] = e;` stores into the element
+of `a` at index `i`. `p.x = e;` stores into field `x` of `p`. `*p = e;` stores
+into the location `p` refers to. Whether the binding `p` is `var` or `const`
+does not affect `*p = e;`: `const` prevents reassigning `p`, not writing through
+it. Every index, field-selection, and dereference expression in the target is
+evaluated left to right, then `e`: in `grid[r][c] = e;` the order is `r`, `c`,
+`e`. A compound assignment to an element, field, or dereference evaluates the
+target once.
 
 Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
 `+%= -%= *%=` are equivalent to the corresponding binary operation
@@ -813,6 +832,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Checked conversion would discard information | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
+| Dereference of `null` | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
 | Untyped constant shift result does not fit its target type | Compile error |
 | Wrapping operators | Defined, no trap |
@@ -1042,7 +1062,9 @@ var worse: [_]int = [0...]; // error: no length
 ### Indexing
 
 `a[i]` is the element of the array `a` at index `i` and is an expression of the
-element type. Indexing requires an operand of array type. [Indexing and lengths](#indexing-and-lengths) gives the type of `i` and
+element type. Indexing requires an operand of array type, or a pointer to one
+under [Implicit dereference](#implicit-dereference).
+[Indexing and lengths](#indexing-and-lengths) gives the type of `i` and
 the range of valid indices; an out-of-range index traps. Because an array's
 length is part of its type, an out-of-range constant index is rejected at
 compile time instead.
@@ -1075,7 +1097,8 @@ len(a)
 ```
 
 `len` is a reserved word and uses call syntax without being a call, as an
-integer conversion does. Its operand is an expression of array type, a trailing
+integer conversion does. Its operand is an expression of array type, or a
+pointer to one under [Implicit dereference](#implicit-dereference). A trailing
 comma after that operand is permitted, and the result has type `int`.
 
 `len(a)` yields the length recorded in the operand's type. The operand is still
@@ -1116,6 +1139,185 @@ fn main() -> void {
         exit(1);
     }
     exit(0); // reports 0
+}
+```
+
+## Pointers
+
+### Pointer types
+
+```text
+*T
+*const T
+```
+
+A pointer refers to a location of its target type `T`, or is `null`. Writing
+through a `*T` is permitted; writing through a `*const T` is not. The two are
+distinct types, and the target type distinguishes them further: `*int`,
+`*const int`, and `*i64` are three distinct types.
+
+A pointer type is a value type. It may be the type of a binding, a parameter, a
+function result, a struct field, or an array element. Its target type may be any
+value type, including another pointer type. `void` is not a value type and
+cannot be a target type.
+
+The zero value of a pointer type is `null`.
+
+A pointer is a value. Initialization, assignment, argument passing, and return
+copy it, and the copy refers to the same location. Copying a pointer does not
+copy the location it refers to.
+
+Because a pointer's size does not depend on its target type, a struct may reach
+itself through a pointer field:
+
+```fern
+type Node struct {
+    value: int,
+    next: *Node,
+}
+```
+
+### The null pointer
+
+`null` is a reserved word denoting a pointer that refers to no location. It is
+an untyped constant and takes a pointer type from context under the rules of
+Typing by context: an annotated binding, a parameter type, a result type, an
+assignment target, or the other operand of a comparison. `null` with no such
+context is invalid.
+
+```fern
+fn main() -> void {
+    var p: *int = null;
+    var q = null; // invalid: no context supplies a pointer type
+}
+```
+
+### Address-of
+
+`&x` yields a pointer to the location `x`. [Assignment](#assignment) defines
+which expressions are locations and when a location is mutable. `&x` yields
+`*T` when `x` is a mutable location of type `T`, and `*const T` when `x` is an
+immutable one. Taking the address of an expression that is not a location is
+invalid.
+
+Evaluating `&x` evaluates every index, field-selection, and dereference
+expression in `x`, from left to right, and traps on an out-of-range index or a
+`null` dereference just as reading `x` would.
+
+`&x` is never a constant expression. A module-level initializer therefore cannot
+take an address, and `null` is the only pointer value one can hold.
+
+```fern
+fn main() -> void {
+    var x = 7;
+    const c = 9;
+    var p = &x;       // *int
+    var q = &c;       // *const int
+    exit(*p + *q);    // reports 16
+}
+```
+
+### Dereference
+
+`*p` denotes the location that `p` refers to and has the pointer's target type.
+Dereferencing `null` traps.
+
+`*p` is itself a location, so it may be addressed, and it may be assigned when
+`p` has type `*T`. [Assignment](#assignment) gives the statement form.
+
+Unary `*` and unary `&` are unary operators and take the precedence given under
+Precedence, associativity, and evaluation order.
+
+```fern
+fn main() -> void {
+    var x = 7;
+    const p = &x;
+    *p = 42;
+    exit(x); // reports 42
+}
+```
+
+### Implicit dereference
+
+Field selection, indexing, and `len` accept a pointer operand and dereference it
+once: `p.x` means `(*p).x`, `p[i]` means `(*p)[i]`, and `len(p)` means
+`len(*p)`. Each traps when `p` is `null`. Because a pointer operand can trap,
+`len(p)` is never a constant expression.
+
+The result is a location whose mutability follows the pointer, so `p.x = e;` is
+valid when `p` has type `*Point` and invalid when it has type `*const Point`.
+
+One level is dereferenced, not a chain: for `pp` of type `**Point`, write
+`(*pp).x`. Implicit dereference applies to these three forms and nowhere else;
+iterating the array a pointer refers to is written `for v in *p`.
+
+```fern
+type Point struct {
+    x: int,
+    y: int,
+}
+
+fn shift(p: *Point) -> void {
+    p.x = p.x + 1;
+}
+
+fn main() -> void {
+    var q = Point { x = 1, y = 2 };
+    shift(&q);
+    exit(q.x); // reports 2
+}
+```
+
+### Pointer conversion and comparison
+
+A `*T` may be used wherever a `*const T` with the same target type is expected:
+as the initializer of an annotated binding, a call argument, a `return`
+expression, an assigned value, or the other operand of a comparison. The value
+is unchanged; the conversion only withdraws the ability to write through the
+pointer. There is no conversion in the other direction, and no conversion
+between pointers with different target types.
+
+`==` and `!=` compare two pointers whose target types are the same, whether or
+not their constness matches, and compare any pointer against `null`. Two
+pointers are equal when they refer to the same location, or when both are
+`null`. `<`, `<=`, `>`, and `>=` are not defined on pointers, and neither are
+the arithmetic, bitwise, and logical operators. There is no pointer arithmetic.
+A comparison of two pointers is never a constant expression.
+
+`uint(p)` converts a pointer to `uint`, yielding its address. It never traps,
+and `null` converts to `0`. There is no conversion from an integer to a pointer.
+
+```fern
+fn read(p: *const int) -> int {
+    return *p;
+}
+
+fn main() -> void {
+    var x = 5;
+    var p = &x;
+    const q: *const int = p; // a *int is accepted here
+    if p == q {
+        exit(read(p)); // reports 5
+    }
+    exit(1);
+}
+```
+
+### Pointer validity
+
+A pointer is valid only while the location it refers to exists. A local
+binding's location exists from its declaration until its enclosing block ends. A
+module-level binding's location exists for the whole program run.
+
+Using the value of a pointer to a location that no longer exists is invalid.
+Fern does not detect it: neither the compiler nor the running program checks
+pointer validity, and this is the only rule in the language that goes unchecked.
+Keeping a pointer no longer than its referent is the programmer's obligation.
+
+```fern
+fn escape() -> *int {
+    var x = 1;
+    return &x; // x ceases to exist when the function returns
 }
 ```
 

@@ -54,6 +54,10 @@ impl CheckedProgram<'_> {
                 self.resolve_struct_fields(id, &written.span, scopes)?;
                 Ok(self.struct_type(id))
             }
+            AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
+                constant: *constant,
+                target: Box::new(self.resolve_pointer_target(*target, scopes)?),
+            }),
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
                 let length = match length {
@@ -69,8 +73,45 @@ impl CheckedProgram<'_> {
                 })
             }
         }?;
-        self.validate_aggregate_layout(&ty, &written.span)?;
+        if !matches!(&written.kind, AnnotationKind::Pointer { .. }) {
+            self.validate_aggregate_layout(&ty, &written.span)?;
+        }
         Ok(ty)
+    }
+
+    /// Resolves the type a pointer reaches without following its inline layout.
+    /// A pointer's representation is independent of that target, so a pointer
+    /// field may be the edge that breaks a recursive struct declaration.
+    fn resolve_pointer_target(
+        &mut self,
+        annotation: Idx<TypeAnnotation>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<Type, Diagnostic> {
+        let syntax = self.syntax;
+        let written = &syntax.annotations[annotation];
+        match &written.kind {
+            AnnotationKind::Scalar(scalar) => Ok(Type::Scalar(*scalar)),
+            AnnotationKind::Named(name) => {
+                let id = self.resolve_type_name(name, scopes)?;
+                Ok(self.struct_type(id))
+            }
+            AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
+                constant: *constant,
+                target: Box::new(self.resolve_pointer_target(*target, scopes)?),
+            }),
+            AnnotationKind::Array { length, element } => {
+                let Some(length) = length else {
+                    return Err(Diagnostic::new(
+                        written.span.clone(),
+                        "`[_]` requires an array-literal initializer",
+                    ));
+                };
+                Ok(Type::Array {
+                    length: self.array_length(*length, scopes)?,
+                    element: Box::new(self.resolve_pointer_target(*element, scopes)?),
+                })
+            }
+        }
     }
 
     /// Rejects layouts that native emission cannot address before they reach

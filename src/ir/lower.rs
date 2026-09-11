@@ -4,7 +4,9 @@ use crate::{
     frontend::syntax::{
         Expression, ExpressionKind, ForHeader, Function as SyntaxFunction, Statement, StatementKind,
     },
-    semantic::model::{Binding, CheckedProgram, CheckedStep, Constant, ExpressionValue},
+    semantic::model::{
+        Binding, CheckedLocation, CheckedLocationKind, CheckedProgram, Constant, ExpressionValue,
+    },
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type},
 };
 use la_arena::Idx;
@@ -157,12 +159,20 @@ fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
             ty,
         },
         Constant::Float(value) => Literal::Floating(*value),
+        Constant::Null => unreachable!("a null constant has a pointer type"),
         Constant::Rational(_) => {
             unreachable!("an untyped constant is contextualized before lowering")
         }
         Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("an aggregate constant is not a scalar")
         }
+    }
+}
+
+fn pointer_literal(constant: &Constant, ty: &Type) -> Literal {
+    match constant {
+        Constant::Null => Literal::Null(ty.clone()),
+        _ => unreachable!("a pointer constant is null"),
     }
 }
 
@@ -179,6 +189,7 @@ fn flatten(
         (Type::Scalar(scalar), scalar_constant) => {
             values.push(scalar_literal(scalar_constant, *scalar));
         }
+        (Type::Pointer { .. }, constant) => values.push(pointer_literal(constant, ty)),
         (Type::Array { element, .. }, Constant::Array(elements)) => {
             for value in elements {
                 flatten(checked, value, element, values);
@@ -253,6 +264,12 @@ impl FlowBuilder {
             .instructions
             .push(Instruction::Value(id));
         Operand::Value(id)
+    }
+
+    fn check(&mut self, place: Place) {
+        self.blocks[self.current.0]
+            .instructions
+            .push(Instruction::Check { place });
     }
 
     fn store(&mut self, place: Place, operand: Operand) {
@@ -488,19 +505,70 @@ fn lower_target(
     builder: &mut FlowBuilder,
 ) -> HeldPlace {
     let target = &checked.assignments[statement];
-    let root = bindings[&target.binding].clone();
-    let mut steps = Vec::with_capacity(target.steps.len());
-    for step in &target.steps {
-        steps.push(match step {
-            CheckedStep::Index(index) => {
-                let span = checked.syntax.expressions[*index].span.clone();
-                let operand = lower_flow_operand(checked, *index, bindings, builder);
-                HeldStep::Index(hold_operand(builder, operand, Scalar::Int.into()), span)
+    lower_location(checked, &target.location, bindings, builder)
+}
+
+fn lower_location(
+    checked: &CheckedProgram<'_>,
+    location: &CheckedLocation,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> HeldPlace {
+    match &location.kind {
+        CheckedLocationKind::Binding(binding) => HeldPlace {
+            root: Some(bindings[binding].clone()),
+            steps: Vec::new(),
+        },
+        CheckedLocationKind::Index {
+            operand,
+            index,
+            implicit_dereference,
+        } => {
+            let mut held = lower_location(checked, operand, bindings, builder);
+            if let Some(span) = implicit_dereference {
+                let place = held.read(builder);
+                let pointer = load_place(builder, place, operand.ty.clone());
+                held.steps.push(HeldStep::Indirect(
+                    hold_operand(builder, pointer, operand.ty.clone()),
+                    span.clone(),
+                ));
             }
-            CheckedStep::Field(ordinal) => HeldStep::Field(*ordinal),
-        });
+            let syntax_index = *index;
+            let index = lower_flow_operand(checked, syntax_index, bindings, builder);
+            held.steps.push(HeldStep::Index(
+                hold_operand(builder, index, Scalar::Int.into()),
+                checked.syntax.expressions[syntax_index].span.clone(),
+            ));
+            held
+        }
+        CheckedLocationKind::Field {
+            operand,
+            ordinal,
+            implicit_dereference,
+        } => {
+            let mut held = lower_location(checked, operand, bindings, builder);
+            if let Some(span) = implicit_dereference {
+                let place = held.read(builder);
+                let pointer = load_place(builder, place, operand.ty.clone());
+                held.steps.push(HeldStep::Indirect(
+                    hold_operand(builder, pointer, operand.ty.clone()),
+                    span.clone(),
+                ));
+            }
+            held.steps.push(HeldStep::Field(*ordinal));
+            held
+        }
+        CheckedLocationKind::Dereference { operand } => {
+            let pointer = lower_flow_operand(checked, *operand, bindings, builder);
+            HeldPlace {
+                root: None,
+                steps: vec![HeldStep::Indirect(
+                    hold_operand(builder, pointer, checked.expressions[*operand].ty.clone()),
+                    location.span.clone(),
+                )],
+            }
+        }
     }
-    HeldPlace { root, steps }
 }
 
 /// Lowers arguments left to right, holding each so a later argument that splits
@@ -873,6 +941,12 @@ fn store_constant(
                 Operand::Literal(scalar_literal(constant, *scalar)),
             );
         }
+        (Type::Pointer { .. }, constant) => {
+            builder.store(
+                place.clone(),
+                Operand::Literal(pointer_literal(constant, ty)),
+            );
+        }
         (Type::Array { element, .. }, Constant::Array(elements)) => {
             for (index, value) in elements.iter().enumerate() {
                 let index = u64::try_from(index).expect("an array fits in the address space");
@@ -951,7 +1025,7 @@ fn store_elements(
     for (index, &element) in elements.iter().enumerate() {
         let index = u64::try_from(index).expect("an array fits in the address space");
         let operand = lower_flow_operand(checked, element, bindings, builder);
-        builder.store(element_at(place, index, span), operand);
+        builder.store(element_at(place, index, span), operand.clone());
         last = Some(operand);
     }
     if !fill {
@@ -960,7 +1034,7 @@ fn store_elements(
     let last = last.expect("a fill follows at least one element");
     let filled = u64::try_from(elements.len()).expect("an array fits in the address space");
     for index in filled..*length {
-        builder.store(element_at(place, index, span), last);
+        builder.store(element_at(place, index, span), last.clone());
     }
 }
 
@@ -988,6 +1062,10 @@ fn lower_aggregate_place(
         }
         ExpressionValue::Index { .. } => element_place(checked, id, bindings, builder),
         ExpressionValue::Field { .. } => field_place(checked, id, bindings, builder),
+        ExpressionValue::Dereference { operand } => Place::Indirect {
+            pointer: lower_flow_operand(checked, *operand, bindings, builder),
+            span: checked.syntax.expressions[id].span.clone(),
+        },
         ExpressionValue::Array { elements, fill } => {
             let place = Place::Local(builder.local(ty.clone()));
             store_elements(checked, &place, id, elements, *fill, bindings, builder);
@@ -1020,10 +1098,22 @@ fn element_place(
     bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Place {
-    let ExpressionValue::Index { operand, index } = &checked.expressions[id].value else {
+    let ExpressionValue::Index {
+        operand,
+        index,
+        implicit_dereference,
+    } = &checked.expressions[id].value
+    else {
         unreachable!("an element place is lowered from an index expression")
     };
-    let base = lower_aggregate_place(checked, *operand, bindings, builder);
+    let base = if *implicit_dereference {
+        Place::Indirect {
+            pointer: lower_flow_operand(checked, *operand, bindings, builder),
+            span: checked.syntax.expressions[*operand].span.clone(),
+        }
+    } else {
+        lower_aggregate_place(checked, *operand, bindings, builder)
+    };
     let span = checked.syntax.expressions[*index].span.clone();
     let index = lower_flow_operand(checked, *index, bindings, builder);
     Place::Element {
@@ -1039,11 +1129,44 @@ fn field_place(
     bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Place {
-    let ExpressionValue::Field { operand, ordinal } = &checked.expressions[id].value else {
+    let ExpressionValue::Field {
+        operand,
+        ordinal,
+        implicit_dereference,
+    } = &checked.expressions[id].value
+    else {
         unreachable!("a field place is lowered from a field expression")
     };
-    let base = lower_aggregate_place(checked, *operand, bindings, builder);
+    let base = if *implicit_dereference {
+        Place::Indirect {
+            pointer: lower_flow_operand(checked, *operand, bindings, builder),
+            span: checked.syntax.expressions[*operand].span.clone(),
+        }
+    } else {
+        lower_aggregate_place(checked, *operand, bindings, builder)
+    };
     field_at(&base, *ordinal)
+}
+
+fn lower_expression_location(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Place {
+    match &checked.expressions[id].value {
+        ExpressionValue::Reference(binding) => bindings[binding].clone(),
+        ExpressionValue::Grouping { expression } => {
+            lower_expression_location(checked, *expression, bindings, builder)
+        }
+        ExpressionValue::Index { .. } => element_place(checked, id, bindings, builder),
+        ExpressionValue::Field { .. } => field_place(checked, id, bindings, builder),
+        ExpressionValue::Dereference { operand } => Place::Indirect {
+            pointer: lower_flow_operand(checked, *operand, bindings, builder),
+            span: checked.syntax.expressions[id].span.clone(),
+        },
+        _ => unreachable!("semantic checking requires an addressable expression"),
+    }
 }
 
 /// The length `len(operand)` reads from its operand's type. The operand is
@@ -1054,11 +1177,22 @@ fn lower_length(
     bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Operand {
-    let Type::Array { length, .. } = checked.expressions[operand].ty else {
+    let operand_ty = &checked.expressions[operand].ty;
+    let (array, implicit) = match operand_ty {
+        Type::Pointer { target, .. } => (&**target, true),
+        _ => (operand_ty, false),
+    };
+    let Type::Array { length, .. } = array else {
         unreachable!("checking requires an array operand for `len`")
     };
-    lower_flow_operand(checked, operand, bindings, builder);
-    integer(i128::from(length), Scalar::Int)
+    let value = lower_flow_operand(checked, operand, bindings, builder);
+    if implicit {
+        builder.check(Place::Indirect {
+            pointer: value,
+            span: checked.syntax.expressions[operand].span.clone(),
+        });
+    }
+    integer(i128::from(*length), Scalar::Int)
 }
 
 /// Lowers the evaluation a folded expression still owes. `len` reads its
@@ -1073,7 +1207,7 @@ fn lower_folded_effects(
 ) {
     let mut operands = Vec::new();
     match &checked.expressions[id].value {
-        ExpressionValue::Length { operand } => {
+        ExpressionValue::Length { operand, .. } => {
             lower_flow_operand(checked, *operand, bindings, builder);
             return;
         }
@@ -1092,12 +1226,17 @@ fn lower_folded_effects(
         // only reaches them under a `len`, and the rest hold no
         // sub-expression at all.
         ExpressionValue::Integer
+        | ExpressionValue::CompoundAssignmentTarget
         | ExpressionValue::Floating
         | ExpressionValue::Boolean
+        | ExpressionValue::Null
         | ExpressionValue::Reference(_)
         | ExpressionValue::Call { .. }
         | ExpressionValue::Index { .. }
         | ExpressionValue::Field { .. } => {}
+        ExpressionValue::AddressOf { .. } | ExpressionValue::Dereference { .. } => {
+            unreachable!("pointers stop before IR lowering")
+        }
     }
     for operand in operands {
         lower_folded_effects(checked, operand, bindings, builder);
@@ -1111,6 +1250,54 @@ fn lower_flow_operand(
     builder: &mut FlowBuilder,
 ) -> Operand {
     let expression = &checked.expressions[id];
+    if let Type::Pointer { .. } = &expression.ty {
+        if let Some(constant) = expression.constant.as_ref() {
+            lower_folded_effects(checked, id, bindings, builder);
+            return Operand::Literal(pointer_literal(constant, &expression.ty));
+        }
+        return match &expression.value {
+            ExpressionValue::Reference(binding) => {
+                load_place(builder, bindings[binding].clone(), expression.ty.clone())
+            }
+            ExpressionValue::Grouping { expression } => {
+                lower_flow_operand(checked, *expression, bindings, builder)
+            }
+            // Converting `*T` to `*const T` changes only the type-system
+            // permission to write through the pointer, never its bits.
+            ExpressionValue::Conversion { operand, .. } => {
+                lower_flow_operand(checked, *operand, bindings, builder)
+            }
+            ExpressionValue::Index { .. } => {
+                let place = element_place(checked, id, bindings, builder);
+                load_place(builder, place, expression.ty.clone())
+            }
+            ExpressionValue::Field { .. } => {
+                let place = field_place(checked, id, bindings, builder);
+                load_place(builder, place, expression.ty.clone())
+            }
+            ExpressionValue::Dereference { operand } => {
+                let pointer = lower_flow_operand(checked, *operand, bindings, builder);
+                load_place(
+                    builder,
+                    Place::Indirect {
+                        pointer,
+                        span: checked.syntax.expressions[id].span.clone(),
+                    },
+                    expression.ty.clone(),
+                )
+            }
+            ExpressionValue::AddressOf { operand } => {
+                let place = lower_expression_location(checked, *operand, bindings, builder);
+                builder.value(Value {
+                    span: Some(checked.syntax.expressions[id].span.clone()),
+                    ty: expression.ty.clone(),
+                    kind: ValueKind::AddressOf(place),
+                })
+            }
+            ExpressionValue::Call { .. } => lower_call_expression(checked, id, bindings, builder),
+            _ => unreachable!("a pointer value is a reference, null, address, grouping, or call"),
+        };
+    }
     let Some(scalar) = expression.ty.scalar() else {
         let place = lower_aggregate_place(checked, id, bindings, builder);
         return load_place(builder, place, expression.ty.clone());
@@ -1121,14 +1308,20 @@ fn lower_flow_operand(
         return Operand::Literal(scalar_literal(constant, scalar));
     }
     match &expression.value {
-        ExpressionValue::Integer | ExpressionValue::Floating | ExpressionValue::Boolean => {
+        ExpressionValue::Integer
+        | ExpressionValue::CompoundAssignmentTarget
+        | ExpressionValue::Floating
+        | ExpressionValue::Boolean => {
             unreachable!("literal expressions are constant")
         }
         ExpressionValue::Array { .. } => unreachable!("an array literal has an array type"),
         ExpressionValue::Struct { .. } => unreachable!("a struct literal has a struct type"),
         // A `len` reaches here only when its operand holds a call, which is
         // what stops it from folding.
-        ExpressionValue::Length { operand } => lower_length(checked, *operand, bindings, builder),
+        ExpressionValue::Length {
+            operand,
+            implicit_dereference: _,
+        } => lower_length(checked, *operand, bindings, builder),
         ExpressionValue::Index { .. } => {
             let place = element_place(checked, id, bindings, builder);
             load_place(builder, place, ty)
@@ -1239,6 +1432,20 @@ fn lower_flow_operand(
             ..
         } => lower_logical(checked, *operator, *left, *right, bindings, builder),
         ExpressionValue::Call { .. } => lower_call_expression(checked, id, bindings, builder),
+        ExpressionValue::Dereference { operand } => {
+            let pointer = lower_flow_operand(checked, *operand, bindings, builder);
+            load_place(
+                builder,
+                Place::Indirect {
+                    pointer,
+                    span: checked.syntax.expressions[id].span.clone(),
+                },
+                ty,
+            )
+        }
+        ExpressionValue::Null | ExpressionValue::AddressOf { .. } => {
+            unreachable!("pointer expressions are handled above")
+        }
     }
 }
 
@@ -1265,13 +1472,13 @@ fn hold_operand(builder: &FlowBuilder, operand: Operand, ty: Type) -> HeldOperan
 impl HeldOperand {
     fn read(&mut self, builder: &mut FlowBuilder) -> Operand {
         if !matches!(self.operand, Operand::Value(_)) || self.block == builder.current {
-            return self.operand;
+            return self.operand.clone();
         }
         let local = match self.spill {
             Some(local) => local,
             None => {
                 let local = builder.local(self.ty.clone());
-                builder.store_in(self.block, Place::Local(local), self.operand);
+                builder.store_in(self.block, Place::Local(local), self.operand.clone());
                 self.spill = Some(local);
                 local
             }
@@ -1285,12 +1492,13 @@ impl HeldOperand {
 enum HeldStep {
     Index(HeldOperand, std::ops::Range<usize>),
     Field(usize),
+    Indirect(HeldOperand, std::ops::Range<usize>),
 }
 
 /// An assignment target whose steps were lowered before the value stored
 /// through it, so the place is rebuilt in whichever block the store lands in.
 struct HeldPlace {
-    root: Place,
+    root: Option<Place>,
     steps: Vec<HeldStep>,
 }
 
@@ -1298,16 +1506,22 @@ impl HeldPlace {
     fn read(&mut self, builder: &mut FlowBuilder) -> Place {
         let mut place = self.root.clone();
         for step in &mut self.steps {
-            place = match step {
+            place = Some(match step {
                 HeldStep::Index(index, span) => Place::Element {
-                    base: Box::new(place),
+                    base: Box::new(place.expect("an index follows a base place")),
                     index: index.read(builder),
                     span: span.clone(),
                 },
-                HeldStep::Field(ordinal) => field_at(&place, *ordinal),
-            };
+                HeldStep::Field(ordinal) => {
+                    field_at(&place.expect("a field follows a base place"), *ordinal)
+                }
+                HeldStep::Indirect(pointer, span) => Place::Indirect {
+                    pointer: pointer.read(builder),
+                    span: span.clone(),
+                },
+            });
         }
-        place
+        place.expect("a checked location has a place")
     }
 }
 

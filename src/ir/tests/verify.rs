@@ -2,6 +2,48 @@ use super::*;
 use crate::types::{ComparisonOperator, MAX_STRUCT_CONTAINMENT_DEPTH, UnaryOperator};
 
 #[test]
+fn verification_rejects_non_pointer_nulls_and_indirect_places() {
+    let invalid_null = Global {
+        ty: Scalar::Int.into(),
+        values: vec![Literal::Null(Scalar::Int.into())],
+    };
+    let mut malformed = one_function(main_function(
+        vec![],
+        vec![],
+        vec![Block {
+            instructions: vec![],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    ));
+    malformed.globals = vec![invalid_null];
+    assert!(
+        malformed
+            .verify()
+            .unwrap_err()
+            .to_string()
+            .contains("IR null has non-pointer type `int`")
+    );
+
+    let invalid_indirect = Value {
+        span: None,
+        ty: Scalar::Int.into(),
+        kind: ValueKind::Load(Place::Indirect {
+            pointer: integer(0, Scalar::Int),
+            span: 0..1,
+        }),
+    };
+    let error = program(vec![invalid_indirect], integer(0, Scalar::Int))
+        .verify()
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("IR dereferences `int`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn verification_rejects_invalid_array_places() {
     let row = array(2, Scalar::Int.into());
     let load = |ty: Type, place| Value {
@@ -77,8 +119,8 @@ fn verification_rejects_array_values_outside_copies_and_equality() {
                 load.clone(),
                 operation(ValueKind::Comparison {
                     operator: ComparisonOperator::Less,
-                    left: rows,
-                    right: rows,
+                    left: rows.clone(),
+                    right: rows.clone(),
                 }),
             ],
             "invalid IR value",
@@ -92,8 +134,8 @@ fn verification_rejects_array_values_outside_copies_and_equality() {
                     kind: ValueKind::Binary {
                         operator: BinaryOperator::Add,
                         form: BinaryForm::Infix,
-                        left: rows,
-                        right: rows,
+                        left: rows.clone(),
+                        right: rows.clone(),
                     },
                 },
             ],
@@ -124,8 +166,8 @@ fn verification_rejects_array_values_outside_copies_and_equality() {
         load,
         operation(ValueKind::Comparison {
             operator: ComparisonOperator::Equal,
-            left: rows,
-            right: rows,
+            left: rows.clone(),
+            right: rows.clone(),
         }),
     ];
     let blocks = vec![Block {
@@ -363,7 +405,7 @@ fn verification_checks_conversions_and_exits() {
                                     span,
                                     ty: destination.into(),
                                     kind: ValueKind::Convert {
-                                        operand,
+                                        operand: operand.clone(),
                                         truncating: false,
                                     },
                                 },
@@ -440,6 +482,42 @@ fn verification_accepts_checked_conversion_operands() {
     )
     .verify()
     .unwrap();
+}
+
+#[test]
+fn verification_admits_only_nontruncating_pointer_to_uint_conversion() {
+    let pointer = Type::Pointer {
+        constant: false,
+        target: Box::new(Scalar::Int.into()),
+    };
+    let conversion = |destination, truncating| Value {
+        span: None,
+        ty: destination,
+        kind: ValueKind::Convert {
+            operand: Operand::Literal(Literal::Null(pointer.clone())),
+            truncating,
+        },
+    };
+    program(
+        vec![conversion(Scalar::Uint.into(), false)],
+        integer(0, Scalar::Int),
+    )
+    .verify()
+    .unwrap();
+    for (destination, truncating) in [
+        (Scalar::Uint.into(), true),
+        (Scalar::Int.into(), false),
+        (pointer.clone(), false),
+    ] {
+        assert!(
+            program(
+                vec![conversion(destination, truncating)],
+                integer(0, Scalar::Int),
+            )
+            .verify()
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -1453,19 +1531,22 @@ fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order()
         ty: Scalar::U8,
     };
     let weights = doubles([0.5, 1.5]);
-    let complete = || vec![x, y, weights[0], weights[1]];
+    let complete = || vec![x.clone(), y.clone(), weights[0].clone(), weights[1].clone()];
 
     cell(complete()).verify().unwrap();
 
     for (values, expected) in [
-        (vec![x, y, weights[0]], "holds 3 values, expected 4"),
         (
-            [complete(), vec![weights[1]]].concat(),
+            vec![x.clone(), y.clone(), weights[0].clone()],
+            "holds 3 values, expected 4",
+        ),
+        (
+            [complete(), vec![weights[1].clone()]].concat(),
             "holds 5 values, expected 4",
         ),
         // The scalars are heterogeneous, so their order is part of the check.
         (
-            vec![y, x, weights[0], weights[1]],
+            vec![y.clone(), x.clone(), weights[0].clone(), weights[1].clone()],
             "holds a `u8` value where a `int` value belongs",
         ),
         (
@@ -1475,8 +1556,8 @@ fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order()
                     value: 256,
                     ty: Scalar::U8,
                 },
-                weights[0],
-                weights[1],
+                weights[0].clone(),
+                weights[1].clone(),
             ],
             "IR integer 256 out of range",
         ),

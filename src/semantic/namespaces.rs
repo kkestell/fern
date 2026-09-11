@@ -636,9 +636,9 @@ impl CheckedProgram<'_> {
         let Some(initializer) = initializer else {
             let annotation = annotation.expect("a declaration without an initializer is annotated");
             let ty = self.resolve_annotation(annotation, &scopes, None)?;
+            let binding = self.declarations[statement];
             let span = syntax.statements[statement].span.clone();
             let zero = self.zero_value(&ty, &span)?;
-            let binding = self.declarations[statement];
             self.bindings[binding].ty = ty;
             self.bindings[binding].constant = (!mutable).then(|| zero.clone());
             self.zero_declarations.insert(statement, zero);
@@ -658,7 +658,7 @@ impl CheckedProgram<'_> {
             }
             None => None,
         };
-        let expression = self.check_expression(initializer, &scopes, destination)?;
+        let expression = self.check_expression(initializer, &scopes, destination.clone())?;
         if expression.constant.is_none() {
             return Err(Diagnostic::new(
                 syntax.expressions[initializer].span.clone(),
@@ -666,7 +666,7 @@ impl CheckedProgram<'_> {
             ));
         }
         let binding = self.declarations[statement];
-        self.bindings[binding].ty = expression.ty.clone();
+        self.bindings[binding].ty = destination.unwrap_or_else(|| expression.ty.clone());
         self.bindings[binding].constant = if mutable {
             None
         } else {
@@ -822,6 +822,9 @@ impl CheckedProgram<'_> {
                 }
                 self.collect_annotation_references(element, visited, references);
             }
+            // A pointer's target is reached through the pointer rather than
+            // stored in it, so a target type is not a size dependency.
+            AnnotationKind::Pointer { .. } => {}
         }
     }
 

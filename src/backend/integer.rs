@@ -205,7 +205,14 @@ fn emit_checked_arithmetic(
     if operator == BinaryOperator::Multiply && ty.width() == 32 {
         emit_wide_word_multiply(&mut emitter.text, id, ty, left, right);
     } else {
-        emit_binary_raw(&mut emitter.text, id, ty, instruction, left, right);
+        emit_binary_raw(
+            &mut emitter.text,
+            id,
+            ty,
+            instruction,
+            left.clone(),
+            right.clone(),
+        );
         if operator == BinaryOperator::Multiply && ty.width() == 64 {
             emit_long_multiply_overflow(&mut emitter.text, id, ty, left, right);
         } else {
@@ -464,8 +471,8 @@ fn emit_division(
 ) {
     let ty = scalar(&value.ty);
     let width = qbe_type(ty);
-    let left_text = operand(left);
-    let right_text = operand(right);
+    let left_text = operand(left.clone());
+    let right_text = operand(right.clone());
     writeln!(
         emitter.text,
         "    %operation{id}_zero =w ceq{width} {right_text}, 0"
@@ -537,7 +544,7 @@ fn emit_shift(
 ) {
     let (left, right) = operands;
     let ty = scalar(&value.ty);
-    let count_ty = operand_scalar(function, right);
+    let count_ty = operand_scalar(function, right.clone());
     let count_width = qbe_type(count_ty);
     let left = operand(left);
     let right = operand(right);

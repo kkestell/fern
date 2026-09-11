@@ -130,6 +130,35 @@ fn typed_integer_diagnostics_precede_emission_and_preserve_output() {
 }
 
 #[test]
+fn pointer_programs_compile_and_execute() {
+    let (_dir, input, output) = fixture(include_str!("fixtures/programs/pointers.fern"));
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn null_pointer_dereferences_abort_with_the_original_source_location() {
+    for source in [
+        "fn main() -> void { var pointer: *int = null; exit(*pointer); }",
+        "fn main() -> void { var pointer: *[2]int = null; exit(pointer[0]); }",
+        "fn main() -> void { var pointer: *[2]int = null; exit(len(pointer)); }",
+        "type Point struct { value: int }\n         fn main() -> void { var pointer: *Point = null; exit(pointer.value); }",
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        fs::remove_file(&input).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert!(!result.status.success(), "{source}");
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(
+            stderr.contains("null pointer dereference"),
+            "{source}: {stderr}"
+        );
+        assert!(stderr.contains("input.fern:"), "{source}: {stderr}");
+    }
+}
+
+#[test]
 fn source_failures_preserve_output() {
     for (source, expected) in [
         ("", "missing `main`"),

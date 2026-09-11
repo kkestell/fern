@@ -16,6 +16,7 @@ pub(super) fn operand(operand: Operand) -> String {
         Operand::Literal(literal) => match literal {
             Literal::Integer { value, .. } => value.to_string(),
             Literal::Floating(value) => floating::literal(value),
+            Literal::Null(_) => "0".to_owned(),
         },
         Operand::Value(ValueId(id)) => format!("%v{id}"),
     }
@@ -33,6 +34,7 @@ pub(super) fn data_item(literal: Literal) -> String {
             if value.ty() == Scalar::F32 { 'w' } else { 'l' },
             value.bits()
         ),
+        Literal::Null(_) => "l 0".to_owned(),
     }
 }
 
@@ -98,6 +100,24 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             writeln!(
                 emitter.text,
                 "    %aggregate{comparison}_equal =w ceq{class} %aggregate{comparison}_leftvalue, %aggregate{comparison}_rightvalue"
+            )
+            .unwrap();
+            format!("%aggregate{comparison}_equal")
+        }
+        Type::Pointer { .. } => {
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_leftvalue =l loadl {left}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_rightvalue =l loadl {right}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_equal =w ceql %aggregate{comparison}_leftvalue, %aggregate{comparison}_rightvalue"
             )
             .unwrap();
             format!("%aggregate{comparison}_equal")
@@ -217,10 +237,10 @@ fn emit_aggregate_result_blocks(emitter: &mut Emitter<'_>, comparison: usize) {
 }
 
 /// The type of an operand. Only a load or a call result gives one an aggregate
-/// type; a literal is always a scalar.
+/// type; literals are scalar values or typed null pointers.
 pub(super) fn operand_type(function: &Function, operand: Operand) -> Type {
     match operand {
-        Operand::Literal(literal) => literal.ty().into(),
+        Operand::Literal(literal) => literal.ty(),
         Operand::Value(ValueId(id)) => function.values[id].ty.clone(),
     }
 }

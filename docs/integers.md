@@ -215,30 +215,48 @@ On common systems, `int` is 32 bits, but the sizes of types such as `long` depen
 
 ## C's Third Weirdness: Small Integers Become `int`
 
-This code does not necessarily add two 8-bit values:
+Expectation from the box model: `a` and `b` are 8-bit boxes, so
+`a + b` is 8-bit addition that wraps modulo 256. Its value always fits
+in `0` through `255`.
+
+Abstract integer math says `255 + 1 = 256`, so 8-bit wrapping would
+reduce that to `0` immediately.
+
+C does the addition in a wider type:
 
 ```c
-uint8_t a = 200;
-uint8_t b = 100;
+uint8_t a = 255;
+uint8_t b = 1;
 
-uint8_t c = a + b;
+int c = a + b;   // 256, not 0
 ```
 
-Before the addition, `a` and `b` are usually promoted to `int`. The calculation is commonly:
+Before the addition, `a` and `b` are usually promoted to `int`. The
+calculation is commonly:
 
 ```text
-200 + 100 = 300
+255 + 1 = 256   // int, no wrapping
 ```
 
-Only when assigning to `uint8_t` does the result become 8 bits:
+So `c` holds `256`, a value no `uint8_t` can hold. Adding two 8-bit
+values produced a value outside `0` through `255`.
+
+Truncation happens only when the result is stored back into an 8-bit
+type:
+
+```c
+uint8_t d = a + b;   // 0
+```
 
 ```text
-300 modulo 256 = 44
+256 modulo 256 = 0
 ```
 
-This is called an **integer promotion**.
-
-The same rule affects arithmetic on `char`, `short`, and other small integer types.
+This is called an **integer promotion**: small integer types such as
+`char`, `signed char`, `unsigned char`, `short`, and `uint8_t` are
+promoted to `int` (or to `unsigned int` when `int` cannot hold every
+value) before most arithmetic. The arithmetic no longer happens in the
+original 8- or 16-bit box.
 
 ## C's Fourth Weirdness: Signed and Unsigned Mix Badly
 

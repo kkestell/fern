@@ -50,6 +50,7 @@ impl Layouts {
     pub(crate) fn size(&self, table: &dyn StructFields, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
+            Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
             Type::Array { length, element } => length.checked_mul(self.size(table, element)?),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.size),
         }
@@ -60,6 +61,7 @@ impl Layouts {
     pub(crate) fn alignment(&self, table: &dyn StructFields, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
+            Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
             Type::Array { element, .. } => self.alignment(table, element),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.alignment),
         }

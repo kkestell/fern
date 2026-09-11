@@ -170,11 +170,13 @@ pub(super) fn describe(place: &Place) -> String {
                 Operand::Literal(Literal::Floating(_)) => {
                     unreachable!("an index has type `int`")
                 }
+                Operand::Literal(Literal::Null(_)) => unreachable!("an index has type `int`"),
                 Operand::Value(ValueId(id)) => format!("v{id}"),
             };
             format!("{}[{index}]", describe(base))
         }
         Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
+        Place::Indirect { .. } => "*pointer".to_owned(),
     }
 }
 
@@ -188,7 +190,7 @@ pub(super) fn stored_places(function: &Function) -> Vec<String> {
 pub(super) fn stores(function: &Function) -> Vec<(Place, Operand)> {
     instructions(function)
         .filter_map(|instruction| match instruction {
-            Instruction::Store { place, operand } => Some((place.clone(), *operand)),
+            Instruction::Store { place, operand } => Some((place.clone(), operand.clone())),
             _ => None,
         })
         .collect()

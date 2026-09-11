@@ -3,8 +3,8 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{
-        AssignmentTarget, Call, Expression, ForHeader, Function, Label, Statement, StatementKind,
-        Syntax, TargetStep, TypeAnnotation,
+        Call, Expression, ForHeader, Function, Label, Statement, StatementKind, Syntax,
+        TypeAnnotation,
     },
     types::{BinaryOperator, Scalar, Type},
 };
@@ -53,7 +53,7 @@ impl CheckedProgram<'_> {
                 scopes,
             ),
             StatementKind::Assignment { target, value } => {
-                let target = self.assignment_target(target, scopes)?;
+                let target = self.assignment_target(*target, scopes)?;
                 let expression = self.check_expression(*value, scopes, Some(target.ty.clone()))?;
                 self.expressions.insert(*value, expression);
                 self.assignments.insert(statement, target);
@@ -66,7 +66,7 @@ impl CheckedProgram<'_> {
                 value,
             } => self.check_compound_assignment(
                 statement,
-                target,
+                *target,
                 *operator,
                 operator_span,
                 *value,
@@ -124,8 +124,8 @@ impl CheckedProgram<'_> {
                     }
                     None => None,
                 };
-                let expression = self.check_expression(initializer, scopes, destination)?;
-                let ty = expression.ty.clone();
+                let expression = self.check_expression(initializer, scopes, destination.clone())?;
+                let ty = destination.unwrap_or_else(|| expression.ty.clone());
                 let constant = if mutable {
                     None
                 } else {
@@ -146,6 +146,19 @@ impl CheckedProgram<'_> {
                 (ty, (!mutable).then_some(zero))
             }
         };
+        self.record_binding(statement, name, mutable, ty, constant, scopes);
+        Ok(())
+    }
+
+    fn record_binding(
+        &mut self,
+        statement: Idx<Statement>,
+        name: Spur,
+        mutable: bool,
+        ty: Type,
+        constant: Option<Constant>,
+        scopes: &mut ScopeStack<'_>,
+    ) {
         let binding = self.bindings.alloc(Binding {
             ty,
             mutable,
@@ -153,7 +166,6 @@ impl CheckedProgram<'_> {
         });
         self.declarations.insert(statement, binding);
         scopes.insert(name, binding);
-        Ok(())
     }
 
     /// Checks `target op= value` as the binary operation it stands for, with
@@ -161,7 +173,7 @@ impl CheckedProgram<'_> {
     fn check_compound_assignment(
         &mut self,
         statement: Idx<Statement>,
-        target: &AssignmentTarget,
+        target: Idx<Expression>,
         operator: BinaryOperator,
         operator_span: &std::ops::Range<usize>,
         value: Idx<Expression>,
@@ -171,7 +183,9 @@ impl CheckedProgram<'_> {
         let left = CheckedExpression {
             ty: target.ty.clone(),
             untyped: false,
-            value: ExpressionValue::Reference(target.binding),
+            // This is never recorded or lowered: only its type participates
+            // in the shared numeric-operator check below.
+            value: ExpressionValue::CompoundAssignmentTarget,
             constant: None,
         };
         let right = self.infer_expression(value, scopes)?;
@@ -367,47 +381,84 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// The binding an assignment stores into, its resolved steps, and the type
-    /// they reach. An element or field of a `const` binding is rejected with
-    /// the binding itself, so the mutability check comes first.
+    /// Checks an assignable location and retains its dereference operands.
     fn assignment_target(
         &mut self,
-        target: &AssignmentTarget,
+        target: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedTarget, Diagnostic> {
-        let name = &target.name;
-        let binding = self.resolve(name, scopes)?;
-        if !self.bindings[binding].mutable {
+        let location = self.check_location(target, scopes)?;
+        if !location.mutable {
+            if let Some(binding) = Self::location_binding(&location)
+                && !self.bindings[binding].mutable
+                && !Self::location_uses_pointer(&location)
+            {
+                return Err(Diagnostic::new(
+                    location.span.clone(),
+                    format!(
+                        "cannot assign to immutable binding `{}`",
+                        self.syntax.names.resolve(
+                            &self
+                                .target_name(target)
+                                .expect("a binding location originates at a reference")
+                        )
+                    ),
+                ));
+            }
             return Err(Diagnostic::new(
-                name.span.clone(),
-                format!(
-                    "cannot assign to immutable binding `{}`",
-                    self.syntax.names.resolve(&name.name)
-                ),
+                self.syntax.expressions[target].span.clone(),
+                "cannot assign to an immutable location",
             ));
         }
-        // The steps are checked left to right, the order they are evaluated
-        // in, and each one descends into the element or field type.
-        let mut ty = self.bindings[binding].ty.clone();
-        let mut steps = Vec::with_capacity(target.steps.len());
-        for step in &target.steps {
-            match step {
-                TargetStep::Index(index) => {
-                    ty = self.check_index_step(&ty, &name.span, *index, scopes)?;
-                    steps.push(CheckedStep::Index(*index));
+        Ok(CheckedTarget {
+            ty: location.ty.clone(),
+            location,
+        })
+    }
+
+    fn target_name(&self, target: Idx<Expression>) -> Option<lasso::Spur> {
+        let mut current = target;
+        loop {
+            match &self.syntax.expressions[current].kind {
+                crate::frontend::syntax::ExpressionKind::Reference(name) => return Some(name.name),
+                crate::frontend::syntax::ExpressionKind::Grouping { expression }
+                | crate::frontend::syntax::ExpressionKind::Index {
+                    operand: expression,
+                    ..
                 }
-                TargetStep::Field {
-                    name: field,
-                    name_span,
-                } => {
-                    let (ordinal, field_type) =
-                        self.check_field_step(&ty, &name.span, *field, name_span)?;
-                    ty = field_type;
-                    steps.push(CheckedStep::Field(ordinal));
-                }
+                | crate::frontend::syntax::ExpressionKind::Field {
+                    operand: expression,
+                    ..
+                } => current = *expression,
+                _ => return None,
             }
         }
-        Ok(CheckedTarget { binding, steps, ty })
+    }
+
+    fn location_binding(location: &CheckedLocation) -> Option<Idx<Binding>> {
+        match &location.kind {
+            CheckedLocationKind::Binding(binding) => Some(*binding),
+            CheckedLocationKind::Index { operand, .. }
+            | CheckedLocationKind::Field { operand, .. } => Self::location_binding(operand),
+            CheckedLocationKind::Dereference { .. } => None,
+        }
+    }
+
+    fn location_uses_pointer(location: &CheckedLocation) -> bool {
+        match &location.kind {
+            CheckedLocationKind::Binding(_) => false,
+            CheckedLocationKind::Index {
+                operand,
+                implicit_dereference,
+                ..
+            }
+            | CheckedLocationKind::Field {
+                operand,
+                implicit_dereference,
+                ..
+            } => implicit_dereference.is_some() || Self::location_uses_pointer(operand),
+            CheckedLocationKind::Dereference { .. } => true,
+        }
     }
 
     fn check_condition(

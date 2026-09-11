@@ -285,7 +285,7 @@ fn module_bindings_resolve_forward_references_and_enclose_every_function() {
         checked
             .assignments
             .iter()
-            .any(|(_, target)| target.binding == counter)
+            .any(|(_, target)| matches!(target.location.kind, CheckedLocationKind::Binding(binding) if binding == counter))
     );
     assert_eq!(checked.bindings.len(), 4);
 }

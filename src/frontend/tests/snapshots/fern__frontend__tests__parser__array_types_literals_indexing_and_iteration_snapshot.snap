@@ -31,12 +31,15 @@ fn rows name=3..7 span=0..136
     iteration value=v index=i index_span=Some(78..79)
       reference grid span=83..87
     body
-      assign out name=98..101 span=98..112
-        index
-          reference i span=102..103
-        index span=107..111
-          reference v span=107..108
-          integer 0 span=109..110
+      assign span=98..112
+        target
+          index span=98..104
+            reference out span=98..101
+            reference i span=102..103
+        value
+          index span=107..111
+            reference v span=107..108
+            integer 0 span=109..110
   return span=123..134
     reference out span=130..133
 fn main name=140..144 span=137..674
@@ -127,16 +130,22 @@ fn main name=140..144 span=137..674
   const trailing name=522..530 span=516..541
     len span=533..540
       reference a span=537..538
-  assign grid name=546..550 span=546..561
-    index
-      reference r span=551..552
-    index
-      reference c span=554..555
-    integer 7 span=559..560
-  compound assign a Add= name=566..567 operator=571..573 span=566..576
-    index
-      reference r span=568..569
-    integer 1 span=574..575
+  assign span=546..561
+    target
+      index span=546..556
+        index span=546..553
+          reference grid span=546..550
+          reference r span=551..552
+        reference c span=554..555
+    value
+      integer 7 span=559..560
+  compound assign Add= operator=571..573 span=566..576
+    target
+      index span=566..570
+        reference a span=566..567
+        reference r span=568..569
+    value
+      integer 1 span=574..575
   for label=outer label_span=Some(586..591) span=581..631
     iteration value=t index=- index_span=None
       reference a span=597..598

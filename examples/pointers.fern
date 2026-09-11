@@ -1,0 +1,44 @@
+type Node struct {
+    value: int,
+    next: *Node,
+}
+
+// A pointer's zero value is null.
+var empty: *Node;
+
+fn echo(pointer: *Node) -> *Node {
+    return pointer;
+}
+
+fn read(pointer: *const Node) -> int {
+    // Field selection dereferences one pointer implicitly.
+    return pointer.value;
+}
+
+fn main() -> void {
+    var node: Node;
+    node.value = 40;
+    node.next = &node;
+
+    // Pointers copy through arrays and calls while still naming one location.
+    var aliases: [2]*Node;
+    aliases[0] = &node;
+    aliases[1] = echo(aliases[0]);
+    const read_only: *const Node = aliases[1];
+
+    if empty != null || aliases[0] != read_only {
+        exit(1);
+    }
+    if uint(aliases[0]) == 0 {
+        exit(2);
+    }
+
+    // Explicit dereference stores a whole value through the pointer.
+    *aliases[1] = Node { value = 41, next = &node };
+    if (*aliases[1]).value != 41 {
+        exit(3);
+    }
+    aliases[1].value += 1;
+
+    exit(read(read_only));
+}

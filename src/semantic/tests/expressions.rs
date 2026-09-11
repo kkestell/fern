@@ -1301,3 +1301,65 @@ fn a_struct_value_passes_through_bindings_calls_returns_and_iteration() {
          }",
     );
 }
+
+#[test]
+fn pointer_values_take_context_and_reject_non_pointer_operations() {
+    accepts(
+        "var x = 1; const p = &x; var copy: *const int = p; var n: *int = null; const value = *p;",
+    );
+    accepts_source(
+        "type Point struct { value: int, values: [2]int }
+         fn main() -> void {
+             var point = Point { value = 1, values = [2, 3] };
+             const pointer = &point;
+             const value = pointer.value + pointer.values[0] + len(pointer.values);
+             const address = uint(pointer);
+             if pointer == null { exit(1); }
+         }",
+    );
+    accepts_source(
+        "fn take(pointer: *int) -> void {}
+         fn main() -> void {
+             var initialized: *int = (null);
+             var assigned: *int;
+             assigned = (null);
+             take((null));
+             if (null) == assigned { exit(0); }
+         }",
+    );
+    rejects(
+        "const n = null;",
+        "null",
+        "`null` requires a pointer type from context",
+    );
+    rejects(
+        "var x = 1; const p = &x; const e = p + 1;",
+        "+",
+        "`+` requires numeric operands",
+    );
+    rejects(
+        "var value = 1; const p = *value;",
+        "value",
+        "cannot dereference `int`",
+    );
+    rejects(
+        "const x = 1; const p = &x; const q: *int = p;",
+        "p",
+        "cannot implicitly convert `*const int` to `*int`",
+    );
+}
+
+#[test]
+fn address_of_reports_non_locations_as_addressing_errors() {
+    rejects_source(
+        "fn identity(value: int) -> int { return value; }
+         fn main() -> void { const pointer = &identity(1); }",
+        "identity(1)",
+        "cannot take the address of an expression that is not a location",
+    );
+    rejects_source(
+        "fn main() -> void { var value = 1; const pointer = &(value + 1); }",
+        "value + 1",
+        "cannot take the address of an expression that is not a location",
+    );
+}

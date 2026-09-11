@@ -112,6 +112,14 @@ fn array_type(length: u64, element: Type) -> Type {
     }
 }
 
+/// A pointer type with the written target and mutability.
+fn pointer_type(constant: bool, target: Type) -> Type {
+    Type::Pointer {
+        constant,
+        target: Box::new(target),
+    }
+}
+
 /// A `geometry` module beside the `app` root module, with one public struct
 /// type, one private struct type, and one public `const`.
 const GEOMETRY: &str = "pub type Point struct {

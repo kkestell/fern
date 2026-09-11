@@ -24,6 +24,9 @@ The examples form a tour of the currently supported language, grouped by topic:
   forms.
 - [Structs](examples/structs.fern) covers declarations, literals and fill,
   field selection and assignment, copying, and equality.
+- [Pointers](examples/pointers.fern) covers mutable and const pointer types,
+  `null`, address-of, explicit and implicit dereference, indirect assignment,
+  pointer copies, comparison, and conversion to `uint`.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is

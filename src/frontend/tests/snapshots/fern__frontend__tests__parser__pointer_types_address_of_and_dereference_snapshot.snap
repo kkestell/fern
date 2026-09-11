@@ -1,0 +1,172 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+type Node struct name=5..9 span=0..93
+  field value name=23..28
+    scalar int span=30..33
+  field next name=39..43
+    pointer constant=false span=45..50
+      target
+        named Node span=46..50
+  field cells name=56..61
+    pointer constant=false span=63..70
+      target
+        array span=64..70
+          length
+            integer 3 span=65..66
+          element
+            scalar int span=67..70
+  field slots name=76..81
+    array span=83..90
+      length
+        integer 3 span=84..85
+      element
+        pointer constant=false span=86..90
+          target
+            scalar int span=87..90
+fn head name=97..101 span=94..170
+  parameter list name=102..106
+    pointer constant=true span=108..119
+      target
+        named Node span=115..119
+  parameter table name=121..126
+    pointer constant=true span=128..140
+      target
+        pointer constant=false span=135..140
+          target
+            named Node span=136..140
+  result
+    pointer constant=false span=145..149
+      target
+        scalar int span=146..149
+  return span=156..168
+    null span=163..167
+fn main name=174..178 span=171..699
+  result void
+  var x name=199..200 span=195..205
+    integer 7 span=203..204
+  var mask name=214..218 span=210..223
+    integer 3 span=221..222
+  const p name=234..235 span=228..247
+    pointer constant=false span=237..241
+      target
+        scalar int span=238..241
+    address-of operator=244..245 span=244..246
+      reference x span=245..246
+  const frozen name=258..264 span=252..284
+    pointer constant=true span=266..276
+      target
+        scalar int span=273..276
+    null span=279..283
+  var pp name=293..295 span=289..311
+    pointer constant=false span=297..303
+      target
+        pointer constant=false span=298..303
+          target
+            named Node span=299..303
+    null span=306..310
+  var node name=320..324 span=316..346
+    named Node span=326..330
+    struct literal Node name=333..337 fill=Some(340..343) span=333..345
+  const element name=357..364 span=351..382
+    address-of operator=367..368 span=367..381
+      index span=368..381
+        field slots name=373..378 span=368..378
+          reference node span=368..372
+        integer 0 span=379..380
+  const reached name=393..400 span=387..420
+    dereference operator=403..404 span=403..419
+      field value name=414..419 span=404..419
+        field next name=409..413 span=404..413
+          reference node span=404..408
+  const anded name=431..436 span=425..448
+    binary And operator=441..442 span=439..447
+      reference x span=439..440
+      reference mask span=443..447
+  const sum name=459..462 span=453..472
+    binary Add operator=468..469 span=465..471
+      dereference operator=465..466 span=465..467
+        reference p span=466..467
+      integer 1 span=470..471
+  const same name=483..487 span=477..500
+    comparison Equal operator=492..494 span=490..499
+      reference p span=490..491
+      null span=495..499
+  call head target=505..509 left_paren=509..510 right_paren=520..521 span=505..522
+    null span=510..514
+    null span=516..520
+  assign span=527..537
+    target
+      reference pp span=527..529
+    value
+      null span=532..536
+  assign span=542..550
+    target
+      dereference operator=542..543 span=542..544
+        reference p span=543..544
+    value
+      integer 42 span=547..549
+  assign span=555..564
+    target
+      dereference operator=555..556 span=555..559
+        dereference operator=556..557 span=556..559
+          reference pp span=557..559
+    value
+      integer 1 span=562..563
+  assign span=569..585
+    target
+      field value name=575..580 span=569..580
+        group span=569..574
+          dereference operator=570..571 span=570..573
+            reference pp span=571..573
+    value
+      integer 2 span=583..584
+  assign span=590..609
+    target
+      dereference operator=590..591 span=590..604
+        index span=591..604
+          field slots name=596..601 span=591..601
+            reference node span=591..595
+          integer 0 span=602..603
+    value
+      integer 3 span=607..608
+  assign span=614..636
+    target
+      dereference operator=614..615 span=614..631
+        call head target=615..619 left_paren=619..620 right_paren=630..631 span=615..631
+          null span=620..624
+          null span=626..630
+    value
+      integer 4 span=634..635
+  compound assign Add= operator=644..646 span=641..649
+    target
+      dereference operator=641..642 span=641..643
+        reference p span=642..643
+    value
+      integer 5 span=647..648
+  for label=- label_span=None span=654..683
+    initializer
+      assign span=658..665
+        target
+          dereference operator=658..659 span=658..660
+            reference p span=659..660
+        value
+          integer 0 span=663..664
+    condition
+      comparison Less operator=668..669 span=666..671
+        reference x span=666..667
+        integer 1 span=670..671
+    post
+      compound assign Add= operator=676..678 span=673..680
+        target
+          dereference operator=673..674 span=673..675
+            reference p span=674..675
+        value
+          integer 1 span=679..680
+    body
+  for label=- label_span=None span=688..697
+    condition
+      dereference operator=692..693 span=692..694
+        reference p span=693..694
+    body

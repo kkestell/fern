@@ -7,7 +7,6 @@ use crate::{
         Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
-    layout::scalar_bytes,
     source::SourceMap,
     types::{Scalar, Type},
 };
@@ -38,7 +37,8 @@ fn function_symbol(main: FunctionId, id: FunctionId) -> String {
 
 /// The address of a place and the type stored there. An element place emits
 /// its bounds check here, so every read and write through it is checked.
-fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -> (String, Type) {
+fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) -> (String, Type) {
+    let flow = &function.flow;
     match place {
         Place::Local(local) => (format!("%local{}", local.0), flow.locals[local.0].clone()),
         Place::Global(global) => (
@@ -46,7 +46,7 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             emitter.globals[global.0].ty.clone(),
         ),
         Place::Element { base, index, span } => {
-            let (base, ty) = place_address(emitter, flow, base);
+            let (base, ty) = place_address(emitter, function, base);
             let spelling = ty.to_string();
             let Type::Array { length, element } = ty else {
                 unreachable!("a verified element place indexes an array")
@@ -64,9 +64,12 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
                 Operand::Literal(Literal::Floating(_)) => {
                     unreachable!("a verified index has type `int`")
                 }
+                Operand::Literal(Literal::Null(_)) => {
+                    unreachable!("a verified index has type `int`")
+                }
                 Operand::Value(_) => false,
             };
-            let index = operand(*index);
+            let index = operand(index.clone());
             if !constant {
                 // Indices are signed, so one unsigned comparison rejects both
                 // a negative index and one at or past the length.
@@ -105,7 +108,7 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             (format!("%access{access}_address"), *element)
         }
         Place::Field { base, ordinal } => {
-            let (base, ty) = place_address(emitter, flow, base);
+            let (base, ty) = place_address(emitter, function, base);
             let Type::Struct(declared) = ty else {
                 unreachable!("a verified field place selects a field of a struct")
             };
@@ -119,6 +122,34 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             )
             .unwrap();
             (format!("%access{access}_address"), field)
+        }
+        Place::Indirect { pointer, span } => {
+            let access = emitter.accesses;
+            emitter.accesses += 1;
+            let pointer_text = operand(pointer.clone());
+            writeln!(
+                emitter.text,
+                "    %access{access}_null =w ceql {pointer_text}, 0"
+            )
+            .unwrap();
+            let message = operation_message(
+                Some(span),
+                emitter.diagnostics.as_ref(),
+                "null pointer dereference",
+            );
+            emit_conditional_trap(
+                &mut emitter.text,
+                &mut emitter.data,
+                emitter.function,
+                access,
+                "null",
+                &format!("%access{access}_null"),
+                message,
+            );
+            let Type::Pointer { target, .. } = operand_type(function, pointer.clone()) else {
+                unreachable!("a verified indirect place has a pointer operand")
+            };
+            (pointer_text, *target)
         }
     }
 }
@@ -143,7 +174,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         // between them and the padding after the last one are zeroed.
         let mut items = Vec::new();
         let mut written = 0;
-        for ((offset, scalar), &value) in emitter
+        for ((offset, ty), value) in emitter
             .layout
             .scalar_slots(&global.ty)
             .into_iter()
@@ -152,8 +183,8 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
             if offset != written {
                 items.push(format!("z {}", offset - written));
             }
-            items.push(data_item(value));
-            written = offset + scalar_bytes(scalar);
+            items.push(data_item(value.clone()));
+            written = offset + emitter.layout.size(&ty);
         }
         let size = emitter.layout.size(&global.ty);
         if size != written {
@@ -230,13 +261,16 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     // The parameters are the leading locals, so the loop above allocated them.
     for index in 0..function.parameters {
         let ty = &flow.locals[index];
-        match ty.scalar() {
-            Some(scalar) => writeln!(
+        match ty {
+            Type::Scalar(scalar) => writeln!(
                 emitter.text,
                 "    store{} %param{index}, %local{index}",
-                qbe_type(scalar)
+                qbe_type(*scalar)
             ),
-            None => writeln!(
+            Type::Pointer { .. } => {
+                writeln!(emitter.text, "    storel %param{index}, %local{index}")
+            }
+            Type::Array { .. } | Type::Struct(_) => writeln!(
                 emitter.text,
                 "    blit %param{index}, %local{index}, {}",
                 emitter.layout.size(ty)
@@ -249,33 +283,32 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     for (block_id, block) in flow.blocks.iter().enumerate() {
         writeln!(emitter.text, "@block{block_id}").unwrap();
         for instruction in &block.instructions {
-            emit_instruction(emitter, function, flow, instruction);
+            emit_instruction(emitter, function, instruction);
         }
         emit_terminator(emitter, BlockId(block_id), &block.terminator);
     }
 }
 
-fn emit_instruction(
-    emitter: &mut Emitter<'_>,
-    function: &Function,
-    flow: &ControlFlow,
-    instruction: &Instruction,
-) {
+fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction: &Instruction) {
     match instruction {
         Instruction::Value(ValueId(id)) => emit_value(emitter, function, *id),
+        Instruction::Check { place } => {
+            place_address(emitter, function, place);
+        }
         Instruction::Store {
             place: destination,
             operand: source,
         } => {
-            let (address, ty) = place_address(emitter, flow, destination);
-            let source = operand(*source);
-            match ty.scalar() {
-                Some(scalar) => writeln!(
+            let (address, ty) = place_address(emitter, function, destination);
+            let source = operand(source.clone());
+            match ty {
+                Type::Scalar(scalar) => writeln!(
                     emitter.text,
                     "    store{} {source}, {address}",
                     qbe_type(scalar)
                 ),
-                None => writeln!(
+                Type::Pointer { .. } => writeln!(emitter.text, "    storel {source}, {address}"),
+                Type::Array { .. } | Type::Struct(_) => writeln!(
                     emitter.text,
                     "    blit {source}, {address}, {}",
                     emitter.layout.size(&ty)
@@ -308,7 +341,7 @@ fn emit_call(
             format!(
                 "{} {}",
                 emitter.layout.class(&target.flow.locals[index]),
-                operand(*argument)
+                operand(argument.clone())
             )
         })
         .collect::<Vec<_>>()
@@ -331,7 +364,7 @@ fn emit_call(
 }
 
 fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Terminator) {
-    match *terminator {
+    match terminator {
         Terminator::Jump { target } => {
             writeln!(emitter.text, "    jmp @block{}", target.0).unwrap();
         }
@@ -344,7 +377,7 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
             writeln!(
                 emitter.text,
                 "    jnz {}, @block{}, @block{}",
-                operand(condition),
+                operand(condition.clone()),
                 then_target.0,
                 else_target.0
             )
@@ -355,7 +388,7 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
                 emitter.text,
                 "    %block{}_status =w and {}, 255",
                 block.0,
-                operand(status)
+                operand(status.clone())
             )
             .unwrap();
             writeln!(emitter.text, "    call $exit(w %block{}_status)", block.0).unwrap();
@@ -363,7 +396,7 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
         }
         Terminator::Return { value } => match value {
             Some(value) => {
-                writeln!(emitter.text, "    ret {}", operand(value)).unwrap();
+                writeln!(emitter.text, "    ret {}", operand(value.clone())).unwrap();
             }
             // Falling off the end of `main` exits zero. Every other function
             // returning nothing has no QBE return type to give a value to.
@@ -379,17 +412,18 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
 
 fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
     let value = &function.values[id];
-    match value.kind {
-        ValueKind::Load(ref source) => {
-            let (address, _) = place_address(emitter, &function.flow, source);
-            match value.ty.scalar() {
-                Some(scalar) => {
-                    let width = qbe_type(scalar);
+    match &value.kind {
+        ValueKind::Load(source) => {
+            let (address, _) = place_address(emitter, function, source);
+            match &value.ty {
+                Type::Scalar(scalar) => {
+                    let width = qbe_type(*scalar);
                     writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
                 }
+                Type::Pointer { .. } => writeln!(emitter.text, "    %v{id} =l loadl {address}"),
                 // Loading an aggregate copies it, so a later call in the same
                 // expression cannot change what the value holds.
-                None => writeln!(
+                Type::Array { .. } | Type::Struct(_) => writeln!(
                     emitter.text,
                     "    blit {address}, %v{id}_storage, {}\n    %v{id} =l copy %v{id}_storage",
                     emitter.layout.size(&value.ty)
@@ -397,29 +431,42 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             }
             .unwrap();
         }
+        ValueKind::AddressOf(place) => {
+            let (address, _) = place_address(emitter, function, place);
+            writeln!(emitter.text, "    %v{id} =l copy {address}").unwrap();
+        }
         // A call result is defined by its call instruction.
         ValueKind::CallResult => {}
         ValueKind::Convert {
             operand: source,
             truncating,
         } => {
+            if matches!(operand_type(function, source.clone()), Type::Pointer { .. }) {
+                writeln!(
+                    emitter.text,
+                    "    %v{id} =l copy {}",
+                    operand(source.clone())
+                )
+                .unwrap();
+                return;
+            }
             let ty = scalar(&value.ty);
-            let source_ty = operand_scalar(function, source);
+            let source_ty = operand_scalar(function, source.clone());
             if ty.is_floating() || source_ty.is_floating() {
-                floating::emit_conversion(emitter, id, value, source, source_ty, ty);
-            } else if truncating || source_ty.all_values_fit(ty) {
-                emit_truncation(&mut emitter.text, id, source, source_ty, ty);
+                floating::emit_conversion(emitter, id, value, source.clone(), source_ty, ty);
+            } else if *truncating || source_ty.all_values_fit(ty) {
+                emit_truncation(&mut emitter.text, id, source.clone(), source_ty, ty);
             } else {
                 let message = conversion_message(emitter, value, source_ty, ty);
-                emit_checked_conversion(emitter, id, source, source_ty, ty, message);
+                emit_checked_conversion(emitter, id, source.clone(), source_ty, ty, message);
             }
         }
         ValueKind::Unary { operator, operand } => {
             let ty = scalar(&value.ty);
             if ty.is_floating() {
-                floating::emit_unary(&mut emitter.text, id, ty, operand);
+                floating::emit_unary(&mut emitter.text, id, ty, operand.clone());
             } else {
-                emit_unary_operation(emitter, id, value, operator, operand);
+                emit_unary_operation(emitter, id, value, *operator, operand.clone());
             }
         }
         ValueKind::Binary {
@@ -430,9 +477,24 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
         } => {
             let ty = scalar(&value.ty);
             if ty.is_floating() {
-                floating::emit_binary(&mut emitter.text, id, ty, operator, left, right);
+                floating::emit_binary(
+                    &mut emitter.text,
+                    id,
+                    ty,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                );
             } else {
-                emit_binary_operation(emitter, id, value, operator, form, (left, right), function);
+                emit_binary_operation(
+                    emitter,
+                    id,
+                    value,
+                    *operator,
+                    *form,
+                    (left.clone(), right.clone()),
+                    function,
+                );
             }
         }
         ValueKind::Comparison {
@@ -440,19 +502,49 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             left,
             right,
         } => {
-            let operand_ty = operand_type(function, left);
+            let operand_ty = operand_type(function, left.clone());
             match operand_ty.scalar() {
-                None => emit_aggregate_comparison(emitter, id, operator, left, right, &operand_ty),
-                Some(scalar) if scalar.is_floating() => {
-                    floating::emit_comparison(&mut emitter.text, id, operator, left, right, scalar)
-                }
-                Some(scalar) => {
-                    emit_comparison(&mut emitter.text, id, operator, left, right, scalar)
-                }
+                None if matches!(operand_ty, Type::Pointer { .. }) => emit_comparison(
+                    &mut emitter.text,
+                    id,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                    Scalar::Uint,
+                ),
+                None => emit_aggregate_comparison(
+                    emitter,
+                    id,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                    &operand_ty,
+                ),
+                Some(scalar) if scalar.is_floating() => floating::emit_comparison(
+                    &mut emitter.text,
+                    id,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                    scalar,
+                ),
+                Some(scalar) => emit_comparison(
+                    &mut emitter.text,
+                    id,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                    scalar,
+                ),
             }
         }
         ValueKind::LogicalNot { operand: source } => {
-            writeln!(emitter.text, "    %v{id} =w ceqw {}, 0", operand(source)).unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id} =w ceqw {}, 0",
+                operand(source.clone())
+            )
+            .unwrap();
         }
     }
 }

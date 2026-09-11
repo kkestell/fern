@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{ComparisonOperator, UnaryOperator};
+use crate::types::{ComparisonOperator, MAX_STRUCT_CONTAINMENT_DEPTH, UnaryOperator};
 
 #[test]
 fn verification_rejects_invalid_array_places() {
@@ -228,6 +228,31 @@ fn verification_checks_a_globals_values_against_its_type() {
         let error = program.verify().unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
+}
+
+#[test]
+fn verification_rejects_an_aggregate_too_large_for_backend_layout() {
+    let mut program = one_function(main_function(
+        vec![],
+        vec![],
+        vec![Block {
+            instructions: vec![],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    ));
+    program.globals = vec![Global {
+        ty: array(1 << 60, Scalar::Int.into()),
+        values: vec![],
+    }];
+    let error = program.verify().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR aggregate layout exceeds compiler limit of 1 PiB"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1363,6 +1388,40 @@ fn verification_rejects_a_struct_table_whose_fields_form_a_cycle() {
             .unwrap_err();
         assert!(error.to_string().contains("contains itself"), "{error}");
     }
+}
+
+#[test]
+fn verification_limits_deep_acyclic_struct_tables() {
+    let structs = (0..=MAX_STRUCT_CONTAINMENT_DEPTH)
+        .map(|index| Struct {
+            fields: if index == MAX_STRUCT_CONTAINMENT_DEPTH {
+                vec![Scalar::Int.into()]
+            } else {
+                vec![declared(index + 1, &format!("S{}", index + 1))]
+            },
+        })
+        .collect();
+    let error = with_structs(
+        structs,
+        main_function(
+            vec![],
+            vec![],
+            vec![Block {
+                instructions: vec![],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }],
+        ),
+    )
+    .verify()
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR struct containment exceeds compiler limit of 128"),
+        "{error}"
+    );
 }
 
 #[test]

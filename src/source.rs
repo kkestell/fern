@@ -54,6 +54,7 @@ impl SourceMap {
 
     /// The identity of the file holding `offset`.
     pub fn index_at(&self, offset: usize) -> FileId {
+        assert!(!self.files.is_empty(), "a span belongs to a loaded file");
         // The first file's base is zero, so at least one file starts at or
         // before any offset.
         FileId(self.files.partition_point(|file| file.base <= offset) - 1)

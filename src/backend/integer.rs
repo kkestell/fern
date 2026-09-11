@@ -2,7 +2,7 @@
 
 use crate::{
     ir::model::{BinaryForm, Function, Operand, Value},
-    types::{BinaryOperator, ComparisonOperator, Scalar, Type, UnaryOperator},
+    types::{BinaryOperator, ComparisonOperator, Scalar, UnaryOperator},
 };
 
 use std::fmt::Write;
@@ -15,11 +15,8 @@ pub(super) fn emit_comparison(
     operator: ComparisonOperator,
     left: Operand,
     right: Operand,
-    operand_ty: &Type,
+    ty: Scalar,
 ) {
-    let Some(ty) = operand_ty.scalar() else {
-        return emit_array_comparison(text, id, operator, left, right, operand_ty);
-    };
     let comparison = match operator {
         ComparisonOperator::Equal => format!("ceq{}", qbe_type(ty)),
         ComparisonOperator::NotEqual => format!("cne{}", qbe_type(ty)),
@@ -35,33 +32,6 @@ pub(super) fn emit_comparison(
         operand(right)
     )
     .unwrap();
-}
-
-/// Two arrays are equal when every pair of corresponding elements is. Every
-/// scalar is stored normalized in its whole word, so equal arrays hold
-/// identical bytes and one comparison of their storage answers for all of them.
-fn emit_array_comparison(
-    text: &mut String,
-    id: usize,
-    operator: ComparisonOperator,
-    left: Operand,
-    right: Operand,
-    ty: &Type,
-) {
-    writeln!(
-        text,
-        "    %v{id}_difference =w call $memcmp(l {}, l {}, l {})",
-        operand(left),
-        operand(right),
-        size(ty)
-    )
-    .unwrap();
-    let comparison = match operator {
-        ComparisonOperator::Equal => "ceqw",
-        ComparisonOperator::NotEqual => "cnew",
-        _ => unreachable!("only equality compares arrays"),
-    };
-    writeln!(text, "    %v{id} =w {comparison} %v{id}_difference, 0").unwrap();
 }
 
 pub(super) fn comparison_operation(relation: &str, signed: bool, ty: Scalar) -> String {

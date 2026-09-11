@@ -2,7 +2,7 @@
 
 use crate::{
     ir::model::{Operand, Value},
-    types::{BinaryOperator, ComparisonOperator, Float, Scalar, Type},
+    types::{BinaryOperator, ComparisonOperator, Float, Scalar},
 };
 
 use std::fmt::Write;
@@ -109,16 +109,13 @@ pub(super) fn emit_comparison(
     operator: ComparisonOperator,
     left: Operand,
     right: Operand,
-    ty: &Type,
+    ty: Scalar,
 ) {
-    let Some(scalar) = ty.scalar() else {
-        return emit_array_comparison(text, id, operator, left, right, ty);
-    };
     writeln!(
         text,
         "    %v{id} =w {}{} {}, {}",
         relation(operator),
-        qbe_type(scalar),
+        qbe_type(ty),
         operand(left),
         operand(right)
     )
@@ -134,56 +131,6 @@ fn relation(operator: ComparisonOperator) -> &'static str {
         ComparisonOperator::Greater => "cgt",
         ComparisonOperator::GreaterEqual => "cge",
     }
-}
-
-/// Two floating-point arrays are equal when every pair of corresponding
-/// elements compares equal, which is not the same question as holding
-/// identical bytes: the two zeroes are equal and a NaN equals nothing.
-fn emit_array_comparison(
-    text: &mut String,
-    id: usize,
-    operator: ComparisonOperator,
-    left: Operand,
-    right: Operand,
-    ty: &Type,
-) {
-    let leaf = ty.leaf();
-    let class = qbe_type(leaf);
-    let (left, right) = (operand(left), operand(right));
-    writeln!(text, "    %v{id}_equal0 =w copy 1").unwrap();
-    for index in 0..ty.element_count() {
-        let offset = index * bytes(leaf);
-        writeln!(text, "    %v{id}_left{index} =l add {left}, {offset}").unwrap();
-        writeln!(text, "    %v{id}_right{index} =l add {right}, {offset}").unwrap();
-        writeln!(
-            text,
-            "    %v{id}_leftvalue{index} ={class} load{class} %v{id}_left{index}"
-        )
-        .unwrap();
-        writeln!(
-            text,
-            "    %v{id}_rightvalue{index} ={class} load{class} %v{id}_right{index}"
-        )
-        .unwrap();
-        writeln!(
-            text,
-            "    %v{id}_element{index} =w ceq{class} %v{id}_leftvalue{index}, %v{id}_rightvalue{index}"
-        )
-        .unwrap();
-        writeln!(
-            text,
-            "    %v{id}_equal{} =w and %v{id}_equal{index}, %v{id}_element{index}",
-            index + 1
-        )
-        .unwrap();
-    }
-    let equal = format!("%v{id}_equal{}", ty.element_count());
-    match operator {
-        ComparisonOperator::Equal => writeln!(text, "    %v{id} =w copy {equal}"),
-        ComparisonOperator::NotEqual => writeln!(text, "    %v{id} =w ceqw {equal}, 0"),
-        _ => unreachable!("only equality compares arrays"),
-    }
-    .unwrap();
 }
 
 /// Emits a conversion with a floating-point type on one side or both.

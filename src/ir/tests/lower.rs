@@ -544,6 +544,34 @@ fn module_bindings_become_globals_with_constant_initial_values() {
 }
 
 #[test]
+fn declarations_without_an_initializer_lower_to_their_zero_value() {
+    let program = lowered(
+        "type Pair struct { a: int, b: u8 }
+             var counter: int;
+             fn main() -> void {
+                 var row: [2]int;
+                 var pair: Pair;
+                 counter = counter + row[1] + pair.a;
+                 exit(counter);
+             }",
+    );
+    assert_eq!(
+        program.program().globals,
+        vec![Global {
+            ty: Scalar::Int.into(),
+            values: integers([0], Scalar::Int),
+        }]
+    );
+    // A local aggregate is zeroed one scalar at a time, through the same
+    // stores a written literal produces.
+    assert_eq!(
+        stored_places(main_of(&program))[..4],
+        ["local0[0]", "local0[1]", "local1.0", "local1.1"]
+    );
+    insta::assert_debug_snapshot!("zero_declarations", program.program());
+}
+
+#[test]
 fn every_function_is_lowered_with_its_signature_and_body() {
     let program = lowered(
         "fn helper() -> void { if true {} }

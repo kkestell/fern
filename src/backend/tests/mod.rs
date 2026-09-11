@@ -120,13 +120,18 @@ fn assert_native_values(verified: &VerifiedProgram, expected: &[i128]) {
     assert_eq!(Command::new(output).status().unwrap().code(), Some(1));
 }
 
-/// Compiles a `main` body, runs it, and reports the status it exited with.
-fn native_status(body: &str) -> Option<i32> {
-    let program = lowered(&format!("fn main() -> void {{ {body} }}"));
+/// Compiles a whole program, runs it, and reports the status it exited with.
+fn native_program_status(text: &str) -> Option<i32> {
+    let program = lowered(text);
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("program");
     build_text(&emit(&program, None), &output).unwrap();
     Command::new(output).status().unwrap().code()
+}
+
+/// Compiles a `main` body, runs it, and reports the status it exited with.
+fn native_status(body: &str) -> Option<i32> {
+    native_program_status(&format!("fn main() -> void {{ {body} }}"))
 }
 
 fn assert_native_failure(body: &str, expected: &str) -> String {
@@ -145,3 +150,4 @@ fn assert_native_failure(body: &str, expected: &str) -> String {
 mod emitter;
 mod floating;
 mod integer;
+mod structs;

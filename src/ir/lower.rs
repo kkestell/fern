@@ -54,16 +54,15 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
             unreachable!("module bindings are binding statements")
         };
         let ty = checked.bindings[binding].ty.clone();
-        let mut values = Vec::new();
-        flatten(
-            &checked,
-            checked.expressions[*initializer]
+        let constant = match initializer {
+            Some(initializer) => checked.expressions[*initializer]
                 .constant
                 .as_ref()
                 .expect("module-level initializers are constant expressions"),
-            &ty,
-            &mut values,
-        );
+            None => &checked.zero_declarations[&statement],
+        };
+        let mut values = Vec::new();
+        flatten(&checked, constant, &ty, &mut values);
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
         globals.push(Global { ty, values });
     }
@@ -344,8 +343,23 @@ fn lower_flow_binding(
     if checked.bindings[binding].constant.is_some() {
         return;
     }
+    let ty = checked.bindings[binding].ty.clone();
+    let Some(initializer) = initializer else {
+        let local = builder.local(ty.clone());
+        let place = Place::Local(local);
+        store_constant(
+            checked,
+            builder,
+            &place,
+            &ty,
+            &checked.zero_declarations[&statement],
+            &checked.syntax.statements[statement].span,
+        );
+        bindings.insert(binding, place);
+        return;
+    };
     let operand = lower_flow_operand(checked, *initializer, bindings, builder);
-    let local = builder.local(checked.bindings[binding].ty.clone());
+    let local = builder.local(ty);
     builder.store(Place::Local(local), operand);
     bindings.insert(binding, Place::Local(local));
 }

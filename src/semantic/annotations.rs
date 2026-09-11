@@ -5,7 +5,7 @@ use crate::{
     frontend::syntax::{
         AnnotationKind, Expression, ExpressionKind, Syntax, TypeAnnotation, find_call,
     },
-    types::{Scalar, StructId, Type},
+    types::{MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, Type},
 };
 
 use la_arena::Idx;
@@ -47,7 +47,7 @@ impl CheckedProgram<'_> {
     ) -> Result<Type, Diagnostic> {
         let syntax = self.syntax;
         let written = &syntax.annotations[annotation];
-        match &written.kind {
+        let ty = match &written.kind {
             AnnotationKind::Scalar(scalar) => Ok(Type::Scalar(*scalar)),
             AnnotationKind::Named(name) => {
                 let id = self.resolve_type_name(name, scopes)?;
@@ -68,7 +68,29 @@ impl CheckedProgram<'_> {
                     element: Box::new(element),
                 })
             }
+        }?;
+        self.validate_aggregate_layout(&ty, &written.span)?;
+        Ok(ty)
+    }
+
+    /// Rejects layouts that native emission cannot address before they reach
+    /// constant construction, IR lowering, or the backend.
+    pub(super) fn validate_aggregate_layout(
+        &self,
+        ty: &Type,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), Diagnostic> {
+        if self
+            .layouts
+            .size(self, ty)
+            .is_none_or(|size| size > MAX_AGGREGATE_LAYOUT_BYTES)
+        {
+            return Err(Diagnostic::new(
+                span.clone(),
+                "aggregate layout exceeds compiler limit of 1 PiB",
+            ));
         }
+        Ok(())
     }
 
     /// Resolves one struct's field types, which happens the first time the
@@ -90,10 +112,39 @@ impl CheckedProgram<'_> {
             }
             FieldState::Unresolved => {}
         }
+        if self.struct_containment_depth == MAX_STRUCT_CONTAINMENT_DEPTH {
+            return Err(Diagnostic::new(
+                span.clone(),
+                format!(
+                    "struct containment exceeds compiler limit of {MAX_STRUCT_CONTAINMENT_DEPTH}"
+                ),
+            ));
+        }
         self.structs[id.0].state = FieldState::Resolving;
+        self.struct_containment_depth += 1;
         // Field annotations resolve against the imports of the file the
         // struct is declared in, which is not always the file being checked.
         let outer = std::mem::replace(&mut self.file, self.structs[id.0].file);
+        let result = self.resolve_fields(id, scopes);
+        // The checking state this walk swapped belongs to the caller, so it is
+        // restored whether a field resolved or reported a diagnostic.
+        self.struct_containment_depth -= 1;
+        self.file = outer;
+        if result.is_ok() {
+            self.structs[id.0].state = FieldState::Resolved;
+        } else {
+            // A struct that failed to resolve holds only the fields the walk
+            // reached, so it returns to the state it had before the attempt.
+            self.structs[id.0].state = FieldState::Unresolved;
+            self.structs[id.0].fields.clear();
+            self.structs[id.0].ordinals.clear();
+        }
+        result
+    }
+
+    /// Resolves each declared field in order, rejecting a name the struct
+    /// already holds.
+    fn resolve_fields(&mut self, id: StructId, scopes: &ScopeStack<'_>) -> Result<(), Diagnostic> {
         let syntax = self.syntax;
         let declaration = self.structs[id.0].declaration;
         for field in &syntax.structs[declaration].fields {
@@ -114,8 +165,6 @@ impl CheckedProgram<'_> {
                 ty,
             });
         }
-        self.structs[id.0].state = FieldState::Resolved;
-        self.file = outer;
         Ok(())
     }
 

@@ -3,6 +3,7 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{Expression, Function, Statement, StructDeclaration, Syntax},
+    layout::{Layouts, StructFields},
     source::FileId,
     types::{
         BinaryOperator, ComparisonOperator, Float, LogicalOperator, Scalar, StructId, StructType,
@@ -22,20 +23,10 @@ use std::collections::HashMap;
 
 use super::namespaces::{FileImports, Namespace};
 
-/// Rejects a checked program that declares a struct. Checking understands
-/// structs, and the remaining struct tasks teach Fern IR and native
-/// compilation to compile them; until then this stops one before lowering.
-pub(crate) fn reject_uncompiled_structs(
-    checked: CheckedProgram<'_>,
-) -> Result<CheckedProgram<'_>, Diagnostic> {
-    let Some(declared) = checked.structs.first() else {
-        return Ok(checked);
-    };
-    let span = checked.syntax.structs[declared.declaration]
-        .name_span
-        .clone();
-    Err(Diagnostic::new(span, "structs are not yet compiled"))
-}
+/// The largest number of scalar constants the checker expands for one
+/// aggregate initializer. Array and struct fills retain one constant per
+/// scalar until lowering gains a compact repeated-value representation.
+pub(super) const MAX_AGGREGATE_INITIALIZER_VALUES: u64 = 1_000_000;
 
 /// The value a constant expression folds to. An array literal folds when
 /// every element does, and a struct literal when every field does.
@@ -278,6 +269,10 @@ pub(crate) struct CheckedProgram<'a> {
     pub module_bindings: Vec<Idx<Statement>>,
     pub expressions: ArenaMap<Idx<Expression>, CheckedExpression>,
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
+    /// The zero value of every declaration written without an initializer.
+    /// A `var` cannot carry its value in `Binding::constant`, which means the
+    /// binding folds into its use sites, so lowering reads it here.
+    pub zero_declarations: HashMap<Idx<Statement>, Constant>,
     pub bindings: Arena<Binding>,
     pub assignments: ArenaMap<Idx<Statement>, CheckedTarget>,
     pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,
@@ -302,6 +297,22 @@ pub(crate) struct CheckedProgram<'a> {
     /// Checking state: the file whose declarations are being checked, which
     /// selects the imports name resolution sees.
     pub(super) file: FileId,
+    /// The inline struct declarations being resolved. It bounds the recursive
+    /// field-resolution walk before it can exhaust the compiler stack.
+    pub(super) struct_containment_depth: usize,
+    /// The memoized layout of every struct whose size or alignment the checker
+    /// has derived. A struct is only derived once its fields have resolved.
+    pub(super) layouts: Layouts,
+}
+
+impl StructFields for CheckedProgram<'_> {
+    fn field_count(&self, id: StructId) -> usize {
+        self.structs[id.0].fields.len()
+    }
+
+    fn field_type(&self, id: StructId, ordinal: usize) -> &Type {
+        &self.structs[id.0].fields[ordinal].ty
+    }
 }
 
 impl CheckedProgram<'_> {
@@ -321,22 +332,57 @@ impl CheckedProgram<'_> {
     /// The value a binding or field of this type holds before anything is
     /// stored into it: `0` for a number, `false` for a `bool`, and zero values
     /// throughout an array or struct.
-    pub(super) fn zero_value(&self, ty: &Type) -> Constant {
+    pub(super) fn zero_value(
+        &self,
+        ty: &Type,
+        span: &std::ops::Range<usize>,
+    ) -> Result<Constant, Diagnostic> {
+        if self
+            .aggregate_value_count(ty)
+            .is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES)
+        {
+            return Err(Diagnostic::new(
+                span.clone(),
+                format!(
+                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
+                ),
+            ));
+        }
+        Ok(self.zero_value_unchecked(ty))
+    }
+
+    pub(super) fn zero_value_unchecked(&self, ty: &Type) -> Constant {
         match ty {
             Type::Scalar(Scalar::F32) => Constant::Float(Float::Binary32(0)),
             Type::Scalar(Scalar::F64) => Constant::Float(Float::Binary64(0)),
             Type::Scalar(_) => Constant::Integer(BigInt::ZERO),
             Type::Array { length, element } => {
-                let length = usize::try_from(*length).expect("an array fits in the address space");
-                Constant::Array(vec![self.zero_value(element); length])
+                let length = usize::try_from(*length)
+                    .expect("the checked aggregate initializer limit fits usize");
+                Constant::Array(vec![self.zero_value_unchecked(element); length])
             }
             Type::Struct(ty) => Constant::Struct(
                 self.structs[ty.id.0]
                     .fields
                     .iter()
-                    .map(|field| self.zero_value(&field.ty))
+                    .map(|field| self.zero_value_unchecked(&field.ty))
                     .collect(),
             ),
+        }
+    }
+
+    pub(super) fn aggregate_value_count(&self, ty: &Type) -> Option<u64> {
+        match ty {
+            Type::Scalar(_) => Some(1),
+            Type::Array { length, element } => {
+                length.checked_mul(self.aggregate_value_count(element)?)
+            }
+            Type::Struct(ty) => self.structs[ty.id.0]
+                .fields
+                .iter()
+                .try_fold(0u64, |count, field| {
+                    count.checked_add(self.aggregate_value_count(&field.ty)?)
+                }),
         }
     }
 }

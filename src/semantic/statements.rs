@@ -113,23 +113,39 @@ impl CheckedProgram<'_> {
         name: Spur,
         mutable: bool,
         annotation: Option<Idx<TypeAnnotation>>,
-        initializer: Idx<Expression>,
+        initializer: Option<Idx<Expression>>,
         scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
-        let destination = match annotation {
-            Some(annotation) => {
-                Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
+        let (ty, constant) = match initializer {
+            Some(initializer) => {
+                let destination = match annotation {
+                    Some(annotation) => {
+                        Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
+                    }
+                    None => None,
+                };
+                let expression = self.check_expression(initializer, scopes, destination)?;
+                let ty = expression.ty.clone();
+                let constant = if mutable {
+                    None
+                } else {
+                    expression.constant.clone()
+                };
+                self.expressions.insert(initializer, expression);
+                (ty, constant)
             }
-            None => None,
+            // A declaration without an initializer takes its type's zero
+            // value, which the parser guarantees an annotation names.
+            None => {
+                let annotation =
+                    annotation.expect("a declaration without an initializer is annotated");
+                let ty = self.resolve_annotation(annotation, scopes, None)?;
+                let span = self.syntax.statements[statement].span.clone();
+                let zero = self.zero_value(&ty, &span)?;
+                self.zero_declarations.insert(statement, zero.clone());
+                (ty, (!mutable).then_some(zero))
+            }
         };
-        let expression = self.check_expression(initializer, scopes, destination)?;
-        let ty = expression.ty.clone();
-        let constant = if mutable {
-            None
-        } else {
-            expression.constant.clone()
-        };
-        self.expressions.insert(initializer, expression);
         let binding = self.bindings.alloc(Binding {
             ty,
             mutable,

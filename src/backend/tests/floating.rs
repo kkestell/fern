@@ -249,12 +249,6 @@ fn native_floating_array_equality_compares_element_by_element() {
     // Equal floating-point arrays need not hold identical bytes, so the
     // comparison loads each element rather than calling `memcmp`.
     assert!(!qbe.contains("memcmp"), "{qbe}");
-    assert!(
-        qbe.contains("    %v4_element0 =w ceqd %v4_leftvalue0, %v4_rightvalue0"),
-        "{qbe}"
-    );
-    assert!(
-        qbe.contains("    %v4_element1 =w ceqd %v4_leftvalue1, %v4_rightvalue1"),
-        "{qbe}"
-    );
+    assert!(qbe.contains(" =w ceqd "), "{qbe}");
+    assert!(qbe.contains("@aggregate0_loop"), "{qbe}");
 }

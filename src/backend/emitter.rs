@@ -7,53 +7,22 @@ use crate::{
         Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
+    layout::scalar_bytes,
     source::SourceMap,
     types::{Scalar, Type},
 };
 use std::fmt::Write;
 
-use super::{floating, integer::*, qbe::*};
+use super::{floating, integer::*, layout::Layout, qbe::*};
 
-fn allocation(ty: &Type) -> &'static str {
-    if bytes(ty.leaf()) == 8 {
+/// The `alloc` an aggregate or a scalar needs. QBE has one instruction per
+/// alignment, and no Fern value is aligned more strictly than eight bytes.
+fn allocation(layout: &Layout<'_>, ty: &Type) -> &'static str {
+    if layout.alignment(ty) == 8 {
         "alloc8"
     } else {
         "alloc4"
     }
-}
-
-/// How a signature, a call argument, or a call result names this type. An
-/// array is an aggregate named by its layout, so two array types made of the
-/// same scalars share one QBE type definition.
-fn class(ty: &Type) -> String {
-    match ty {
-        Type::Scalar(ty) => qbe_type(*ty).to_string(),
-        Type::Array { .. } => format!(":array{}{}", word(ty), ty.element_count()),
-        Type::Struct(_) => unreachable!("a struct is rejected before lowering"),
-    }
-}
-
-/// The aggregate type definitions the signatures name. QBE needs the layout of
-/// every array a function takes or returns.
-fn emit_aggregate_types(functions: &[Function]) -> String {
-    let mut definitions: Vec<String> = Vec::new();
-    for function in functions {
-        let signature = function.flow.locals[..function.parameters]
-            .iter()
-            .chain(function.result.as_ref());
-        for ty in signature.filter(|ty| ty.scalar().is_none()) {
-            let definition = format!(
-                "type {} = {{ {} {} }}\n",
-                class(ty),
-                word(ty),
-                ty.element_count()
-            );
-            if !definitions.contains(&definition) {
-                definitions.push(definition);
-            }
-        }
-    }
-    definitions.concat()
 }
 
 /// Names the QBE symbol defining or calling function `id`. Fern source names
@@ -125,7 +94,7 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             writeln!(
                 emitter.text,
                 "    %access{access}_offset =l mul {index}, {}",
-                size(&element)
+                emitter.layout.size(&element)
             )
             .unwrap();
             writeln!(
@@ -135,7 +104,22 @@ fn place_address(emitter: &mut Emitter<'_>, flow: &ControlFlow, place: &Place) -
             .unwrap();
             (format!("%access{access}_address"), *element)
         }
-        Place::Field { .. } => unreachable!("a struct is rejected before lowering"),
+        Place::Field { base, ordinal } => {
+            let (base, ty) = place_address(emitter, flow, base);
+            let Type::Struct(declared) = ty else {
+                unreachable!("a verified field place selects a field of a struct")
+            };
+            let (offset, field) = emitter.layout.field(declared.id, *ordinal);
+            let field = field.clone();
+            let access = emitter.accesses;
+            emitter.accesses += 1;
+            writeln!(
+                emitter.text,
+                "    %access{access}_address =l add {base}, {offset}"
+            )
+            .unwrap();
+            (format!("%access{access}_address"), field)
+        }
     }
 }
 
@@ -144,26 +128,43 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
+        layout: Layout::new(&program.structs),
         globals: &program.globals,
         functions: &program.functions,
         main: program.main,
         function: 0,
         qbe_result: None,
         accesses: 0,
+        comparisons: 0,
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
     for (id, global) in program.globals.iter().enumerate() {
-        // An i128, its QBE word, and a separator fit in 44 bytes. Reserve the
-        // emitted data once instead of allocating one temporary string per scalar.
-        emitter.data.reserve(global.values.len().saturating_mul(44));
-        write!(emitter.data, "data $global{id} = {{ ").unwrap();
-        for (index, &value) in global.values.iter().enumerate() {
-            if index != 0 {
-                emitter.data.push_str(", ");
+        // A global holds its scalars where the layout puts them, so the gaps
+        // between them and the padding after the last one are zeroed.
+        let mut items = Vec::new();
+        let mut written = 0;
+        for ((offset, scalar), &value) in emitter
+            .layout
+            .scalar_slots(&global.ty)
+            .into_iter()
+            .zip(&global.values)
+        {
+            if offset != written {
+                items.push(format!("z {}", offset - written));
             }
-            emitter.data.push_str(&data_item(value));
+            items.push(data_item(value));
+            written = offset + scalar_bytes(scalar);
         }
-        emitter.data.push_str(" }\n");
+        let size = emitter.layout.size(&global.ty);
+        if size != written {
+            items.push(format!("z {}", size - written));
+        }
+        writeln!(
+            emitter.data,
+            "data $global{id} = {{ {} }}",
+            items.join(", ")
+        )
+        .unwrap();
     }
     for (index, function) in program.functions.iter().enumerate() {
         let id = FunctionId(index);
@@ -174,10 +175,15 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emitter.qbe_result = if entry {
             Some("w".to_owned())
         } else {
-            function.result.as_ref().map(class)
+            function.result.as_ref().map(|ty| emitter.layout.class(ty))
         };
         let parameters = (0..function.parameters)
-            .map(|index| format!("{} %param{index}", class(&function.flow.locals[index])))
+            .map(|index| {
+                format!(
+                    "{} %param{index}",
+                    emitter.layout.class(&function.flow.locals[index])
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
@@ -194,7 +200,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emit_control_flow(&mut emitter, function, &function.flow);
         emitter.text.push_str("}\n");
     }
-    emit_aggregate_types(&program.functions) + &emitter.data + &emitter.text
+    emitter.layout.type_definitions(&program.functions) + &emitter.data + &emitter.text
 }
 
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
@@ -202,21 +208,21 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
         writeln!(
             emitter.text,
             "    %local{id} =l {} {}",
-            allocation(ty),
-            size(ty)
+            allocation(&emitter.layout, ty),
+            emitter.layout.size(ty)
         )
         .unwrap();
     }
-    // An array value holds its own copy of the array. QBE allocates once per
-    // `alloc` it executes, so the storage is allocated here rather than where
-    // the load runs, which may be inside a loop.
+    // An aggregate value holds its own copy of the aggregate. QBE allocates
+    // once per `alloc` it executes, so the storage is allocated here rather
+    // than where the load runs, which may be inside a loop.
     for (id, value) in function.values.iter().enumerate() {
         if matches!(value.kind, ValueKind::Load(_)) && value.ty.scalar().is_none() {
             writeln!(
                 emitter.text,
                 "    %v{id}_storage =l {} {}",
-                allocation(&value.ty),
-                size(&value.ty)
+                allocation(&emitter.layout, &value.ty),
+                emitter.layout.size(&value.ty)
             )
             .unwrap();
         }
@@ -224,18 +230,17 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     // The parameters are the leading locals, so the loop above allocated them.
     for index in 0..function.parameters {
         let ty = &flow.locals[index];
-        if ty.scalar().is_some() {
-            writeln!(
+        match ty.scalar() {
+            Some(scalar) => writeln!(
                 emitter.text,
                 "    store{} %param{index}, %local{index}",
-                word(ty)
-            )
-        } else {
-            writeln!(
+                qbe_type(scalar)
+            ),
+            None => writeln!(
                 emitter.text,
                 "    blit %param{index}, %local{index}, {}",
-                size(ty)
-            )
+                emitter.layout.size(ty)
+            ),
         }
         .unwrap();
     }
@@ -264,10 +269,17 @@ fn emit_instruction(
         } => {
             let (address, ty) = place_address(emitter, flow, destination);
             let source = operand(*source);
-            if ty.scalar().is_some() {
-                writeln!(emitter.text, "    store{} {source}, {address}", word(&ty))
-            } else {
-                writeln!(emitter.text, "    blit {source}, {address}, {}", size(&ty))
+            match ty.scalar() {
+                Some(scalar) => writeln!(
+                    emitter.text,
+                    "    store{} {source}, {address}",
+                    qbe_type(scalar)
+                ),
+                None => writeln!(
+                    emitter.text,
+                    "    blit {source}, {address}, {}",
+                    emitter.layout.size(&ty)
+                ),
             }
             .unwrap();
         }
@@ -295,7 +307,7 @@ fn emit_call(
         .map(|(index, argument)| {
             format!(
                 "{} {}",
-                class(&target.flow.locals[index]),
+                emitter.layout.class(&target.flow.locals[index]),
                 operand(*argument)
             )
         })
@@ -306,7 +318,7 @@ fn emit_call(
         Some(ValueId(id)) => writeln!(
             emitter.text,
             "    %v{id} ={} call ${symbol}({arguments})",
-            class(
+            emitter.layout.class(
                 target
                     .result
                     .as_ref()
@@ -370,17 +382,18 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
     match value.kind {
         ValueKind::Load(ref source) => {
             let (address, _) = place_address(emitter, &function.flow, source);
-            if value.ty.scalar().is_some() {
-                let width = word(&value.ty);
-                writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
-            } else {
-                // Loading an array copies it, so a later call in the same
+            match value.ty.scalar() {
+                Some(scalar) => {
+                    let width = qbe_type(scalar);
+                    writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
+                }
+                // Loading an aggregate copies it, so a later call in the same
                 // expression cannot change what the value holds.
-                writeln!(
+                None => writeln!(
                     emitter.text,
                     "    blit {address}, %v{id}_storage, {}\n    %v{id} =l copy %v{id}_storage",
-                    size(&value.ty)
-                )
+                    emitter.layout.size(&value.ty)
+                ),
             }
             .unwrap();
         }
@@ -428,17 +441,14 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             right,
         } => {
             let operand_ty = operand_type(function, left);
-            if operand_ty.is_floating() {
-                floating::emit_comparison(
-                    &mut emitter.text,
-                    id,
-                    operator,
-                    left,
-                    right,
-                    &operand_ty,
-                );
-            } else {
-                emit_comparison(&mut emitter.text, id, operator, left, right, &operand_ty);
+            match operand_ty.scalar() {
+                None => emit_aggregate_comparison(emitter, id, operator, left, right, &operand_ty),
+                Some(scalar) if scalar.is_floating() => {
+                    floating::emit_comparison(&mut emitter.text, id, operator, left, right, scalar)
+                }
+                Some(scalar) => {
+                    emit_comparison(&mut emitter.text, id, operator, left, right, scalar)
+                }
             }
         }
         ValueKind::LogicalNot { operand: source } => {

@@ -188,9 +188,10 @@ fn constant_classification_does_not_depend_on_binding_mutability() {
         .body
         .iter()
         .map(|statement| match syntax.statements[*statement].kind {
-            StatementKind::Binding { initializer, .. } => {
-                checked.expressions[initializer].constant.clone()
-            }
+            StatementKind::Binding {
+                initializer: Some(initializer),
+                ..
+            } => checked.expressions[initializer].constant.clone(),
             _ => unreachable!(),
         })
         .collect();
@@ -297,7 +298,10 @@ fn untyped_constant_folding_is_bounded_and_discards_child_values() {
     let syntax = parse("fn main() -> void { const value = (1 + 2) * (3 + 4); }").unwrap();
     let checked = check_root(&syntax).unwrap();
     let root = match syntax.statements[syntax.functions[checked.main].body[0]].kind {
-        StatementKind::Binding { initializer, .. } => initializer,
+        StatementKind::Binding {
+            initializer: Some(initializer),
+            ..
+        } => initializer,
         _ => unreachable!(),
     };
     assert_eq!(checked.expressions[root].constant, folded(21));

@@ -45,6 +45,13 @@ and its spelling; field shape lives once in that table, which lowering,
 verification, and the backend read. `Program::verify` is the sole constructor
 of `VerifiedProgram`; only verified IR reaches the backend.
 
+`layout` derives a value's byte size, alignment, and field offsets, deriving
+each struct once from the struct table the calling phase supplies and caching
+the result. Semantic validation, IR verification, and the backend all read
+that one derivation, so one description of memory answers for limit checking,
+allocation, copying, field addressing, and padding. `backend::layout` owns
+what is specific to emission: QBE classes and scalar storage slots.
+
 ## Diagnostics
 
 Source spans use the program-wide offset space in `SourceMap`. A diagnostic

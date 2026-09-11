@@ -157,9 +157,10 @@ fn main() -> void {}";
         .module_bindings
         .iter()
         .map(|&statement| match syntax.statements[statement].kind {
-            StatementKind::Binding { initializer, .. } => {
-                checked.expressions[initializer].constant.clone()
-            }
+            StatementKind::Binding {
+                initializer: Some(initializer),
+                ..
+            } => checked.expressions[initializer].constant.clone(),
             _ => unreachable!("module bindings are binding statements"),
         })
         .collect();
@@ -499,7 +500,10 @@ fn logical_expressions_fold_constants_and_keep_runtime_short_circuiting() {
         [folded(0), folded(1), folded(1), None, None]
     );
     let guarded = match syntax.statements[syntax.functions[checked.main].body[4]].kind {
-        StatementKind::Binding { initializer, .. } => initializer,
+        StatementKind::Binding {
+            initializer: Some(initializer),
+            ..
+        } => initializer,
         _ => unreachable!(),
     };
     assert!(matches!(
@@ -1097,6 +1101,38 @@ fn a_fill_gives_every_unlisted_field_its_recursive_zero_value() {
              fn main() -> void {}"
         ),
         [(vec![], vec![0, 1]), (vec![(0, "1"), (1, "2")], vec![])]
+    );
+}
+
+#[test]
+fn aggregate_fills_stay_within_the_expanded_constant_limit() {
+    rejects_source(
+        "type Huge struct { values: [1000001]int }
+         const value = Huge { ... };
+         fn main() -> void {}",
+        "Huge",
+        "aggregate initializer exceeds compiler limit of 1000000 values",
+    );
+    rejects_root(
+        "fn main() -> void { var values: [1000001]int = «[0...]»; }",
+        "aggregate initializer exceeds compiler limit of 1000000 values",
+    );
+    // The bound counts every scalar one initializer expands, so nested fills
+    // and sibling omitted fields are counted together rather than one at a
+    // time.
+    rejects_root(
+        "fn main() -> void { var x: [4][4][300000]u8 = «[[[0...]...]...]»; }",
+        "aggregate initializer exceeds compiler limit of 1000000 values",
+    );
+    rejects_source(
+        "type Wide struct { a: [900000]u8, b: [900000]u8, c: [900000]u8, d: [900000]u8 }
+         const value = Wide { ... };
+         fn main() -> void {}",
+        "Wide",
+        "aggregate initializer exceeds compiler limit of 1000000 values",
+    );
+    accepts_source(
+        "fn main() -> void { var x: [4][4][60000]u8 = [[[0...]...]...]; exit(int(x[0][0][0])); }",
     );
 }
 

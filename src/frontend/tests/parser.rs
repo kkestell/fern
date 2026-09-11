@@ -144,7 +144,10 @@ fn malformed_modules_imports_and_qualified_names_report_the_offending_token() {
             "fn f(a«::»b: int) -> void {}",
             "expected `:` after parameter name",
         ),
-        ("fn main() -> void { var a«::»b = 1; }", "expected `=`"),
+        (
+            "fn main() -> void { var «a»::b = 1; }",
+            "a declaration without an initializer requires a type annotation",
+        ),
         (
             "fn main() -> void { for :a«::»b {} }",
             "expected an expression",
@@ -192,10 +195,36 @@ fn statements_are_rejected_at_top_level() {
 }
 
 #[test]
+fn a_declaration_without_an_initializer_parses_from_its_annotation() {
+    for source in [
+        "var x: int; fn main() -> void {}",
+        "const x: int; fn main() -> void {}",
+        "fn main() -> void { var x: [2]int; const y: int; }",
+    ] {
+        let syntax = parse(source).unwrap();
+        assert!(
+            syntax.statements.iter().all(|(_, statement)| matches!(
+                statement.kind,
+                StatementKind::Binding {
+                    annotation: Some(_),
+                    initializer: None,
+                    ..
+                }
+            )),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn malformed_top_level_bindings_report_the_offending_token() {
     for (source, message, span) in [
         ("var = 1;", "expected a binding name after `var`", 4..5),
-        ("const value int = 1;", "expected `=`", 12..15),
+        (
+            "const value int = 1;",
+            "a declaration without an initializer requires a type annotation",
+            6..11,
+        ),
         ("var value: void = 1;", "expected a type", 11..15),
         ("const value = ;", "expected an expression", 14..15),
         ("var value = 1", "expected `;`", 13..13),
@@ -287,7 +316,11 @@ fn every_comparison_operator_parses() {
         let source = format!("fn main() -> void {{ const result = left {operator} right; }}");
         let syntax = parse(&source).unwrap();
         let statement = syntax.functions.iter().next().unwrap().1.body[0];
-        let StatementKind::Binding { initializer, .. } = syntax.statements[statement].kind else {
+        let StatementKind::Binding {
+            initializer: Some(initializer),
+            ..
+        } = syntax.statements[statement].kind
+        else {
             panic!("expected binding")
         };
         assert!(matches!(
@@ -390,8 +423,8 @@ fn malformed_statements_report_the_offending_token() {
         "var x = «;»",
         "var x: «=» 1;",
         "var x: «void» = 1;",
-        "var x «1»;",
-        "var x: int «;»",
+        "var «x» 1;",
+        "var x: int «1»;",
         "const x = 1 «}»",
         "exit «0»;",
         "exit(«)»;",

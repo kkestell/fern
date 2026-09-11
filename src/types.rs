@@ -184,6 +184,15 @@ impl fmt::Display for Scalar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StructId(pub(crate) usize);
 
+/// The greatest number of inline struct declarations one value may contain.
+/// Every compiler phase uses this bound before recursively walking a struct
+/// graph.
+pub(crate) const MAX_STRUCT_CONTAINMENT_DEPTH: usize = 128;
+
+/// The greatest byte size Fern's native aggregate layout permits. This leaves
+/// room for address arithmetic while keeping every phase below overflow.
+pub(crate) const MAX_AGGREGATE_LAYOUT_BYTES: u64 = 1 << 50;
+
 /// A named struct type. Structs are nominal, so identity alone decides whether
 /// two struct types are the same type; the name is what diagnostics display.
 #[derive(Debug, Clone, Eq)]
@@ -216,32 +225,6 @@ impl Type {
         match self {
             Self::Scalar(scalar) => Some(*scalar),
             Self::Array { .. } | Self::Struct(_) => None,
-        }
-    }
-
-    /// The scalar every value of this type is made of. A struct's fields have
-    /// their own types, so this and `element_count` describe scalars and
-    /// arrays only.
-    pub(crate) fn leaf(&self) -> Scalar {
-        match self {
-            Self::Scalar(scalar) => *scalar,
-            Self::Array { element, .. } => element.leaf(),
-            Self::Struct(ty) => unreachable!("`{}` is not made of one scalar", ty.name),
-        }
-    }
-
-    /// Whether values of this type are floating-point, which for an array is
-    /// whether its elements are.
-    pub(crate) fn is_floating(&self) -> bool {
-        self.leaf().is_floating()
-    }
-
-    /// How many scalars a value of this type stores; a scalar stores one.
-    pub(crate) fn element_count(&self) -> u64 {
-        match self {
-            Self::Scalar(_) => 1,
-            Self::Array { length, element } => length * element.element_count(),
-            Self::Struct(ty) => unreachable!("`{}` is not made of one scalar", ty.name),
         }
     }
 }
@@ -405,12 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn nesting_does_not_change_the_leaf_scalar() {
-        assert_eq!(Type::Scalar(Scalar::U8).leaf(), Scalar::U8);
-        assert_eq!(array(2, array(3, Scalar::U8.into())).leaf(), Scalar::U8);
-    }
-
-    #[test]
     fn every_scalar_is_looked_up_and_displayed_by_its_written_name() {
         for (scalar, name) in super::NAMED_TYPES {
             assert_eq!(Scalar::named(name), Some(scalar));
@@ -451,20 +428,5 @@ mod tests {
     #[should_panic(expected = "`f32` has no two's complement range")]
     fn a_floating_type_has_no_two_s_complement_range() {
         Scalar::F32.signed();
-    }
-
-    #[test]
-    fn an_array_is_floating_when_its_elements_are() {
-        assert!(Type::Scalar(Scalar::F64).is_floating());
-        assert!(array(2, array(3, Scalar::F32.into())).is_floating());
-        assert!(!array(2, Scalar::Int.into()).is_floating());
-        assert!(!Type::Scalar(Scalar::Bool).is_floating());
-    }
-
-    #[test]
-    fn a_types_element_count_multiplies_its_lengths() {
-        assert_eq!(Type::Scalar(Scalar::Int).element_count(), 1);
-        assert_eq!(array(3, Scalar::Int.into()).element_count(), 3);
-        assert_eq!(array(2, array(3, Scalar::Int.into())).element_count(), 6);
     }
 }

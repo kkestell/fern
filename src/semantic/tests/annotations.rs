@@ -105,6 +105,19 @@ fn an_array_length_is_a_constant_int_of_at_least_one() {
 }
 
 #[test]
+fn aggregate_layouts_must_fit_the_target_address_space() {
+    rejects_root(
+        "fn consume(value: «[9223372036854775807]int») -> void {} fn main() -> void {}",
+        "aggregate layout exceeds compiler limit of 1 PiB",
+    );
+    rejects_source(
+        "type Huge struct { values: [9223372036854775807]int } fn main() -> void {}",
+        "[9223372036854775807]int",
+        "aggregate layout exceeds compiler limit of 1 PiB",
+    );
+}
+
+#[test]
 fn an_underscore_takes_its_length_from_the_literal_element_count() {
     for (source, expected) in [
         ("var a: [_]int = [1, 2, 3]; fn main() -> void {}", 3),
@@ -126,7 +139,7 @@ fn an_underscore_takes_its_length_from_the_literal_element_count() {
         else {
             unreachable!("the first item is a binding")
         };
-        let length = inferred_length(&syntax, &(0..0), Some(*initializer)).unwrap();
+        let length = inferred_length(&syntax, &(0..0), *initializer).unwrap();
         assert_eq!(length, expected, "{source}");
     }
 }
@@ -243,4 +256,43 @@ fn a_struct_must_not_contain_itself() {
          type Segment struct { start: Point, end: Point }
          fn main() -> void {}",
     );
+}
+
+#[test]
+fn deep_struct_containment_reports_a_compiler_limit() {
+    let mut source = String::new();
+    for index in 0..=128 {
+        if index == 128 {
+            source.push_str(&format!("type S{index} struct {{ value: int }}\n"));
+        } else {
+            source.push_str(&format!(
+                "type S{index} struct {{ next: S{} }}\n",
+                index + 1
+            ));
+        }
+    }
+    source.push_str("fn main() -> void {}\n");
+    let error = check_root(&parse(&source).unwrap()).unwrap_err();
+    assert_eq!(
+        error.message,
+        "struct containment exceeds compiler limit of 128"
+    );
+}
+
+#[test]
+fn a_binary_struct_tree_derives_each_layout_once() {
+    // Every level names the level below it twice, so a layout derived per
+    // reference would cost 2^40 derivations. Memoizing costs one per level.
+    let mut source = String::new();
+    for index in 0..40 {
+        source.push_str(&format!(
+            "type S{index} struct {{ left: S{0}, right: S{0} }}\n",
+            index + 1
+        ));
+    }
+    source.push_str("type S40 struct { value: u8 }\n");
+    source.push_str("fn walk(node: S0) -> void {}\nfn main() -> void {}\n");
+    let syntax = parse(&source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    assert_eq!(checked.structs.len(), 41);
 }

@@ -1,15 +1,15 @@
-//! The shared QBE output state, the spellings of operands and types, and trap
-//! emission.
+//! The shared QBE output state, the spellings of operands and types, aggregate
+//! equality, and trap emission.
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticRenderer},
     ir::model::{Function, FunctionId, Global, Literal, Operand, Value, ValueId},
-    types::{Scalar, Type},
+    types::{ComparisonOperator, Scalar, Type},
 };
 
 use std::fmt::Write;
 
-use super::floating;
+use super::{floating, layout::Layout};
 
 pub(super) fn operand(operand: Operand) -> String {
     match operand {
@@ -37,7 +37,7 @@ pub(super) fn data_item(literal: Literal) -> String {
 }
 
 /// Arithmetic, conversions, and branching are defined on scalars, so the
-/// emission for them states that no array reaches it.
+/// emission for them states that no aggregate reaches it.
 pub(super) fn scalar(ty: &Type) -> Scalar {
     ty.scalar()
         .expect("arithmetic and conversion emission runs on scalars")
@@ -52,22 +52,171 @@ pub(super) fn qbe_type(ty: Scalar) -> char {
     }
 }
 
-/// Every scalar occupies its whole QBE word wherever it is stored, so an array
-/// occupies that word once per element.
-pub(super) fn word(ty: &Type) -> char {
-    qbe_type(ty.leaf())
+/// Two aggregates are equal when every pair of corresponding scalars is, which
+/// is not the same question as holding identical bytes: two floating-point
+/// zeroes are equal, a NaN equals nothing, and padding holds no value at all.
+/// Comparing the layout's scalar slots answers the question one field at a
+/// time, however deeply arrays and structs nest.
+pub(super) fn emit_aggregate_comparison(
+    emitter: &mut Emitter<'_>,
+    id: usize,
+    operator: ComparisonOperator,
+    left: Operand,
+    right: Operand,
+    ty: &Type,
+) {
+    let (left, right) = (operand(left), operand(right));
+    let equal = emit_aggregate_equal(emitter, &left, &right, ty);
+    match operator {
+        ComparisonOperator::Equal => writeln!(emitter.text, "    %v{id} =w copy {equal}"),
+        ComparisonOperator::NotEqual => writeln!(emitter.text, "    %v{id} =w ceqw {equal}, 0"),
+        _ => unreachable!("only equality compares aggregates"),
+    }
+    .unwrap();
 }
 
-/// How many bytes one stored scalar occupies.
-pub(super) fn bytes(ty: Scalar) -> u64 {
-    if ty.width() == 64 { 8 } else { 4 }
+/// Emits an equality test without flattening an aggregate into one instruction
+/// sequence per scalar. Arrays are walked at run time, while structs visit
+/// their fields in declaration order. Scalar leaves retain QBE's IEEE 754
+/// comparison instructions for floating-point fields.
+fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: &Type) -> String {
+    let comparison = emitter.comparisons;
+    emitter.comparisons += 1;
+    match ty {
+        Type::Scalar(scalar) => {
+            let class = qbe_type(*scalar);
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_leftvalue ={class} load{class} {left}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_rightvalue ={class} load{class} {right}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_equal =w ceq{class} %aggregate{comparison}_leftvalue, %aggregate{comparison}_rightvalue"
+            )
+            .unwrap();
+            format!("%aggregate{comparison}_equal")
+        }
+        Type::Array { length, element } => {
+            let stride = emitter.layout.size(element);
+            writeln!(emitter.text, "    jmp @aggregate{comparison}_start").unwrap();
+            writeln!(emitter.text, "@aggregate{comparison}_start").unwrap();
+            writeln!(emitter.text, "    jmp @aggregate{comparison}_loop").unwrap();
+            writeln!(emitter.text, "@aggregate{comparison}_loop").unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_index =l phi @aggregate{comparison}_start 0, @aggregate{comparison}_next %aggregate{comparison}_next_index"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_more =w csltl %aggregate{comparison}_index, {length}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    jnz %aggregate{comparison}_more, @aggregate{comparison}_body, @aggregate{comparison}_equal"
+            )
+            .unwrap();
+            writeln!(emitter.text, "@aggregate{comparison}_body").unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_offset =l mul %aggregate{comparison}_index, {stride}"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_left =l add {left}, %aggregate{comparison}_offset"
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_right =l add {right}, %aggregate{comparison}_offset"
+            )
+            .unwrap();
+            let element_equal = emit_aggregate_equal(
+                emitter,
+                &format!("%aggregate{comparison}_left"),
+                &format!("%aggregate{comparison}_right"),
+                element,
+            );
+            writeln!(
+                emitter.text,
+                "    jnz {element_equal}, @aggregate{comparison}_next, @aggregate{comparison}_unequal"
+            )
+            .unwrap();
+            writeln!(emitter.text, "@aggregate{comparison}_next").unwrap();
+            writeln!(
+                emitter.text,
+                "    %aggregate{comparison}_next_index =l add %aggregate{comparison}_index, 1"
+            )
+            .unwrap();
+            writeln!(emitter.text, "    jmp @aggregate{comparison}_loop").unwrap();
+            emit_aggregate_result_blocks(emitter, comparison);
+            format!("%aggregate{comparison}_result")
+        }
+        Type::Struct(declared) => {
+            let fields = emitter.layout.field_count(declared.id);
+            if fields == 0 {
+                writeln!(emitter.text, "    %aggregate{comparison}_result =w copy 1").unwrap();
+                return format!("%aggregate{comparison}_result");
+            }
+            writeln!(emitter.text, "    jmp @aggregate{comparison}_field0").unwrap();
+            for ordinal in 0..fields {
+                writeln!(emitter.text, "@aggregate{comparison}_field{ordinal}").unwrap();
+                let (offset, field) = emitter.layout.field(declared.id, ordinal);
+                writeln!(
+                    emitter.text,
+                    "    %aggregate{comparison}_left{ordinal} =l add {left}, {offset}"
+                )
+                .unwrap();
+                writeln!(
+                    emitter.text,
+                    "    %aggregate{comparison}_right{ordinal} =l add {right}, {offset}"
+                )
+                .unwrap();
+                let field_equal = emit_aggregate_equal(
+                    emitter,
+                    &format!("%aggregate{comparison}_left{ordinal}"),
+                    &format!("%aggregate{comparison}_right{ordinal}"),
+                    field,
+                );
+                let next = if ordinal + 1 == fields {
+                    format!("aggregate{comparison}_equal")
+                } else {
+                    format!("aggregate{comparison}_field{}", ordinal + 1)
+                };
+                writeln!(
+                    emitter.text,
+                    "    jnz {field_equal}, @{next}, @aggregate{comparison}_unequal"
+                )
+                .unwrap();
+            }
+            emit_aggregate_result_blocks(emitter, comparison);
+            format!("%aggregate{comparison}_result")
+        }
+    }
 }
 
-pub(super) fn size(ty: &Type) -> u64 {
-    ty.element_count() * bytes(ty.leaf())
+fn emit_aggregate_result_blocks(emitter: &mut Emitter<'_>, comparison: usize) {
+    writeln!(emitter.text, "@aggregate{comparison}_equal").unwrap();
+    writeln!(emitter.text, "    jmp @aggregate{comparison}_done").unwrap();
+    writeln!(emitter.text, "@aggregate{comparison}_unequal").unwrap();
+    writeln!(emitter.text, "    jmp @aggregate{comparison}_done").unwrap();
+    writeln!(emitter.text, "@aggregate{comparison}_done").unwrap();
+    writeln!(
+        emitter.text,
+        "    %aggregate{comparison}_result =w phi @aggregate{comparison}_equal 1, @aggregate{comparison}_unequal 0"
+    )
+    .unwrap();
 }
 
-/// The type of an operand. Only a load or a call result gives one an array
+/// The type of an operand. Only a load or a call result gives one an aggregate
 /// type; a literal is always a scalar.
 pub(super) fn operand_type(function: &Function, operand: Operand) -> Type {
     match operand {
@@ -163,6 +312,9 @@ pub(super) fn emit_message_data(data: &mut String, symbol: &str, message: &str) 
 pub(super) struct Emitter<'a> {
     pub(super) text: String,
     pub(super) data: String,
+    /// The QBE layout of every type the program stores, which owns aggregate
+    /// classes, sizes, alignments, and field offsets.
+    pub(super) layout: Layout<'a>,
     pub(super) globals: &'a [Global],
     pub(super) functions: &'a [Function],
     pub(super) main: FunctionId,
@@ -172,8 +324,10 @@ pub(super) struct Emitter<'a> {
     /// The return type of the signature being emitted, absent for a function
     /// that returns nothing.
     pub(super) qbe_result: Option<String>,
-    /// How many element places the program has materialized, which names their
-    /// temporaries and their bounds-check symbols.
+    /// How many element and field places the program has materialized, which
+    /// names their address temporaries and their bounds-check symbols.
     pub(super) accesses: usize,
+    /// How many aggregate comparisons have been emitted in this function.
+    pub(super) comparisons: usize,
     pub(super) diagnostics: Option<DiagnosticRenderer<'a>>,
 }

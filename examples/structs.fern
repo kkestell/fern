@@ -1,0 +1,31 @@
+type Point struct {
+    x: int,
+    y: int,
+}
+
+type Segment struct {
+    start: Point,
+    end: Point,
+}
+
+fn main() -> void {
+    var segment = Segment {
+        start = Point { x = 10, y = 20 },
+        end = Point { ... },
+    };
+
+    segment.end.x = segment.start.x + 5;
+    segment.end.y = segment.start.y + 7;
+
+    // Assigning a struct copies its fields, including nested structs.
+    var copy = segment;
+    copy.start.x = 0;
+    if copy == segment {
+        exit(1);
+    }
+
+    if segment.end.x != 15 || segment.end.y != 27 {
+        exit(2);
+    }
+    exit(42);
+}

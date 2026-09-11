@@ -7,6 +7,7 @@ use crate::{
         PathComponent, QualifiedName, Statement, StatementKind, Syntax, TopLevelItem,
         TypeAnnotation, find_call, walk_expression,
     },
+    layout::Layouts,
     module::{File, Module, ModuleId},
     source::FileId,
     types::{Scalar, StructId},
@@ -165,6 +166,7 @@ pub(crate) fn check<'a>(
         module_bindings: Vec::new(),
         expressions: ArenaMap::default(),
         declarations: ArenaMap::default(),
+        zero_declarations: HashMap::new(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
         iterations: ArenaMap::default(),
@@ -176,6 +178,8 @@ pub(crate) fn check<'a>(
         namespaces: HashMap::new(),
         imports: HashMap::new(),
         file: FileId(0),
+        struct_containment_depth: 0,
+        layouts: Layouts::default(),
     };
     // Dependencies come before dependents, so an imported module's namespace is
     // built and its bindings are ordered before any module that imports it.
@@ -584,7 +588,9 @@ impl CheckedProgram<'_> {
             if let Some(annotation) = annotation {
                 self.collect_annotation_references(*annotation, &mut visited, &mut references);
             }
-            self.collect_references(*initializer, &mut visited, &mut references);
+            if let Some(initializer) = initializer {
+                self.collect_references(*initializer, &mut visited, &mut references);
+            }
             dependencies.insert(
                 statement,
                 references
@@ -624,6 +630,20 @@ impl CheckedProgram<'_> {
         };
         let (mutable, annotation, initializer) = (*mutable, *annotation, *initializer);
         self.file = bindings.files[&statement];
+        let scopes = ScopeStack::module(module_scope);
+        // A declaration without an initializer takes its type's zero value,
+        // which the parser guarantees an annotation names.
+        let Some(initializer) = initializer else {
+            let annotation = annotation.expect("a declaration without an initializer is annotated");
+            let ty = self.resolve_annotation(annotation, &scopes, None)?;
+            let span = syntax.statements[statement].span.clone();
+            let zero = self.zero_value(&ty, &span)?;
+            let binding = self.declarations[statement];
+            self.bindings[binding].ty = ty;
+            self.bindings[binding].constant = (!mutable).then(|| zero.clone());
+            self.zero_declarations.insert(statement, zero);
+            return Ok(());
+        };
         // Signatures are resolved after this runs, so a call here has no
         // signature to check against. It is never constant, so report that.
         if let Some(call) = find_call(syntax, initializer) {
@@ -632,7 +652,6 @@ impl CheckedProgram<'_> {
                 "module-level initializer must be a constant expression",
             ));
         }
-        let scopes = ScopeStack::module(module_scope);
         let destination = match annotation {
             Some(annotation) => {
                 Some(self.resolve_annotation(annotation, &scopes, Some(initializer))?)

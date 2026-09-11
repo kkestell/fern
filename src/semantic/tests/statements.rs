@@ -377,7 +377,10 @@ fn parameters_are_shadowed_by_local_bindings_and_restored_after_their_scope() {
         ]
     );
     let initializer = match &syntax.statements[syntax.functions[typed].body[1]].kind {
-        StatementKind::Binding { initializer, .. } => *initializer,
+        StatementKind::Binding {
+            initializer: Some(initializer),
+            ..
+        } => *initializer,
         _ => unreachable!("the shadowing scope ends before the copy"),
     };
     assert_eq!(
@@ -736,4 +739,63 @@ fn an_assignment_target_records_its_index_and_field_steps_in_order() {
         "grid",
         "cannot select a field of `int`",
     );
+}
+
+#[test]
+fn a_declaration_without_an_initializer_takes_its_type_s_zero_value() {
+    let source = "type Pair struct { a: int, b: f64 }
+         var counter: int;
+         const limit: u8;
+         fn main() -> void {
+             var row: [2]int;
+             var pair: Pair;
+             exit(counter + int(limit) + row[0] + pair.a);
+         }";
+    let syntax = parse(source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let zeroes = checked
+        .bindings
+        .iter()
+        .map(|(_, binding)| (binding.ty.clone(), binding.constant.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        zeroes,
+        vec![
+            // A module-level `var` keeps its zero out of `Binding::constant`,
+            // which would fold it into its use sites.
+            (value_type(Scalar::Int), None),
+            (value_type(Scalar::U8), folded(0)),
+            (array_type(2, value_type(Scalar::Int)), None),
+            (struct_type(0, "Pair"), None),
+        ]
+    );
+    // Every declaration written without an initializer records its zero for
+    // lowering, whether or not the binding also folds.
+    assert_eq!(checked.zero_declarations.len(), 4);
+    let values = checked.zero_declarations.values().collect::<Vec<_>>();
+    assert!(values.contains(&&Constant::Integer(big(0))));
+    assert!(values.contains(&&Constant::Array(vec![
+        Constant::Integer(big(0)),
+        Constant::Integer(big(0))
+    ])));
+    assert!(values.contains(&&Constant::Struct(vec![
+        Constant::Integer(big(0)),
+        Constant::Float(Float::Binary64(0)),
+    ])));
+}
+
+#[test]
+fn a_declaration_without_an_initializer_is_still_a_const_or_a_typed_binding() {
+    rejects(
+        "const x: int; x = 1;",
+        "x",
+        "cannot assign to immutable binding `x`",
+    );
+    // `[_]` has no initializer to take a length from.
+    rejects_source(
+        "fn main() -> void { var x: [_]int; }",
+        "[_]int",
+        "`[_]` requires an array-literal initializer",
+    );
+    accepts("var x: int; x = 1; exit(x);");
 }

@@ -179,7 +179,9 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
                 if let Some(annotation) = annotation {
                     project_annotation(syntax, *annotation, depth + 1, output);
                 }
-                project_expression(syntax, *initializer, depth + 1, output);
+                if let Some(initializer) = initializer {
+                    project_expression(syntax, *initializer, depth + 1, output);
+                }
             }
             StatementKind::Assignment { target, value } => {
                 writeln!(

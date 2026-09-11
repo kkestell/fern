@@ -1,0 +1,15 @@
+type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var point = Point { x = 19, y = 23 };
+    point.x = point.x + 1;
+    const expected = Point { x = 20, y = 23 };
+
+    if point == expected {
+        exit(point.x + point.y);
+    }
+    exit(255);
+}

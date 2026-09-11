@@ -805,8 +805,18 @@ impl Parser<'_> {
         } else {
             None
         };
-        self.expect(Token::Equals, "expected `=`")?;
-        let initializer = self.expression()?;
+        let initializer = if self.current == Some(Token::Equals) {
+            self.advance()?;
+            Some(self.expression()?)
+        } else {
+            if annotation.is_none() {
+                return Err(Diagnostic::new(
+                    name_span,
+                    "a declaration without an initializer requires a type annotation",
+                ));
+            }
+            None
+        };
         Ok(StatementKind::Binding {
             mutable,
             name,

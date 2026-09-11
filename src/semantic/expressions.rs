@@ -176,7 +176,22 @@ impl CheckedProgram<'_> {
             length,
             element: Box::new(element_type.clone()),
         };
-        check_element_count(span, &ty, length, elements.len(), fill.is_some())?;
+        self.validate_aggregate_layout(&ty, &span)?;
+        check_element_count(span.clone(), &ty, length, elements.len(), fill.is_some())?;
+        // A fill expands to one constant per scalar the whole literal holds,
+        // so the bound counts the elements an element itself expands to.
+        if fill.is_some()
+            && self
+                .aggregate_value_count(&ty)
+                .is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES)
+        {
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
+                ),
+            ));
+        }
         let mut checked_elements = Vec::with_capacity(elements.len());
         for &element in &elements {
             checked_elements.push(self.check_expression(
@@ -323,23 +338,42 @@ impl CheckedProgram<'_> {
             initializers.push((ordinal, field.value));
             checked.push(value);
         }
-        let mut filled = Vec::new();
-        for ordinal in written
+        let omitted = written
             .iter()
             .enumerate()
             .filter_map(|(ordinal, written)| (!written).then_some(ordinal))
+            .collect::<Vec<_>>();
+        if let Some(&ordinal) = omitted.first()
+            && fill.is_none()
         {
-            let field = &self.structs[declared.0].fields[ordinal];
-            if fill.is_none() {
-                return Err(Diagnostic::new(
-                    span,
-                    format!(
-                        "`{ty}` literal is missing field `{}`",
-                        syntax.names.resolve(&field.name)
-                    ),
-                ));
-            }
-            let zero = self.zero_value(&field.ty);
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "`{ty}` literal is missing field `{}`",
+                    syntax
+                        .names
+                        .resolve(&self.structs[declared.0].fields[ordinal].name)
+                ),
+            ));
+        }
+        // The fill expands every omitted field, so the bound covers them
+        // together rather than one field at a time.
+        let total = omitted.iter().try_fold(0u64, |count, &ordinal| {
+            count.checked_add(
+                self.aggregate_value_count(&self.structs[declared.0].fields[ordinal].ty)?,
+            )
+        });
+        if total.is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES) {
+            return Err(Diagnostic::new(
+                name.span.clone(),
+                format!(
+                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
+                ),
+            ));
+        }
+        let mut filled = Vec::new();
+        for ordinal in omitted {
+            let zero = self.zero_value_unchecked(&self.structs[declared.0].fields[ordinal].ty);
             values[ordinal] = Some(zero.clone());
             filled.push((ordinal, zero));
         }

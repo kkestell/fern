@@ -2,9 +2,8 @@
 
 Fern is a low-level programming language. The
 [language specification](docs/spec.md) defines its behavior; the
-[roadmap](eng/roadmap.md) tracks implementation scope and completion gates.
-The specification includes language features ahead of the compiler. See the
-roadmap's completed milestones for the currently supported subset.
+[TODO](eng/todo.md) tracks implementation work. The specification includes
+language features ahead of the compiler.
 
 The examples form a tour of the currently supported language, grouped by topic:
 
@@ -23,6 +22,8 @@ The examples form a tour of the currently supported language, grouped by topic:
 - [Arrays](examples/arrays.fern) covers array types, literals and fills,
   indexing, `len`, array comparison, whole-array copies, and both `for … in`
   forms.
+- [Structs](examples/structs.fern) covers declarations, literals and fill,
+  field selection and assignment, copying, and equality.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is
@@ -74,11 +75,14 @@ existing output, and an output aliasing a source file is rejected.
 The compiler accepts recursive source nesting up to 128 levels, counting the
 function body, blocks, conversions, parenthesized groups, unary operators, and
 binary expression-tree depth. Deeper nesting produces a source diagnostic
-before recursive compiler phases can exhaust the stack. Untyped constant
-left-shift counts above 1,000,000 produce a compiler resource-limit diagnostic.
-Integer literals are limited to 4,096 digits, and untyped constant-folding
-results are limited to 2,000,000 significant bits. Diagnostics excerpt source
-lines longer than 240 bytes.
+before recursive compiler phases can exhaust the stack. Inline struct
+containment uses the same 128-level limit. Untyped constant left-shift counts
+above 1,000,000 produce a compiler resource-limit diagnostic. Integer literals
+are limited to 4,096 digits, and untyped constant-folding results are limited
+to 2,000,000 significant bits. Diagnostics excerpt source lines longer than
+240 bytes. Aggregate layouts are limited to 1 PiB. One initializer's repeated
+array fills and struct-literal zero fills expand to at most 1,000,000 scalar
+values in total.
 
 ## Development
 

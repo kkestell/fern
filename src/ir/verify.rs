@@ -2,7 +2,11 @@
 
 use crate::{
     CompileError,
-    types::{Scalar, Type, UnaryOperator},
+    layout::{Layouts, StructFields},
+    types::{
+        MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, StructType,
+        Type, UnaryOperator,
+    },
 };
 
 use std::collections::VecDeque;
@@ -167,11 +171,22 @@ struct Definition {
     from_call: bool,
 }
 
+impl StructFields for Program {
+    fn field_count(&self, id: StructId) -> usize {
+        self.structs[id.0].fields.len()
+    }
+
+    fn field_type(&self, id: StructId, ordinal: usize) -> &Type {
+        &self.structs[id.0].fields[ordinal]
+    }
+}
+
 impl Program {
     pub(crate) fn verify(self) -> Result<VerifiedProgram, CompileError> {
-        self.verify_structs()?;
+        let layouts = Layouts::default();
+        self.verify_structs(&layouts)?;
         for (id, global) in self.globals.iter().enumerate() {
-            self.verify_global(global)
+            self.verify_global(&layouts, global)
                 .map_err(|error| CompileError::new(format!("{error} (IR global {id})")))?;
         }
         let main = self.function(self.main)?;
@@ -184,7 +199,7 @@ impl Program {
             verify_parameters(function)?;
         }
         for function in &self.functions {
-            self.verify_function(function)?;
+            self.verify_function(&layouts, function)?;
         }
         Ok(VerifiedProgram(self))
     }
@@ -257,7 +272,7 @@ impl Program {
     /// struct a field names is defined, and no struct contains itself. A field
     /// stores its value inline, directly or through an array, so a cycle among
     /// them has no finite layout.
-    fn verify_structs(&self) -> Result<(), CompileError> {
+    fn verify_structs(&self, layouts: &Layouts) -> Result<(), CompileError> {
         for definition in &self.structs {
             for field in &definition.fields {
                 self.verify_type(field)?;
@@ -265,12 +280,26 @@ impl Program {
         }
         let mut state = vec![Resolution::Unvisited; self.structs.len()];
         for id in 0..self.structs.len() {
-            self.verify_acyclic(id, &mut state)?;
+            self.verify_acyclic(id, &mut state, 0)?;
+        }
+        for id in 0..self.structs.len() {
+            self.verify_aggregate_layout(
+                layouts,
+                &Type::Struct(StructType {
+                    id: StructId(id),
+                    name: String::new(),
+                }),
+            )?;
         }
         Ok(())
     }
 
-    fn verify_acyclic(&self, id: usize, state: &mut [Resolution]) -> Result<(), CompileError> {
+    fn verify_acyclic(
+        &self,
+        id: usize,
+        state: &mut [Resolution],
+        depth: usize,
+    ) -> Result<(), CompileError> {
         match state[id] {
             Resolution::Acyclic => return Ok(()),
             Resolution::Visiting => {
@@ -280,10 +309,15 @@ impl Program {
             }
             Resolution::Unvisited => {}
         }
+        if depth == MAX_STRUCT_CONTAINMENT_DEPTH {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR struct containment exceeds compiler limit of {MAX_STRUCT_CONTAINMENT_DEPTH}"
+            )));
+        }
         state[id] = Resolution::Visiting;
         for field in &self.structs[id].fields {
             if let Some(contained) = contained_struct(field) {
-                self.verify_acyclic(contained, state)?;
+                self.verify_acyclic(contained, state, depth + 1)?;
             }
         }
         state[id] = Resolution::Acyclic;
@@ -305,6 +339,24 @@ impl Program {
         }
     }
 
+    /// Repeats the backend's layout arithmetic with checked operations at the
+    /// verified-IR boundary. The backend may consequently keep its compact
+    /// layout API without accepting an overflowing source-controlled type.
+    fn verify_aggregate_layout(&self, layouts: &Layouts, ty: &Type) -> Result<(), CompileError> {
+        let Some(size) = layouts.size(self, ty) else {
+            return Err(CompileError::new(
+                "internal compiler error: IR aggregate layout overflows the target address space",
+            ));
+        };
+        if size > MAX_AGGREGATE_LAYOUT_BYTES {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR aggregate layout exceeds compiler limit of {} PiB",
+                MAX_AGGREGATE_LAYOUT_BYTES >> 50
+            )));
+        }
+        Ok(())
+    }
+
     /// The scalar types a value of `ty` stores, in memory order. A struct's
     /// fields have their own types, so the sequence is derived from the
     /// program's struct table rather than from one leaf type.
@@ -324,18 +376,22 @@ impl Program {
         }
     }
 
-    fn verify_global(&self, global: &Global) -> Result<(), CompileError> {
+    fn verify_global(&self, layouts: &Layouts, global: &Global) -> Result<(), CompileError> {
         self.verify_type(&global.ty)?;
-        let mut expected = Vec::new();
-        self.scalar_types(&global.ty, &mut expected);
-        if global.values.len() != expected.len() {
+        self.verify_aggregate_layout(layouts, &global.ty)?;
+        let expected_count = self.scalar_count(&global.ty).ok_or_else(|| {
+            CompileError::new("internal compiler error: IR global scalar count overflows")
+        })?;
+        if u64::try_from(global.values.len()).expect("a Vec length fits u64") != expected_count {
             return Err(CompileError::new(format!(
                 "internal compiler error: IR global of type `{}` holds {} values, expected {}",
                 global.ty,
                 global.values.len(),
-                expected.len()
+                expected_count
             )));
         }
+        let mut expected = Vec::with_capacity(global.values.len());
+        self.scalar_types(&global.ty, &mut expected);
         for (&value, &expected) in global.values.iter().zip(&expected) {
             let ty = verify_literal(value)?;
             if ty != expected {
@@ -348,7 +404,20 @@ impl Program {
         Ok(())
     }
 
-    fn verify_function(&self, function: &Function) -> Result<(), CompileError> {
+    fn scalar_count(&self, ty: &Type) -> Option<u64> {
+        match ty {
+            Type::Scalar(_) => Some(1),
+            Type::Array { length, element } => length.checked_mul(self.scalar_count(element)?),
+            Type::Struct(declared) => self.structs[declared.id.0]
+                .fields
+                .iter()
+                .try_fold(0u64, |count, field| {
+                    count.checked_add(self.scalar_count(field)?)
+                }),
+        }
+    }
+
+    fn verify_function(&self, layouts: &Layouts, function: &Function) -> Result<(), CompileError> {
         let flow = &function.flow;
         for ty in flow
             .locals
@@ -357,6 +426,7 @@ impl Program {
             .chain(function.values.iter().map(|value| &value.ty))
         {
             self.verify_type(ty)?;
+            self.verify_aggregate_layout(layouts, ty)?;
         }
         verify_target(flow.entry, flow)?;
         let definitions = value_definitions(function)?;

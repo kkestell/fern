@@ -101,7 +101,7 @@ pub(crate) enum StatementKind {
         name: Spur,
         name_span: Range<usize>,
         annotation: Option<Idx<TypeAnnotation>>,
-        initializer: Idx<Expression>,
+        initializer: Option<Idx<Expression>>,
     },
     Assignment {
         target: AssignmentTarget,

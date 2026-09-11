@@ -172,6 +172,10 @@ fn source_failures_preserve_output() {
             "cannot assign to immutable binding `x`",
         ),
         (
+            "fn consume(values: [9223372036854775807]int) -> void {} fn main() -> void {}",
+            "aggregate layout exceeds compiler limit of 1 PiB",
+        ),
+        (
             "fn main() -> void { { var x = 1; } x = 2; }",
             "unknown binding `x`",
         ),
@@ -223,30 +227,121 @@ fn source_failures_preserve_output() {
 }
 
 #[test]
-fn struct_programs_are_checked_and_stop_before_lowering() {
-    // Checking accepts the program, and the temporary pre-lowering guard is
-    // what rejects it until Fern IR represents structs.
-    let (_dir, input, output) = fixture(
-        "type Point struct {
-    x: int,
-    y: int,
+fn deep_struct_containment_reports_a_diagnostic_without_aborting() {
+    let mut source = String::new();
+    for index in 0..=128 {
+        if index == 128 {
+            source.push_str(&format!("type S{index} struct {{ value: int }}\n"));
+        } else {
+            source.push_str(&format!(
+                "type S{index} struct {{ next: S{} }}\n",
+                index + 1
+            ));
+        }
+    }
+    source.push_str("fn main() -> void {}\n");
+    let (_dir, input, output) = fixture(source);
+    fs::write(&output, "keep me").unwrap();
+    failure(
+        cli(&input, &output).output().unwrap(),
+        "struct containment exceeds compiler limit of 128",
+    );
+    assert_eq!(fs::read_to_string(output).unwrap(), "keep me");
 }
 
-fn main() -> void {
-    var point = Point { x = 19, y = 23 };
-    point.x = point.x + 1;
-    const expected = Point { x = 20, y = 23 };
-    if point == expected {
-        exit(point.x + point.y);
+#[test]
+fn declarations_without_an_initializer_execute_as_zero_values() {
+    for (source, expected) in [
+        (
+            "var counter: int;
+             fn main() -> void {
+                 counter = counter + 1;
+                 counter = counter + 1;
+                 exit(counter);
+             }",
+            2,
+        ),
+        (
+            "type Point struct { x: int, y: f64 }
+             fn main() -> void {
+                 var zeroed: Point;
+                 const written = Point { x = 0, y = 0.0 };
+                 if zeroed != written { exit(255); }
+                 exit(7);
+             }",
+            7,
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected),
+            "{source}"
+        );
     }
-    exit(255);
 }
-",
-    );
-    fs::write(&output, "old executable").unwrap();
-    let error = fern::compile(&input, &output).unwrap_err().to_string();
-    assert!(error.contains("structs are not yet compiled"), "{error}");
-    assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+
+#[test]
+fn struct_programs_execute() {
+    for (source, expected) in [
+        (include_str!("fixtures/programs/structs.fern"), 43),
+        (
+            "type Point struct { x: int, y: int }
+             var origin = Point { x = 1, y = 2 };
+             fn moved(point: Point) -> Point {
+                 var copy = point;
+                 copy.x = copy.x + 40;
+                 return copy;
+             }
+             fn main() -> void {
+                 var result = moved(origin);
+                 result.y = 1;
+                 if origin.x != 1 || origin.y != 2 { exit(255); }
+                 exit(result.x + result.y);
+             }",
+            42,
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn struct_source_failures_preserve_output() {
+    for (source, expected) in [
+        (
+            "type Point struct { x: int }
+             fn main() -> void {
+                 const point = Point { x = 1 };
+                 point.x = 2;
+             }",
+            "cannot assign to immutable binding `point`",
+        ),
+        (
+            "type Point struct { x: int, y: int }
+             fn main() -> void {
+                 const point = Point { x = 1 };
+                 exit(42);
+             }",
+            "`Point` literal is missing field `y`",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fs::write(&output, "old executable").unwrap();
+        let error = fern::compile(&input, &output).unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            error.contains(input.file_name().unwrap().to_str().unwrap()),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+    }
 }
 
 #[test]

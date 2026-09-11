@@ -1,6 +1,7 @@
 //! Expression inference, contextualization, indexing, lengths, and array literals.
 
 use crate::{
+    comparability,
     diagnostic::Diagnostic,
     frontend::syntax::{Expression, ExpressionKind, Syntax, find_call},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
@@ -1119,13 +1120,12 @@ impl CheckedProgram<'_> {
             (left, &mut checked_left),
             (right, &mut checked_right),
         )?;
-        let reference_comparison =
-            matches!(checked_left.ty, Type::Pointer { .. } | Type::Slice { .. });
+        let pointer_comparison = matches!(checked_left.ty, Type::Pointer { .. });
         let constant = match (
             checked_left.constant.as_ref(),
             checked_right.constant.as_ref(),
         ) {
-            (Some(left), Some(right)) if !reference_comparison => {
+            (Some(left), Some(right)) if !pointer_comparison => {
                 Some(compare_constants(operator, left, right))
             }
             _ => None,
@@ -1160,6 +1160,21 @@ impl CheckedProgram<'_> {
     ) -> Result<(), Diagnostic> {
         let (left_id, left) = left;
         let (right_id, right) = right;
+        if operator.is_equality() {
+            for operand in [&*left, &*right] {
+                if !comparability::comparable(self, &operand.ty) {
+                    let detail = if matches!(operand.ty, Type::Slice { .. }) {
+                        String::new()
+                    } else {
+                        ", which contains a slice".to_owned()
+                    };
+                    return Err(Diagnostic::new(
+                        operator_span.clone(),
+                        format!("`==` and `!=` are not defined on `{}`{detail}", operand.ty),
+                    ));
+                }
+            }
+        }
         if let (
             Type::Pointer {
                 target: left_target,
@@ -1172,37 +1187,6 @@ impl CheckedProgram<'_> {
         ) = (&left.ty, &right.ty)
         {
             if left_target != right_target {
-                return Err(Diagnostic::new(
-                    operator_span.clone(),
-                    format!(
-                        "comparison operands have different types `{}` and `{}`",
-                        left.ty, right.ty
-                    ),
-                ));
-            }
-            if !matches!(
-                operator,
-                ComparisonOperator::Equal | ComparisonOperator::NotEqual
-            ) {
-                return Err(Diagnostic::new(
-                    operator_span.clone(),
-                    format!("only `==` and `!=` are defined on `{}`", left.ty),
-                ));
-            }
-            return Ok(());
-        }
-        if let (
-            Type::Slice {
-                element: left_element,
-                ..
-            },
-            Type::Slice {
-                element: right_element,
-                ..
-            },
-        ) = (&left.ty, &right.ty)
-        {
-            if left_element != right_element {
                 return Err(Diagnostic::new(
                     operator_span.clone(),
                     format!(
@@ -1245,16 +1229,21 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        if left.ty.scalar().is_none()
-            && !matches!(
-                operator,
-                ComparisonOperator::Equal | ComparisonOperator::NotEqual
-            )
-        {
-            return Err(Diagnostic::new(
-                operator_span.clone(),
-                format!("only `==` and `!=` are defined on `{}`", left.ty),
-            ));
+        if left.ty.scalar().is_none() && !operator.is_equality() {
+            let message = if comparability::comparable(self, &left.ty) {
+                format!("only `==` and `!=` are defined on `{}`", left.ty)
+            } else {
+                let detail = if matches!(left.ty, Type::Slice { .. }) {
+                    String::new()
+                } else {
+                    ", which contains a slice".to_owned()
+                };
+                format!(
+                    "`<`, `<=`, `>`, and `>=` are not defined on `{}`{detail}",
+                    left.ty,
+                )
+            };
+            return Err(Diagnostic::new(operator_span.clone(), message));
         }
         Ok(())
     }

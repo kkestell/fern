@@ -221,8 +221,6 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
-        helpers: String::new(),
-        slice_equalities: Vec::new(),
         layout: Layout::new(&program.structs),
         globals: &program.globals,
         functions: &program.functions,
@@ -296,10 +294,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emit_control_flow(&mut emitter, function, &function.flow);
         emitter.text.push_str("}\n");
     }
-    emitter.layout.type_definitions(&program.functions)
-        + &emitter.data
-        + &emitter.text
-        + &emitter.helpers
+    emitter.layout.type_definitions(&program.functions) + &emitter.data + &emitter.text
 }
 
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {

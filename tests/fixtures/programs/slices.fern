@@ -61,10 +61,7 @@ fn main() -> void {
         exit(5);
     }
 
-    var same: [2]int = [20, 3];
-    var different: [2]int = [20, 4];
-    const frozen_same: [2]int = [20, 3];
-    if returned != same[:] || returned == different[:] || empty != zero || returned != frozen_same[:] {
+    if len(returned) != 2 || returned[0] != 20 || returned[1] != 3 {
         exit(6);
     }
 

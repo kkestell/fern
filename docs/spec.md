@@ -1496,31 +1496,6 @@ is a struct with a slice field nor an array whose element type is a slice, by
 the rules under [Struct literals](#struct-literals) and
 [Array comparison](#array-comparison).
 
-Comparing the elements of two slices is written as a loop over their lengths.
-
-```fern
-fn equal(a: []const int, b: []const int) -> bool {
-    if len(a) != len(b) {
-        return false;
-    }
-    for v, i in a {
-        if v != b[i] {
-            return false;
-        }
-    }
-    return true;
-}
-
-fn main() -> void {
-    const x: [3]int = [1, 2, 3];
-    const y: [4]int = [0, 1, 2, 3];
-    if equal(x[:], y[1:]) {
-        exit(0); // reports 0
-    }
-    exit(1);
-}
-```
-
 ## Statements and Execution
 
 A function body and each nested brace-delimited block execute statements in

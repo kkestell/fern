@@ -301,8 +301,8 @@ pub(crate) enum ComparisonOperator {
 }
 
 impl ComparisonOperator {
-    /// Equality is defined on every value type; the ordering comparisons are
-    /// defined only on integers.
+    /// Equality is defined on comparable types; the ordering comparisons are
+    /// defined only on numeric types.
     pub(crate) fn is_equality(self) -> bool {
         matches!(self, Self::Equal | Self::NotEqual)
     }

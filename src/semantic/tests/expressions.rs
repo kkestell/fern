@@ -1442,7 +1442,7 @@ fn slicing_checks_types_locations_and_bounds() {
 }
 
 #[test]
-fn slices_index_measure_and_compare_without_folding() {
+fn slices_index_measure_and_reject_comparison() {
     for (source, expected) in [
         (
             "fn main() -> void { var s: []int; var e = s[9]; }",
@@ -1455,10 +1455,6 @@ fn slices_index_measure_and_compare_without_folding() {
         (
             "fn main() -> void { var s: []int; var n = len(s); }",
             value_type(Scalar::Int),
-        ),
-        (
-            "fn main() -> void { var s: []int; var t: []const int; var b = s == t; }",
-            value_type(Scalar::Bool),
         ),
     ] {
         assert_eq!(
@@ -1476,12 +1472,18 @@ fn slices_index_measure_and_compare_without_folding() {
         (
             "fn main() -> void { var s: []int; var t: []i64; var b = s == t; }",
             "==",
-            "comparison operands have different types `[]int` and `[]i64`",
+            "`==` and `!=` are not defined on `[]int`",
         ),
         (
             "fn main() -> void { var s: []int; var t: []int; var b = s < t; }",
             "<",
-            "only `==` and `!=` are defined on `[]int`",
+            "`<`, `<=`, `>`, and `>=` are not defined on `[]int`",
+        ),
+        (
+            "type Holder struct { values: []int }
+             fn main() -> void { var a: Holder; var b: Holder; var ordered = a < b; }",
+            "<",
+            "`<`, `<=`, `>`, and `>=` are not defined on `Holder`, which contains a slice",
         ),
         (
             "var s: []int; const n = len(s); fn main() -> void {}",
@@ -1491,6 +1493,72 @@ fn slices_index_measure_and_compare_without_folding() {
     ] {
         rejects_source(source, offending, message);
     }
+}
+
+#[test]
+fn equality_requires_comparable_types() {
+    for (source, offending, message) in [
+        (
+            "fn main() -> void { var s: []int; var t: []int; var b = s == t; }",
+            "==",
+            "`==` and `!=` are not defined on `[]int`",
+        ),
+        (
+            "fn main() -> void { var s: []int; var t: []int; var b = s != t; }",
+            "!=",
+            "`==` and `!=` are not defined on `[]int`",
+        ),
+        (
+            "fn main() -> void { var s: []int; var t: []const int; var b = s == t; }",
+            "==",
+            "`==` and `!=` are not defined on `[]int`",
+        ),
+        (
+            "type Holder struct { values: []int }
+             fn main() -> void { var a: Holder; var b: Holder; var same = a == b; }",
+            "==",
+            "`==` and `!=` are not defined on `Holder`, which contains a slice",
+        ),
+        (
+            "type Holder struct { values: []int }
+             type Outer struct { holder: Holder }
+             fn main() -> void { var a: Outer; var b: Outer; var same = a != b; }",
+            "!=",
+            "`==` and `!=` are not defined on `Outer`, which contains a slice",
+        ),
+        (
+            "fn main() -> void { var a: [2][]int; var b: [2][]int; var same = a == b; }",
+            "==",
+            "`==` and `!=` are not defined on `[2][]int`, which contains a slice",
+        ),
+    ] {
+        rejects_source(source, offending, message);
+    }
+
+    accepts_source(
+        "type Inner struct { flag: bool, values: [2]int }
+         type Comparable struct { count: int, inner: Inner, rows: [2]Inner, pointer: *int }
+         fn main() -> void {
+             var left: Comparable;
+             var right: Comparable;
+             var same = left == right;
+             var a: [2]Comparable;
+             var b: [2]Comparable;
+             var arrays_same = a == b;
+         }",
+    );
+
+    accepts_source(
+        "type Holder struct { pointer: *[]int }
+         fn main() -> void {
+             var left: *[]int;
+             var right: *[]int;
+             var pointers_same = left == right;
+             var first: Holder;
+             var second: Holder;
+             var holders_same = first == second;
+         }",
+    );
 }
 
 #[test]

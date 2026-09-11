@@ -1,7 +1,7 @@
 //! Structural, typing, reachability, and definite-initialization verification.
 
 use crate::{
-    CompileError,
+    CompileError, comparability,
     layout::{Layouts, StructFields},
     types::{
         MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, StructType,
@@ -68,6 +68,7 @@ fn scalar(ty: &Type) -> Result<Scalar, CompileError> {
 }
 
 fn valid_value(
+    table: &dyn StructFields,
     value: &Value,
     operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     place_type: &impl Fn(&Place) -> Result<Type, CompileError>,
@@ -92,15 +93,12 @@ fn valid_value(
                 && value.ty == Scalar::Bool.into()
                 && (if operator.is_equality() {
                     let right = operand_type(right.clone())?;
-                    left == right
-                        || matches!(
-                            (&left, &right),
-                            (Type::Pointer { target: left, .. }, Type::Pointer { target: right, .. }) if left == right
-                        )
-                        || matches!(
-                            (&left, &right),
-                            (Type::Slice { element: left, .. }, Type::Slice { element: right, .. }) if left == right
-                        )
+                    comparability::comparable(table, &left)
+                        && (left == right
+                            || matches!(
+                                (&left, &right),
+                                (Type::Pointer { target: left, .. }, Type::Pointer { target: right, .. }) if left == right
+                            ))
                 } else {
                     left == operand_type(right.clone())? && left.scalar().is_some()
                 })
@@ -598,7 +596,7 @@ impl Program {
                     )));
                 }
                 let place_type = |place: &Place| self.place_type(flow, place, &operand_type);
-                if !valid_value(value, &operand_type, &place_type)? {
+                if !valid_value(self, value, &operand_type, &place_type)? {
                     return Err(invalid_value(*id, value));
                 }
                 Ok(())

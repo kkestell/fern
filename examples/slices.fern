@@ -27,7 +27,7 @@ fn main() -> void {
     // The zero value is an empty slice. Mutable slices pass as read-only ones.
     var empty: []int;
     const read_only: []const int = copied;
-    if len(empty) != 0 || copied != values[1:3] {
+    if len(empty) != 0 || len(copied) != 2 || copied[0] != 20 || copied[1] != 3 {
         exit(2);
     }
 

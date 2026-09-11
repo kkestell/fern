@@ -52,6 +52,10 @@ that one derivation, so one description of memory answers for limit checking,
 allocation, copying, field addressing, and padding. `backend::layout` owns
 what is specific to emission: QBE classes and scalar storage slots.
 
+`comparability` answers whether `==` and `!=` are defined on a type from the
+same phase-supplied struct table, so semantic checking and IR verification
+enforce one rule.
+
 ## Diagnostics
 
 Source spans use the program-wide offset space in `SourceMap`. A diagnostic

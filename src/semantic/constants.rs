@@ -625,9 +625,9 @@ pub(super) fn integer_literal(spelling: &str) -> CheckedExpression {
     }
 }
 
-/// Compares two constant operands of one type. Equality reaches every value
-/// type, so an array folds elementwise; ordering reaches the numbers, which is
-/// all checking lets through.
+/// Compares two constant operands of one type. Equality reaches every
+/// comparable type, so an array folds elementwise; ordering reaches the
+/// numbers, which is all checking lets through.
 pub(super) fn compare_constants(
     operator: ComparisonOperator,
     left: &Constant,

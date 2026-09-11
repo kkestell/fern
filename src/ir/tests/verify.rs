@@ -40,17 +40,6 @@ fn verification_checks_slice_literals_places_and_values() {
                 slice: Operand::Value(ValueId(3)),
             },
         },
-        // Equality compares two slices of one element type whatever their
-        // constness.
-        Value {
-            span: Some(0..1),
-            ty: Scalar::Bool.into(),
-            kind: ValueKind::Comparison {
-                operator: ComparisonOperator::Equal,
-                left: Operand::Value(ValueId(1)),
-                right: Operand::Value(ValueId(3)),
-            },
-        },
     ];
     let function = main_function(
         values,
@@ -66,7 +55,6 @@ fn verification_checks_slice_literals_places_and_values() {
                 Instruction::Value(ValueId(2)),
                 Instruction::Value(ValueId(3)),
                 Instruction::Value(ValueId(4)),
-                Instruction::Value(ValueId(5)),
             ],
             terminator: Terminator::Exit {
                 status: integer(0, Scalar::Int),
@@ -162,6 +150,18 @@ fn verification_rejects_malformed_slice_values_and_places() {
             },
             "invalid IR value 0",
         ),
+        (
+            Value {
+                span: Some(0..1),
+                ty: Scalar::Bool.into(),
+                kind: ValueKind::Comparison {
+                    operator: ComparisonOperator::Equal,
+                    left: empty_slice(ints.clone()),
+                    right: empty_slice(ints.clone()),
+                },
+            },
+            "invalid IR value 0",
+        ),
     ] {
         let error = program(vec![value], integer(0, Scalar::Int))
             .verify()
@@ -186,6 +186,147 @@ fn verification_rejects_malformed_slice_values_and_places() {
     );
     let error = one_function(function).verify().unwrap_err();
     assert!(error.to_string().contains("invalid IR value 0"), "{error}");
+}
+
+#[test]
+fn verification_rejects_equality_on_aggregates_that_contain_slices() {
+    let ints = slice(false, Scalar::Int.into());
+    let array_of_slices = array(2, ints.clone());
+    let values = vec![
+        Value {
+            span: None,
+            ty: array_of_slices.clone(),
+            kind: ValueKind::Load(Place::Local(LocalId(0))),
+        },
+        Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: Operand::Value(ValueId(0)),
+                right: Operand::Value(ValueId(0)),
+            },
+        },
+    ];
+    let function = main_function(
+        values,
+        vec![array_of_slices],
+        vec![Block {
+            instructions: vec![
+                Instruction::Store {
+                    place: element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                    operand: empty_slice(ints.clone()),
+                },
+                Instruction::Value(ValueId(0)),
+                Instruction::Value(ValueId(1)),
+            ],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    );
+    let error = one_function(function).verify().unwrap_err();
+    assert!(error.to_string().contains("invalid IR value 1"), "{error}");
+
+    let holder = declared(0, "Holder");
+    let values = vec![
+        Value {
+            span: None,
+            ty: holder.clone(),
+            kind: ValueKind::Load(Place::Local(LocalId(0))),
+        },
+        Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: Operand::Value(ValueId(0)),
+                right: Operand::Value(ValueId(0)),
+            },
+        },
+    ];
+    let function = main_function(
+        values,
+        vec![holder],
+        vec![Block {
+            instructions: vec![
+                Instruction::Store {
+                    place: field(Place::Local(LocalId(0)), 0),
+                    operand: empty_slice(ints.clone()),
+                },
+                Instruction::Value(ValueId(0)),
+                Instruction::Value(ValueId(1)),
+            ],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    );
+    let error = with_structs(vec![Struct { fields: vec![ints] }], function)
+        .verify()
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid IR value 1"), "{error}");
+}
+
+#[test]
+fn verification_accepts_pointers_to_non_comparable_types() {
+    let pointer = Type::Pointer {
+        constant: false,
+        target: Box::new(slice(false, Scalar::Int.into())),
+    };
+    let holder = declared(0, "Holder");
+    let values = vec![
+        Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: Operand::Literal(Literal::Null(pointer.clone())),
+                right: Operand::Literal(Literal::Null(pointer.clone())),
+            },
+        },
+        Value {
+            span: None,
+            ty: holder.clone(),
+            kind: ValueKind::Load(Place::Local(LocalId(0))),
+        },
+        Value {
+            span: Some(0..1),
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: Operand::Value(ValueId(1)),
+                right: Operand::Value(ValueId(1)),
+            },
+        },
+    ];
+    let function = main_function(
+        values,
+        vec![holder],
+        vec![Block {
+            instructions: vec![
+                Instruction::Store {
+                    place: field(Place::Local(LocalId(0)), 0),
+                    operand: Operand::Literal(Literal::Null(pointer.clone())),
+                },
+                Instruction::Value(ValueId(0)),
+                Instruction::Value(ValueId(1)),
+                Instruction::Value(ValueId(2)),
+            ],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    );
+
+    with_structs(
+        vec![Struct {
+            fields: vec![pointer],
+        }],
+        function,
+    )
+    .verify()
+    .unwrap();
 }
 
 #[test]

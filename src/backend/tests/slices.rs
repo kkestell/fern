@@ -64,31 +64,6 @@ fn native_slices_support_pointer_and_iteration_operands() {
 }
 
 #[test]
-fn native_slice_equality_compares_elements_and_emits_one_helper_per_element_type() {
-    let source = "type Node struct { value: int, children: []Node }
-                  fn main() -> void {
-                      var left_values: [2]int = [1, 2];
-                      var right_values: [2]int = [1, 2];
-                      var left = left_values[:];
-                      var right = right_values[:];
-                      if left != right { exit(1); }
-                      right[1] = 3;
-                      if left == right { exit(2); }
-                      var empty: []int;
-                      var other_empty: []int;
-                      if empty != other_empty { exit(3); }
-                      var nodes: [1]Node;
-                      nodes[0].value = 1;
-                      if nodes[0] != nodes[0] { exit(4); }
-                      exit(42);
-                  }";
-    let program = lowered(source);
-    let qbe = emit(&program, None);
-    assert_eq!(qbe.matches("function w $sliceequal").count(), 2, "{qbe}");
-    assert_eq!(native_program_status(source), Some(42));
-}
-
-#[test]
 fn slice_layout_globals_and_traps_follow_the_shared_two_word_representation() {
     let source = "type Holder struct { before: int, values: []int }
                   var global: []int;

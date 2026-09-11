@@ -124,15 +124,7 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             .unwrap();
             format!("%aggregate{comparison}_equal")
         }
-        Type::Slice { element, .. } => {
-            let equality = slice_equality(emitter, element);
-            writeln!(
-                emitter.text,
-                "    %aggregate{comparison}_equal =w call $sliceequal{equality}(l {left}, l {right})"
-            )
-            .unwrap();
-            format!("%aggregate{comparison}_equal")
-        }
+        Type::Slice { .. } => unreachable!("a slice is not comparable"),
         Type::Array { length, element } => {
             let stride = emitter.layout.size(element);
             writeln!(emitter.text, "    jmp @aggregate{comparison}_start").unwrap();
@@ -232,81 +224,6 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             format!("%aggregate{comparison}_result")
         }
     }
-}
-
-/// Emits one equality helper per slice element type. Registering the type
-/// before its body lets a comparable struct reach itself through a slice.
-fn slice_equality(emitter: &mut Emitter<'_>, element: &Type) -> usize {
-    if let Some(index) = emitter
-        .slice_equalities
-        .iter()
-        .position(|known| known == element)
-    {
-        return index;
-    }
-    let index = emitter.slice_equalities.len();
-    emitter.slice_equalities.push(element.clone());
-
-    let outer = std::mem::take(&mut emitter.text);
-    writeln!(
-        emitter.text,
-        "function w $sliceequal{index}(l %left, l %right) {{"
-    )
-    .unwrap();
-    emitter.text.push_str("@start\n");
-    writeln!(emitter.text, "    %leftbase =l loadl %left").unwrap();
-    writeln!(emitter.text, "    %rightbase =l loadl %right").unwrap();
-    let offset = emitter.layout.slice_length_offset();
-    writeln!(
-        emitter.text,
-        "    %leftlengthaddress =l add %left, {offset}"
-    )
-    .unwrap();
-    writeln!(
-        emitter.text,
-        "    %rightlengthaddress =l add %right, {offset}"
-    )
-    .unwrap();
-    writeln!(emitter.text, "    %leftlength =l loadl %leftlengthaddress").unwrap();
-    writeln!(
-        emitter.text,
-        "    %rightlength =l loadl %rightlengthaddress"
-    )
-    .unwrap();
-    emitter
-        .text
-        .push_str("    %samelength =w ceql %leftlength, %rightlength\n");
-    emitter
-        .text
-        .push_str("    jnz %samelength, @loop, @unequal\n");
-    emitter.text.push_str("@loop\n");
-    emitter
-        .text
-        .push_str("    %index =l phi @start 0, @next %nextindex\n");
-    emitter
-        .text
-        .push_str("    %more =w csltl %index, %leftlength\n");
-    emitter.text.push_str("    jnz %more, @body, @equal\n");
-    emitter.text.push_str("@body\n");
-    let stride = emitter.layout.size(element);
-    writeln!(emitter.text, "    %offset =l mul %index, {stride}").unwrap();
-    emitter
-        .text
-        .push_str("    %leftelement =l add %leftbase, %offset\n");
-    emitter
-        .text
-        .push_str("    %rightelement =l add %rightbase, %offset\n");
-    let equal = emit_aggregate_equal(emitter, "%leftelement", "%rightelement", element);
-    writeln!(emitter.text, "    jnz {equal}, @next, @unequal").unwrap();
-    emitter
-        .text
-        .push_str("@next\n    %nextindex =l add %index, 1\n    jmp @loop\n");
-    emitter
-        .text
-        .push_str("@equal\n    ret 1\n@unequal\n    ret 0\n}\n");
-    let helper = std::mem::replace(&mut emitter.text, outer);
-    emitter.helpers.push_str(&helper);
-    index
 }
 
 fn emit_aggregate_result_blocks(emitter: &mut Emitter<'_>, comparison: usize) {
@@ -418,8 +335,6 @@ pub(super) fn emit_message_data(data: &mut String, symbol: &str, message: &str) 
 pub(super) struct Emitter<'a> {
     pub(super) text: String,
     pub(super) data: String,
-    pub(super) helpers: String,
-    pub(super) slice_equalities: Vec<Type>,
     /// The QBE layout of every type the program stores, which owns aggregate
     /// classes, sizes, alignments, and field offsets.
     pub(super) layout: Layout<'a>,

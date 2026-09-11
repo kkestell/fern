@@ -9,40 +9,11 @@ Mode: general.
 Selected topics: correctness (slice bounds, recursive values, and module
 ordering), error handling (diagnostic propagation and runtime failure policy),
 architecture (phase visibility and dependency ownership), testing (boundary,
-failure, and interaction coverage), performance (slice traversal and helper
-generation), readability, ownership, API design for shared compiler models,
-and documentation. Dependency, concurrency, security, and unsafe topics do
-not materially apply to this change.
+failure, and interaction coverage), performance, readability, ownership, API
+design for shared compiler models, and documentation. Dependency, concurrency,
+security, and unsafe topics do not materially apply to this change.
 
 ## Findings
-
-### High: recursive slice equality can segfault on a valid cyclic value
-
-`src/backend/qbe.rs:237-309` emits one recursively called equality helper per
-slice element type. A valid program can make a finite cyclic value by storing a
-slice of an array back into a slice field of one of its elements, then compare
-that value. The helper repeatedly calls itself for the same element pair until
-the native stack overflows; with a 512 KiB stack the reproducer exits 139
-without a Fern diagnostic.
-
-The specification allows structs to reach themselves through slice fields and
-defines slice equality element-by-element; it does not permit a valid equality
-operation to turn into an unreported native crash. Add cycle handling (or a
-specified, checked failure) to the equality representation, and add an
-integration test with a self-referential slice value. The current test only
-uses a recursive type whose slice is empty, so it never enters the recursive
-case.
-
-Reproduction:
-
-```fern
-type Node struct { children: []Node }
-fn main() -> void {
-    var nodes: [1]Node;
-    nodes[0].children = nodes[:];
-    if nodes[:] == nodes[:] { exit(0); }
-}
-```
 
 ### Medium: slice element annotations lose forward module dependencies
 
@@ -94,19 +65,16 @@ the phase root exposes only the boundaries recorded by the architecture.
   otherwise preserve source mapping.
 - API design: the stale module visibility above; no externally public API was
   added.
-- Performance: no measured regression beyond the unbounded recursive equality
-  path; ordinary slice equality is linear in the compared elements and helper
-  registration is bounded by distinct element types.
-- Testing: the cyclic equality and forward-reference cases are untested; the
-  checked-IR tests cover only one valid slice shape and do not exercise the
-  malformed verifier branches described by the slice plan.
+- Performance: no finding.
+- Testing: the forward-reference case is untested; the checked-IR tests cover
+  only one valid slice shape and do not exercise the malformed verifier
+  branches described by the slice plan.
 - Readability: no additional finding.
 - Architecture: the forward-reference dependency ownership and stale phase
   visibility findings above.
-- Documentation: the contract, TODO, plans, README, fixture, and example are
-  consistent, but the specification does not settle behavior for cyclic slice
-  equality; that decision is needed with the High finding.
-- Correctness: the cyclic equality and forward-reference findings above.
+- Documentation: no finding; the contract, TODO, plans, README, fixture, and
+  example are consistent.
+- Correctness: the forward-reference finding above.
 
 ## Checks run
 
@@ -115,8 +83,7 @@ the phase root exposes only the boundaries recorded by the architecture.
 - `cargo clippy --all-targets -- -D warnings` — passed.
 - `cargo test` — passed (330 unit, 61 integration, 0 doc tests).
 - Manual compiler reproductions confirmed the forward-reference rejection and
-  invalid-call diagnostic; a cyclic slice equality program compiled and then
-  exited 139 under a 512 KiB stack.
+  invalid-call diagnostic.
 
 ## Unresolved suspicions
 

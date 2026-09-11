@@ -89,6 +89,8 @@
   - [x] Represent slices in Fern IR
   - [x] Lay out, slice, and access slices in native code
   - [x] Compile and execute slice programs and failures
+- [ ] Comparability
+  - [ ] Restrict equality to comparable types across the compiler
 - [ ] Strings
   - [ ] Lex string and character literals and their escapes
   - [ ] Represent the string type across the compiler

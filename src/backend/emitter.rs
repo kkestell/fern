@@ -1,4 +1,8 @@
 //! QBE program, function, block, instruction, place, aggregate, and data emission.
+//!
+//! Generated code does not grow with an aggregate's length. Aggregates are
+//! passed and returned through addresses rather than QBE aggregate types, and
+//! are copied, zeroed, and filled with C library calls or loops.
 
 use crate::{
     diagnostic::DiagnosticRenderer,

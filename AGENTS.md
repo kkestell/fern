@@ -10,33 +10,29 @@ baggage, undefined behavior, or unsafe default semantics.
 Choose a document by the fact it owns, not by whether the change is broadly
 described as "behavior" or a "specification."
 
-| Document              | Owns                                                                                                                                                                                   |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
-| `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation and known implementation limitations belong here. |
-| `eng/todo.md`         | Ordered implementation tasks and their completion state. A task may have subtasks; mark the task complete when all its subtasks are complete.                                           |
-| `eng/plans/`          | Implementation plans for a single TODO task or a defect repair: concrete file changes, focused tests, and decisions the owning documents leave open.                                    |
-| `eng/reviews/`        | Code-review reports: scope, findings, unresolved suspicions, and checks run.                                                                                                           |
-| `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
+| Document          | Owns                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `docs/spec.md`    | The Fern language: source syntax, types, semantic rules, built-ins, and program execution. |
+| `agents/bugs.md`  | Known defects and implementation limitations.                                             |
+| `agents/plans/`   | Implementation plans written by `kplan`.                                                  |
+| `agents/work/`    | Work logs written by `kwork`.                                                             |
+| `agents/reviews/` | Code reviews written by `kreview`.                                                        |
+| `AGENTS.md`       | Repository workflow, document ownership, and instructions for agents.                     |
 
-Use `kspec` when creating or modifying `docs/spec.md`. `kplan` plans either the
-next incomplete TODO task or a confirmed defect; `eng/todo.md` tracks feature
-scope, so defect repair needs no entry there. `kwork` only checks off completed
-tasks in `eng/todo.md`, marking a parent task when all of its subtasks are
-complete. Reading any of these documents does not require its skill. Generic
-skill wording about "product behavior" does not expand the language
+The code and its comments describe the implementation.
+
+Code changes go through `/kplan`, `/kwork`, and `/kreview`. After `/kreview`,
+add any open findings to `agents/bugs.md`, then commit the plan, the work log,
+the review, and the changes together, whether or not findings remain open.
+
+Use `kspec` to create or modify `docs/spec.md`; reading it needs no skill.
+Generic skill wording about "product behavior" does not expand the language
 specification's scope.
 
 Document ownership governs decisions, not obvious mistakes. When any document
 is plainly wrong in a way nobody chose — an example that does not compile, a
 stale name, a typo — correct it where you find it and say so. Reach for the
 owning skill when the fix changes what the project intends.
-
-Plans in `eng/plans/` are produced by `kplan` and executed by `kwork`.
-
-The specification and TODO are created when the project needs them. `kplan`
-requires both and will direct the user to `kspec` or to add `eng/todo.md` when
-either is missing. The architecture document is not required to begin planning.
 
 ## Codebase Map
 
@@ -50,9 +46,6 @@ either is missing. The architecture document is not required to begin planning.
 - `src/module.rs` — module discovery, import resolution, and the dependency
   graph.
 - `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
-- `eng/architecture.md` — durable compiler phase, storage, identity,
-  diagnostic, and verification boundaries.
-- `eng/reviews/` — checked-in code-review reports.
 - `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
   frontend and IR snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
@@ -103,8 +96,6 @@ source-compatibility constraints until real users and programs create them.
 Read the owning document before making a behavioral decision. For language
 changes, use `kspec` to resolve missing rules in `docs/spec.md` before
 implementation depends on them.
-
-Read `eng/architecture.md` before changing the program's structure.
 
 ### One home for every fact
 

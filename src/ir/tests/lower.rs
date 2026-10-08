@@ -1,157 +1,6 @@
 use super::*;
 
 #[test]
-fn slices_lower_as_values_ranges_elements_lengths_and_iteration() {
-    let program = lowered(
-        "fn main() -> void {
-             var a: [3]int = [1, 2, 3];
-             var s = a[1:];
-             s[0] = 4;
-             var n = len(s);
-             for value in s { n += value; }
-         }",
-    );
-    let main = main_of(&program);
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::WholeSlice(_)))
-    );
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::SliceRange { .. }))
-    );
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::SliceLength { .. }))
-    );
-    assert!(
-        stores(main)
-            .iter()
-            .any(|(place, _)| matches!(place, Place::SliceElement { .. }))
-    );
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::Load(Place::SliceElement { .. })))
-    );
-}
-
-#[test]
-fn slice_zero_values_lower_to_typed_empty_literals() {
-    let program = lowered(
-        "var global: []int;
-         fn main() -> void { var local: []int; }",
-    );
-    assert!(matches!(
-        program.program().globals[0].values.as_slice(),
-        [Literal::EmptySlice(Type::Slice { .. })]
-    ));
-    assert!(
-        stores(main_of(&program))
-            .iter()
-            .any(|(_, operand)| matches!(
-                operand,
-                Operand::Literal(Literal::EmptySlice(Type::Slice { .. }))
-            ))
-    );
-}
-
-#[test]
-fn pointers_lower_to_typed_nulls_addresses_and_indirect_places() {
-    let program = lowered(
-        "var global: *int;
-         fn main() -> void {
-             var value = 1;
-             var pointer = &value;
-             *pointer = 2;
-             exit(*pointer);
-         }",
-    );
-    assert!(matches!(
-        program.program().globals[0].values.as_slice(),
-        [Literal::Null(Type::Pointer { .. })]
-    ));
-    let main = main_of(&program);
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::AddressOf(Place::Local(_))))
-    );
-    assert!(
-        main.values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::Load(Place::Indirect { .. })))
-    );
-    assert!(
-        stores(main)
-            .iter()
-            .any(|(place, _)| matches!(place, Place::Indirect { .. }))
-    );
-}
-
-#[test]
-fn an_implicit_assignment_keeps_the_pointer_operand_span() {
-    let source = "type Node struct { value: int, next: *Node }
-                  fn main() -> void { var node: Node; node.next.value = 1; }";
-    let expected = source.find("node.next").unwrap()..source.find("node.next").unwrap() + 9;
-    let program = lowered(source);
-    let stored = stores(main_of(&program));
-    let (place, _) = stored.last().unwrap();
-    let Place::Field { base, .. } = place else {
-        panic!("assignment did not store through a field: {place:?}");
-    };
-    let Place::Indirect { span, .. } = &**base else {
-        panic!("assignment did not implicitly dereference: {place:?}");
-    };
-    assert_eq!(span, &expected);
-}
-
-#[test]
-fn pointer_length_checks_without_loading_the_reached_array() {
-    let program = lowered(
-        "fn main() -> void {
-             var values: [4000]int;
-             const pointer = &values;
-             exit(len(pointer));
-         }",
-    );
-    let main = main_of(&program);
-    assert!(
-        main.flow
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instructions)
-            .any(|instruction| matches!(
-                instruction,
-                Instruction::Check {
-                    place: Place::Indirect { .. }
-                }
-            ))
-    );
-    assert!(
-        !main
-            .values
-            .iter()
-            .any(|value| matches!(value.kind, ValueKind::Load(Place::Indirect { .. })))
-    );
-}
-
-#[test]
-fn a_compound_call_result_target_evaluates_its_call_once() {
-    let program = lowered(
-        "fn echo(pointer: *[2]int) -> *[2]int { return pointer; }
-         fn main() -> void {
-             var values: [2]int = [0...];
-             echo(&values)[0] += 1;
-         }",
-    );
-    assert_eq!(call_targets(main_of(&program)), [FunctionId(0)]);
-}
-
-#[test]
 fn array_globals_hold_their_elements_in_memory_order() {
     let program = lowered(
         "var row: [3]int = [1, 2, 3];
@@ -1719,6 +1568,22 @@ fn an_assignment_through_a_mixed_target_rebuilds_it_after_a_split_value() {
         main.values[*id].kind,
         ValueKind::Load(Place::Local(_))
     ));
+}
+
+#[test]
+fn an_element_read_rebuilds_its_base_after_a_split_index() {
+    // `grid[i]` is lowered before the short-circuiting index, so the load
+    // reads `i` back in the index's final block, and verification accepts a
+    // value read only in the block that defines it.
+    lowered(
+        "fn pick(c: bool) -> int { if c { return 1; } return 0; }
+         fn main() -> void {
+             var grid = [[1, 2], [3, 4]];
+             var i = 1;
+             var b = true;
+             exit(grid[i][pick(b && b)]);
+         }",
+    );
 }
 
 #[test]

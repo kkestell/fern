@@ -1,6 +1,5 @@
 //! Fern's compiler driver. See the repository README for native tool prerequisites.
 mod backend;
-mod comparability;
 mod diagnostic;
 mod frontend;
 mod ir;

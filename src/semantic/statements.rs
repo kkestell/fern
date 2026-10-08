@@ -293,18 +293,13 @@ impl CheckedProgram<'_> {
         scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
         let checked = self.infer_expression(operand, scopes)?;
-        let element = match &checked.ty {
-            Type::Array { element, .. } | Type::Slice { element, .. } => (**element).clone(),
-            _ => {
-                return Err(Diagnostic::new(
-                    self.syntax.expressions[operand].span.clone(),
-                    format!(
-                        "`for … in` requires an array or slice, found `{}`",
-                        checked.ty
-                    ),
-                ));
-            }
+        let Type::Array { element, .. } = &checked.ty else {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[operand].span.clone(),
+                format!("`for … in` requires an array, found `{}`", checked.ty),
+            ));
         };
+        let element = (**element).clone();
         if let Some((name, span)) = index
             && *name == value
         {
@@ -386,33 +381,25 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// Checks an assignable location and retains its dereference operands.
+    /// Checks an assignable location, which is mutable exactly when the
+    /// binding it is rooted in is.
     fn assignment_target(
         &mut self,
         target: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedTarget, Diagnostic> {
         let location = self.check_location(target, scopes)?;
-        if !location.mutable {
-            if let Some(binding) = Self::location_binding(&location)
-                && !self.bindings[binding].mutable
-                && !Self::location_uses_reference(&location)
-            {
-                return Err(Diagnostic::new(
-                    location.span.clone(),
-                    format!(
-                        "cannot assign to immutable binding `{}`",
-                        self.syntax.names.resolve(
-                            &self
-                                .target_name(target)
-                                .expect("a binding location originates at a reference")
-                        )
-                    ),
-                ));
-            }
+        if !self.bindings[Self::location_binding(&location)].mutable {
             return Err(Diagnostic::new(
-                self.syntax.expressions[target].span.clone(),
-                "cannot assign to an immutable location",
+                location.span.clone(),
+                format!(
+                    "cannot assign to immutable binding `{}`",
+                    self.syntax.names.resolve(
+                        &self
+                            .target_name(target)
+                            .expect("a location originates at a reference")
+                    )
+                ),
             ));
         }
         Ok(CheckedTarget {
@@ -440,35 +427,11 @@ impl CheckedProgram<'_> {
         }
     }
 
-    fn location_binding(location: &CheckedLocation) -> Option<Idx<Binding>> {
+    fn location_binding(location: &CheckedLocation) -> Idx<Binding> {
         match &location.kind {
-            CheckedLocationKind::Binding(binding) => Some(*binding),
-            CheckedLocationKind::SliceValue { .. } => None,
+            CheckedLocationKind::Binding(binding) => *binding,
             CheckedLocationKind::Index { operand, .. }
             | CheckedLocationKind::Field { operand, .. } => Self::location_binding(operand),
-            CheckedLocationKind::Dereference { .. } => None,
-        }
-    }
-
-    fn location_uses_reference(location: &CheckedLocation) -> bool {
-        match &location.kind {
-            CheckedLocationKind::Binding(_) => false,
-            CheckedLocationKind::SliceValue { .. } => true,
-            CheckedLocationKind::Index {
-                operand,
-                implicit_dereference,
-                ..
-            }
-            | CheckedLocationKind::Field {
-                operand,
-                implicit_dereference,
-                ..
-            } => {
-                implicit_dereference.is_some()
-                    || matches!(operand.ty, Type::Slice { .. })
-                    || Self::location_uses_reference(operand)
-            }
-            CheckedLocationKind::Dereference { .. } => true,
         }
     }
 

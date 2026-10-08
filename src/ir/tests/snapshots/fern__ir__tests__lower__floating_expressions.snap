@@ -258,9 +258,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        268..270,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -305,9 +303,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        289..290,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),

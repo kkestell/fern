@@ -36,8 +36,6 @@ pub(super) const MAX_AGGREGATE_INITIALIZER_VALUES: u64 = 1_000_000;
 /// floating-point value has already rounded to its format, so it is a `Float`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Constant {
-    Null,
-    EmptySlice,
     Integer(BigInt),
     Rational(BigRational),
     Float(Float),
@@ -52,12 +50,7 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Null
-            | Self::EmptySlice
-            | Self::Rational(_)
-            | Self::Float(_)
-            | Self::Array(_)
-            | Self::Struct(_) => None,
+            Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 
@@ -65,12 +58,7 @@ impl Constant {
     pub(crate) fn rational(&self) -> Option<&BigRational> {
         match self {
             Self::Rational(value) => Some(value),
-            Self::Null
-            | Self::EmptySlice
-            | Self::Integer(_)
-            | Self::Float(_)
-            | Self::Array(_)
-            | Self::Struct(_) => None,
+            Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 
@@ -78,12 +66,7 @@ impl Constant {
     pub(crate) fn float(&self) -> Option<Float> {
         match self {
             Self::Float(value) => Some(*value),
-            Self::Null
-            | Self::EmptySlice
-            | Self::Integer(_)
-            | Self::Rational(_)
-            | Self::Array(_)
-            | Self::Struct(_) => None,
+            Self::Integer(_) | Self::Rational(_) | Self::Array(_) | Self::Struct(_) => None,
         }
     }
 }
@@ -115,7 +98,6 @@ pub(crate) struct Binding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
-    Null,
     Integer,
     /// A compound assignment's already-checked target, used only while
     /// selecting its binary-operator rules.
@@ -157,12 +139,6 @@ pub(crate) enum ExpressionValue {
         operator_span: std::ops::Range<usize>,
         operand: Idx<Expression>,
     },
-    AddressOf {
-        operand: Idx<Expression>,
-    },
-    Dereference {
-        operand: Idx<Expression>,
-    },
     Call {
         function: Idx<Function>,
     },
@@ -175,13 +151,6 @@ pub(crate) enum ExpressionValue {
     Index {
         operand: Idx<Expression>,
         index: Idx<Expression>,
-        implicit_dereference: bool,
-    },
-    Slice {
-        operand: Idx<Expression>,
-        low: Option<Idx<Expression>>,
-        high: Option<Idx<Expression>>,
-        implicit_dereference: bool,
     },
     /// A struct literal. `initializers` are the written fields in source
     /// order, which is the order they are evaluated in, and `filled` holds
@@ -195,13 +164,11 @@ pub(crate) enum ExpressionValue {
     Field {
         operand: Idx<Expression>,
         ordinal: usize,
-        implicit_dereference: bool,
     },
     /// `len(a)`, which reads its length from the operand's type and still
     /// evaluates the operand.
     Length {
         operand: Idx<Expression>,
-        implicit_dereference: bool,
     },
 }
 
@@ -243,36 +210,25 @@ pub(crate) struct FunctionSignature {
     pub result: Option<Type>,
 }
 
-/// A checked location. Unlike an assignment path rooted in a binding, this can
-/// retain the operand of a dereference, including a call result.
+/// A checked location: a binding, or an index or field selection from another
+/// location.
 #[derive(Debug)]
 pub(crate) struct CheckedLocation {
     pub kind: CheckedLocationKind,
     pub ty: Type,
-    pub mutable: bool,
     pub span: std::ops::Range<usize>,
 }
 
 #[derive(Debug)]
 pub(crate) enum CheckedLocationKind {
     Binding(Idx<Binding>),
-    /// A slice value that is not itself a location. Its elements remain
-    /// locations, so an index may start from it.
-    SliceValue {
-        operand: Idx<Expression>,
-    },
     Index {
         operand: Box<CheckedLocation>,
         index: Idx<Expression>,
-        implicit_dereference: Option<std::ops::Range<usize>>,
     },
     Field {
         operand: Box<CheckedLocation>,
         ordinal: usize,
-        implicit_dereference: Option<std::ops::Range<usize>>,
-    },
-    Dereference {
-        operand: Idx<Expression>,
     },
 }
 
@@ -417,8 +373,6 @@ impl CheckedProgram<'_> {
             Type::Scalar(Scalar::F32) => Constant::Float(Float::Binary32(0)),
             Type::Scalar(Scalar::F64) => Constant::Float(Float::Binary64(0)),
             Type::Scalar(_) => Constant::Integer(BigInt::ZERO),
-            Type::Pointer { .. } => Constant::Null,
-            Type::Slice { .. } => Constant::EmptySlice,
             Type::Array { length, element } => {
                 let length = usize::try_from(*length)
                     .expect("the checked aggregate initializer limit fits usize");
@@ -437,8 +391,6 @@ impl CheckedProgram<'_> {
     pub(super) fn aggregate_value_count(&self, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(_) => Some(1),
-            Type::Pointer { .. } => Some(1),
-            Type::Slice { .. } => Some(1),
             Type::Array { length, element } => {
                 length.checked_mul(self.aggregate_value_count(element)?)
             }

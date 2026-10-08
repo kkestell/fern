@@ -502,9 +502,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        617..619,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),

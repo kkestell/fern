@@ -353,26 +353,6 @@ fn project_annotation(syntax: &Syntax, id: Idx<TypeAnnotation>, depth: usize, ou
             )
             .unwrap();
         }
-        AnnotationKind::Pointer { constant, target } => {
-            writeln!(
-                output,
-                "{indent}pointer constant={constant} span={:?}",
-                annotation.span
-            )
-            .unwrap();
-            writeln!(output, "{indent}  target").unwrap();
-            project_annotation(syntax, *target, depth + 2, output);
-        }
-        AnnotationKind::Slice { constant, element } => {
-            writeln!(
-                output,
-                "{indent}slice constant={constant} span={:?}",
-                annotation.span
-            )
-            .unwrap();
-            writeln!(output, "{indent}  element").unwrap();
-            project_annotation(syntax, *element, depth + 2, output);
-        }
         AnnotationKind::Array { length, element } => {
             writeln!(output, "{indent}array span={:?}", annotation.span).unwrap();
             match length {
@@ -407,9 +387,6 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
         .unwrap(),
         ExpressionKind::Boolean(value) => {
             writeln!(output, "{indent}boolean {value} span={:?}", expression.span).unwrap()
-        }
-        ExpressionKind::Null => {
-            writeln!(output, "{indent}null span={:?}", expression.span).unwrap()
         }
         ExpressionKind::Reference(name) => writeln!(
             output,
@@ -488,30 +465,6 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
             writeln!(
                 output,
                 "{indent}logical Not operator={operator_span:?} span={:?}",
-                expression.span
-            )
-            .unwrap();
-            project_expression(syntax, *operand, depth + 1, output);
-        }
-        ExpressionKind::AddressOf {
-            operator_span,
-            operand,
-        } => {
-            writeln!(
-                output,
-                "{indent}address-of operator={operator_span:?} span={:?}",
-                expression.span
-            )
-            .unwrap();
-            project_expression(syntax, *operand, depth + 1, output);
-        }
-        ExpressionKind::Dereference {
-            operator_span,
-            operand,
-        } => {
-            writeln!(
-                output,
-                "{indent}dereference operator={operator_span:?} span={:?}",
                 expression.span
             )
             .unwrap();
@@ -598,20 +551,6 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
             writeln!(output, "{indent}index span={:?}", expression.span).unwrap();
             project_expression(syntax, *operand, depth + 1, output);
             project_expression(syntax, *index, depth + 1, output);
-        }
-        ExpressionKind::Slice { operand, low, high } => {
-            writeln!(output, "{indent}slice span={:?}", expression.span).unwrap();
-            writeln!(output, "{indent}  operand").unwrap();
-            project_expression(syntax, *operand, depth + 2, output);
-            for (name, bound) in [("low", low), ("high", high)] {
-                match bound {
-                    Some(bound) => {
-                        writeln!(output, "{indent}  {name}").unwrap();
-                        project_expression(syntax, *bound, depth + 2, output);
-                    }
-                    None => writeln!(output, "{indent}  {name} omitted").unwrap(),
-                }
-            }
         }
         ExpressionKind::Length { operand } => {
             writeln!(output, "{indent}len span={:?}", expression.span).unwrap();

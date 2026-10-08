@@ -1,12 +1,8 @@
-//! Structural, typing, reachability, and definite-initialization verification.
+//! Structural, typing, and reachability verification.
 
 use crate::{
-    CompileError, comparability,
-    layout::{Layouts, StructFields},
-    types::{
-        MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, StructType,
-        Type, UnaryOperator,
-    },
+    CompileError,
+    types::{Scalar, Type, UnaryOperator},
 };
 
 use std::collections::VecDeque;
@@ -26,22 +22,6 @@ impl VerifiedProgram {
 /// The type a literal has, rejecting an integer whose value its scalar type
 /// cannot hold.
 fn verify_literal(literal: &Literal) -> Result<Type, CompileError> {
-    if let Literal::Null(ty) = literal {
-        if !matches!(ty, Type::Pointer { .. }) {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR null has non-pointer type `{ty}`"
-            )));
-        }
-        return Ok(ty.clone());
-    }
-    if let Literal::EmptySlice(ty) = literal {
-        if !matches!(ty, Type::Slice { .. }) {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR empty slice has non-slice type `{ty}`"
-            )));
-        }
-        return Ok(ty.clone());
-    }
     let Literal::Integer { value, ty } = literal else {
         return Ok(literal.ty());
     };
@@ -68,18 +48,12 @@ fn scalar(ty: &Type) -> Result<Scalar, CompileError> {
 }
 
 fn valid_value(
-    table: &dyn StructFields,
     value: &Value,
     operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     place_type: &impl Fn(&Place) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
     Ok(match &value.kind {
         ValueKind::Load(place) => place_type(place)? == value.ty && value.span.is_none(),
-        ValueKind::AddressOf(place) => {
-            let place = place_type(place)?;
-            value.span.is_some()
-                && matches!(&value.ty, Type::Pointer { target, .. } if **target == place)
-        }
         // The defining call checks the result type against the callee's
         // signature, and owns the span the call reports.
         ValueKind::CallResult => value.span.is_none(),
@@ -88,47 +62,17 @@ fn valid_value(
             left,
             right,
         } => {
+            // Equality is defined on every type, and ordering on scalars.
             let left = operand_type(left.clone())?;
-            value.span.is_some()
+            value.span.is_none()
                 && value.ty == Scalar::Bool.into()
-                && (if operator.is_equality() {
-                    let right = operand_type(right.clone())?;
-                    comparability::comparable(table, &left)
-                        && (left == right
-                            || matches!(
-                                (&left, &right),
-                                (Type::Pointer { target: left, .. }, Type::Pointer { target: right, .. }) if left == right
-                            ))
-                } else {
-                    left == operand_type(right.clone())? && left.scalar().is_some()
-                })
+                && left == operand_type(right.clone())?
+                && (operator.is_equality() || left.scalar().is_some())
         }
         ValueKind::LogicalNot { operand } => {
-            value.span.is_some()
+            value.span.is_none()
                 && value.ty == Scalar::Bool.into()
                 && operand_type(operand.clone())? == Scalar::Bool.into()
-        }
-        ValueKind::WholeSlice(place) => {
-            let place = place_type(place)?;
-            value.span.is_none()
-                && matches!(
-                    (&place, &value.ty),
-                    (Type::Array { element: source, .. }, Type::Slice { element: destination, .. })
-                        if source == destination
-                )
-        }
-        ValueKind::SliceRange { slice, low, high } => {
-            let source = operand_type(slice.clone())?;
-            value.span.is_some()
-                && operand_type(low.clone())? == Scalar::Int.into()
-                && operand_type(high.clone())? == Scalar::Int.into()
-                && matches!(&source, Type::Slice { .. })
-                && source.value_compatible(&value.ty)
-        }
-        ValueKind::SliceLength { slice } => {
-            value.span.is_none()
-                && value.ty == Scalar::Int.into()
-                && matches!(operand_type(slice.clone())?, Type::Slice { .. })
         }
         ValueKind::Convert { .. } | ValueKind::Unary { .. } | ValueKind::Binary { .. } => {
             valid_numeric_operation(value, operand_type)?
@@ -144,16 +88,6 @@ fn valid_numeric_operation(
     value: &Value,
     operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
-    if let ValueKind::Convert {
-        operand: source,
-        truncating: false,
-    } = &value.kind
-    {
-        let source = operand_type(source.clone())?;
-        if matches!(source, Type::Pointer { .. }) {
-            return Ok(value.ty == Scalar::Uint.into());
-        }
-    }
     let operand = |operand| scalar(&operand_type(operand)?);
     let ty = scalar(&value.ty)?;
     Ok(match &value.kind {
@@ -207,26 +141,6 @@ fn valid_numeric_operation(
     })
 }
 
-/// How far one struct's fields have been walked while looking for a cycle.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Resolution {
-    Unvisited,
-    Visiting,
-    Acyclic,
-}
-
-/// The struct a field of this type stores inline. An array stores its elements
-/// inline too, so `[N]Point` contains `Point`.
-fn contained_struct(ty: &Type) -> Option<usize> {
-    match ty {
-        Type::Scalar(_) => None,
-        Type::Pointer { .. } => None,
-        Type::Slice { .. } => None,
-        Type::Array { element, .. } => contained_struct(element),
-        Type::Struct(declared) => Some(declared.id.0),
-    }
-}
-
 /// Where a value is defined, and whether a call defined it.
 #[derive(Clone, Copy)]
 struct Definition {
@@ -235,22 +149,10 @@ struct Definition {
     from_call: bool,
 }
 
-impl StructFields for Program {
-    fn field_count(&self, id: StructId) -> usize {
-        self.structs[id.0].fields.len()
-    }
-
-    fn field_type(&self, id: StructId, ordinal: usize) -> &Type {
-        &self.structs[id.0].fields[ordinal]
-    }
-}
-
 impl Program {
     pub(crate) fn verify(self) -> Result<VerifiedProgram, CompileError> {
-        let layouts = Layouts::default();
-        self.verify_structs(&layouts)?;
         for (id, global) in self.globals.iter().enumerate() {
-            self.verify_global(&layouts, global)
+            self.verify_global(global)
                 .map_err(|error| CompileError::new(format!("{error} (IR global {id})")))?;
         }
         let main = self.function(self.main)?;
@@ -263,7 +165,7 @@ impl Program {
             verify_parameters(function)?;
         }
         for function in &self.functions {
-            self.verify_function(&layouts, function)?;
+            self.verify_function(function)?;
         }
         Ok(VerifiedProgram(self))
     }
@@ -329,122 +231,7 @@ impl Program {
                         ))
                     })
             }
-            Place::Indirect { pointer, .. } => {
-                let pointer = operand_type(pointer.clone())?;
-                let Type::Pointer { target, .. } = pointer else {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR dereferences `{pointer}`"
-                    )));
-                };
-                Ok(*target)
-            }
-            Place::SliceElement { slice, index, .. } => {
-                let slice = operand_type(slice.clone())?;
-                let Type::Slice { element, .. } = slice else {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR indexes slice value `{slice}`"
-                    )));
-                };
-                let index = operand_type(index.clone())?;
-                if index != Scalar::Int.into() {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR index has type `{index}`, expected `int`"
-                    )));
-                }
-                Ok(*element)
-            }
         }
-    }
-
-    /// Checks the program's struct table before anything reads it: every
-    /// struct a field names is defined, and no struct contains itself. A field
-    /// stores its value inline, directly or through an array, so a cycle among
-    /// them has no finite layout.
-    fn verify_structs(&self, layouts: &Layouts) -> Result<(), CompileError> {
-        for definition in &self.structs {
-            for field in &definition.fields {
-                self.verify_type(field)?;
-            }
-        }
-        let mut state = vec![Resolution::Unvisited; self.structs.len()];
-        for id in 0..self.structs.len() {
-            self.verify_acyclic(id, &mut state, 0)?;
-        }
-        for id in 0..self.structs.len() {
-            self.verify_aggregate_layout(
-                layouts,
-                &Type::Struct(StructType {
-                    id: StructId(id),
-                    name: String::new(),
-                }),
-            )?;
-        }
-        Ok(())
-    }
-
-    fn verify_acyclic(
-        &self,
-        id: usize,
-        state: &mut [Resolution],
-        depth: usize,
-    ) -> Result<(), CompileError> {
-        match state[id] {
-            Resolution::Acyclic => return Ok(()),
-            Resolution::Visiting => {
-                return Err(CompileError::new(format!(
-                    "internal compiler error: IR struct {id} contains itself"
-                )));
-            }
-            Resolution::Unvisited => {}
-        }
-        if depth == MAX_STRUCT_CONTAINMENT_DEPTH {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR struct containment exceeds compiler limit of {MAX_STRUCT_CONTAINMENT_DEPTH}"
-            )));
-        }
-        state[id] = Resolution::Visiting;
-        for field in &self.structs[id].fields {
-            if let Some(contained) = contained_struct(field) {
-                self.verify_acyclic(contained, state, depth + 1)?;
-            }
-        }
-        state[id] = Resolution::Acyclic;
-        Ok(())
-    }
-
-    /// Rejects a type naming a struct the program does not define, so an
-    /// unknown struct cannot reach the backend through a global, a signature,
-    /// a local, or a value that nothing else looks at.
-    fn verify_type(&self, ty: &Type) -> Result<(), CompileError> {
-        match ty {
-            Type::Scalar(_) => Ok(()),
-            Type::Pointer { target, .. } => self.verify_type(target),
-            Type::Slice { element, .. } => self.verify_type(element),
-            Type::Array { element, .. } => self.verify_type(element),
-            Type::Struct(declared) if declared.id.0 < self.structs.len() => Ok(()),
-            Type::Struct(declared) => Err(CompileError::new(format!(
-                "internal compiler error: IR uses unknown struct {}",
-                declared.id.0
-            ))),
-        }
-    }
-
-    /// Repeats the backend's layout arithmetic with checked operations at the
-    /// verified-IR boundary. The backend may consequently keep its compact
-    /// layout API without accepting an overflowing source-controlled type.
-    fn verify_aggregate_layout(&self, layouts: &Layouts, ty: &Type) -> Result<(), CompileError> {
-        let Some(size) = layouts.size(self, ty) else {
-            return Err(CompileError::new(
-                "internal compiler error: IR aggregate layout overflows the target address space",
-            ));
-        };
-        if size > MAX_AGGREGATE_LAYOUT_BYTES {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR aggregate layout exceeds compiler limit of {} PiB",
-                MAX_AGGREGATE_LAYOUT_BYTES >> 50
-            )));
-        }
-        Ok(())
     }
 
     /// The scalar types a value of `ty` stores, in memory order. A struct's
@@ -453,8 +240,6 @@ impl Program {
     fn scalar_types(&self, ty: &Type, types: &mut Vec<Type>) {
         match ty {
             Type::Scalar(scalar) => types.push((*scalar).into()),
-            Type::Pointer { .. } => types.push(ty.clone()),
-            Type::Slice { .. } => types.push(ty.clone()),
             Type::Array { length, element } => {
                 for _ in 0..*length {
                     self.scalar_types(element, types);
@@ -468,9 +253,7 @@ impl Program {
         }
     }
 
-    fn verify_global(&self, layouts: &Layouts, global: &Global) -> Result<(), CompileError> {
-        self.verify_type(&global.ty)?;
-        self.verify_aggregate_layout(layouts, &global.ty)?;
+    fn verify_global(&self, global: &Global) -> Result<(), CompileError> {
         let expected_count = self.scalar_count(&global.ty).ok_or_else(|| {
             CompileError::new("internal compiler error: IR global scalar count overflows")
         })?;
@@ -486,7 +269,7 @@ impl Program {
         self.scalar_types(&global.ty, &mut expected);
         for (value, expected) in global.values.iter().zip(&expected) {
             let ty = verify_literal(value)?;
-            if !ty.value_compatible(expected) {
+            if ty != *expected {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR global of type `{}` holds a `{ty}` value where a `{expected}` value belongs",
                     global.ty
@@ -499,8 +282,6 @@ impl Program {
     fn scalar_count(&self, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(_) => Some(1),
-            Type::Pointer { .. } => Some(1),
-            Type::Slice { .. } => Some(1),
             Type::Array { length, element } => length.checked_mul(self.scalar_count(element)?),
             Type::Struct(declared) => self.structs[declared.id.0]
                 .fields
@@ -511,56 +292,32 @@ impl Program {
         }
     }
 
-    fn verify_function(&self, layouts: &Layouts, function: &Function) -> Result<(), CompileError> {
+    fn verify_function(&self, function: &Function) -> Result<(), CompileError> {
         let flow = &function.flow;
-        for ty in flow
-            .locals
-            .iter()
-            .chain(function.result.as_ref())
-            .chain(function.values.iter().map(|value| &value.ty))
-        {
-            self.verify_type(ty)?;
-            self.verify_aggregate_layout(layouts, ty)?;
-        }
         verify_target(flow.entry, flow)?;
         let definitions = value_definitions(function)?;
         let reachable = reachable_blocks(flow)?;
-        let initialized_at_entry = initialized_locals(function, &reachable);
         for (index, block) in flow.blocks.iter().enumerate() {
             if reachable[index] && block.terminator == Terminator::Unreachable {
                 return Err(CompileError::new(format!(
                     "internal compiler error: reachable IR block {index} is not terminated"
                 )));
             }
-            self.verify_block(
-                function,
-                index,
-                &definitions,
-                initialized_at_entry[index].clone(),
-            )?;
+            self.verify_block(function, index, &definitions)?;
         }
         Ok(())
     }
 
-    /// Checks one block's instructions and its terminator. `initialized` holds
-    /// the locals initialized on entry to the block and grows as stores in the
-    /// block initialize more.
+    /// Checks one block's instructions and its terminator.
     fn verify_block(
         &self,
         function: &Function,
         block_index: usize,
         definitions: &[Definition],
-        mut initialized: LocalSet,
     ) -> Result<(), CompileError> {
         let block = &function.flow.blocks[block_index];
         for (position, instruction) in block.instructions.iter().enumerate() {
-            self.verify_instruction(
-                function,
-                definitions,
-                (block_index, position),
-                instruction,
-                &mut initialized,
-            )?;
+            self.verify_instruction(function, definitions, (block_index, position), instruction)?;
         }
         self.verify_terminator(function, block_index, definitions)
     }
@@ -571,7 +328,6 @@ impl Program {
         definitions: &[Definition],
         (block_index, position): (usize, usize),
         instruction: &Instruction,
-        initialized: &mut LocalSet,
     ) -> Result<(), CompileError> {
         let flow = &function.flow;
         let operand_type = |operand| {
@@ -586,35 +342,19 @@ impl Program {
         match instruction {
             Instruction::Value(ValueId(id)) => {
                 let value = &function.values[*id];
-                if let ValueKind::Load(place) = &value.kind
-                    && let Some(LocalId(local)) = place.root_local()
-                    && local < flow.locals.len()
-                    && !initialized.contains(local)
-                {
-                    return Err(CompileError::new(format!(
-                        "internal compiler error: IR loads uninitialized local {local}"
-                    )));
-                }
                 let place_type = |place: &Place| self.place_type(flow, place, &operand_type);
-                if !valid_value(self, value, &operand_type, &place_type)? {
+                if !valid_value(value, &operand_type, &place_type)? {
                     return Err(invalid_value(*id, value));
                 }
-                Ok(())
-            }
-            Instruction::Check { place } => {
-                self.place_type(flow, place, &operand_type)?;
                 Ok(())
             }
             Instruction::Store { place, operand } => {
                 let destination = self.place_type(flow, place, &operand_type)?;
                 let source = operand_type(operand.clone())?;
-                if !source.value_compatible(&destination) {
+                if source != destination {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR store has type `{source}`, expected `{destination}`"
                     )));
-                }
-                if let Some(local) = place.root_local() {
-                    initialized.insert(local.0);
                 }
                 Ok(())
             }
@@ -686,7 +426,7 @@ impl Program {
         for (index, argument) in arguments.iter().enumerate() {
             let source = operand_type(argument.clone())?;
             let parameter = &target.flow.locals[index];
-            if !source.value_compatible(parameter) {
+            if source != *parameter {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR call argument {index} has type `{source}`, expected `{parameter}`"
                 )));
@@ -713,121 +453,6 @@ impl Program {
         }
         Ok(())
     }
-}
-
-const LOCAL_BITS_PER_WORD: usize = u64::BITS as usize;
-
-#[derive(Clone, PartialEq, Eq)]
-struct LocalSet(Vec<u64>);
-
-impl LocalSet {
-    fn empty(local_count: usize) -> Self {
-        Self(vec![0; local_count.div_ceil(LOCAL_BITS_PER_WORD)])
-    }
-
-    fn full(local_count: usize) -> Self {
-        Self(vec![u64::MAX; local_count.div_ceil(LOCAL_BITS_PER_WORD)])
-    }
-
-    fn contains(&self, local: usize) -> bool {
-        self.0
-            .get(local / LOCAL_BITS_PER_WORD)
-            .is_some_and(|word| word & (1 << (local % LOCAL_BITS_PER_WORD)) != 0)
-    }
-
-    fn insert(&mut self, local: usize) {
-        if let Some(word) = self.0.get_mut(local / LOCAL_BITS_PER_WORD) {
-            *word |= 1 << (local % LOCAL_BITS_PER_WORD);
-        }
-    }
-
-    fn union(&mut self, other: &Self) {
-        for (word, other) in self.0.iter_mut().zip(&other.0) {
-            *word |= other;
-        }
-    }
-
-    fn intersect(&mut self, other: &Self) {
-        for (word, other) in self.0.iter_mut().zip(&other.0) {
-            *word &= other;
-        }
-    }
-}
-
-/// The locals initialized on entry to each block. A local counts as
-/// initialized only when every reachable path to the block initializes it, so
-/// the analysis starts optimistic and shrinks to a fixed point.
-fn initialized_locals(function: &Function, reachable: &[bool]) -> Vec<LocalSet> {
-    let flow = &function.flow;
-    let predecessors = block_predecessors(flow);
-    let stores = local_stores(flow, flow.locals.len());
-    let locals = flow.locals.len();
-    let mut initialized = vec![LocalSet::full(locals); flow.blocks.len()];
-    // Arguments initialize the parameters before the entry block runs.
-    let mut at_entry = LocalSet::empty(locals);
-    for parameter in 0..function.parameters {
-        at_entry.insert(parameter);
-    }
-    initialized[flow.entry.0] = at_entry;
-    for (block, is_reachable) in reachable.iter().enumerate() {
-        if !is_reachable {
-            initialized[block] = LocalSet::empty(locals);
-        }
-    }
-    loop {
-        let mut changed = false;
-        for block in 0..flow.blocks.len() {
-            // Both of these blocks keep the set they started with.
-            if !reachable[block] || block == flow.entry.0 {
-                continue;
-            }
-            let mut incoming = LocalSet::full(locals);
-            for &predecessor in predecessors[block]
-                .iter()
-                .filter(|predecessor| reachable[**predecessor])
-            {
-                let mut leaving = initialized[predecessor].clone();
-                leaving.union(&stores[predecessor]);
-                incoming.intersect(&leaving);
-            }
-            if incoming != initialized[block] {
-                initialized[block] = incoming;
-                changed = true;
-            }
-        }
-        if !changed {
-            return initialized;
-        }
-    }
-}
-
-fn block_predecessors(flow: &ControlFlow) -> Vec<Vec<usize>> {
-    let mut predecessors = vec![Vec::new(); flow.blocks.len()];
-    for (block_index, block) in flow.blocks.iter().enumerate() {
-        for target in block.terminator.targets() {
-            if let Some(target_predecessors) = predecessors.get_mut(target.0) {
-                target_predecessors.push(block_index);
-            }
-        }
-    }
-    predecessors
-}
-
-fn local_stores(flow: &ControlFlow, locals: usize) -> Vec<LocalSet> {
-    flow.blocks
-        .iter()
-        .map(|block| {
-            let mut stored = LocalSet::empty(locals);
-            for instruction in &block.instructions {
-                if let Instruction::Store { place, .. } = instruction
-                    && let Some(local) = place.root_local()
-                {
-                    stored.insert(local.0);
-                }
-            }
-            stored
-        })
-        .collect()
 }
 
 fn invalid_value(index: usize, value: &Value) -> CompileError {
@@ -915,7 +540,7 @@ fn record_definition(
     let defined = match instruction {
         Instruction::Value(id) => Some((*id, false)),
         Instruction::Call { result, .. } => result.map(|id| (id, true)),
-        Instruction::Check { .. } | Instruction::Store { .. } => None,
+        Instruction::Store { .. } => None,
     };
     let Some((ValueId(id), from_call)) = defined else {
         return Ok(());
@@ -955,7 +580,7 @@ fn verify_return(
         )),
         (Some(result), Some(value)) => {
             let source = operand_type(value)?;
-            if !source.value_compatible(result) {
+            if source != *result {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR returns `{source}`, expected `{result}`"
                 )));

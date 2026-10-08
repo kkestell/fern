@@ -2,9 +2,7 @@
 
 This specification defines Fern's language behavior. It is authoritative
 wherever it is explicit. An invalid program must be rejected during
-compilation, except where this specification states that a rule is not checked;
-[Pointer validity](#pointer-validity) is the only such rule.
-A trap halts execution with a diagnostic on standard error identifying the
+compilation. A trap halts execution with a diagnostic on standard error identifying the
 failing operation and its source location. It terminates the process abnormally
 through the platform's abort mechanism. The resulting termination status is
 platform-defined and is never a status that `exit` can report.
@@ -12,8 +10,6 @@ platform-defined and is never a status that `exit` can report.
 Implementations may impose documented limits on source nesting and compile-time
 resource use. Source exceeding such a limit must be rejected with a compilation
 diagnostic, rather than crashing the compiler or silently changing a value.
-
-The [TODO](../eng/todo.md) records implementation status.
 
 Fern is a low-level programming language in the spirit of C. Its goals are
 clarity, defined behavior, and safe default semantics.
@@ -58,11 +54,10 @@ var x = 10; // int
 ### Keywords
 
 `fn`, `void`, `var`, `const`, `type`, `struct`, `pub`, `use`, `if`, `else`,
-`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `null`, `true`, and
-`false` are reserved.
-The ten integer type names listed under Integer types, the two floating-point
-type names listed under Floating-point types, and `bool`, `rune`, and `string`
-are also reserved. Reserved words cannot be identifiers.
+`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `true`, and `false`
+are reserved. The ten integer type names listed under Integer types, the two
+floating-point type names listed under Floating-point types, and `bool` are also
+reserved. Reserved words cannot be identifiers.
 
 ### Integer literals
 
@@ -106,79 +101,6 @@ hexadecimal floating-point literals, and type suffixes are not allowed.
 `1` is an integer literal, while `1.` and `1e0` are floating-point literals.
 Floating-point literals are untyped. Floating-point constant expressions
 define how they acquire an `f32` or `f64` type.
-
-### Escape sequences
-
-Interpreted string literals and character literals recognize these named
-escape sequences:
-
-| Escape | Value |
-|--------|-------|
-| `\0` | U+0000 null |
-| `\a` | U+0007 alert |
-| `\b` | U+0008 backspace |
-| `\f` | U+000C form feed |
-| `\n` | U+000A line feed |
-| `\r` | U+000D carriage return |
-| `\t` | U+0009 horizontal tab |
-| `\v` | U+000B vertical tab |
-| `\\` | U+005C backslash |
-| `\"` | U+0022 double quote |
-| `\'` | U+0027 single quote |
-
-`\u{h}` denotes the Unicode scalar value written by `h`. The braces contain
-one to six hexadecimal digits, using `0`-`9`, `a`-`f`, or `A`-`F`, with no
-digit separators. The value must be no greater than U+10FFFF and must not be a
-surrogate in U+D800-U+DFFF. In a string literal, the scalar is encoded as
-UTF-8. In a character literal, it is the literal's value.
-
-There are no octal or raw-byte escapes. Any unrecognized or incomplete escape
-sequence is invalid.
-
-### Character literals
-
-A character literal is one Unicode scalar value between single quotes. Its
-contents are either one source character or one escape sequence. A direct
-single quote or backslash must be escaped. A line feed or carriage return is
-not permitted within a character literal.
-
-```fern
-'A'
-'é'
-'\n'
-'\u{1F642}'
-```
-
-A character literal is an untyped rune constant.
-[Rune constants](#rune-constants) specifies how it acquires a type. A literal
-containing no scalar or more than one scalar is invalid; Unicode normalization
-is not performed.
-
-### String literals
-
-An interpreted string literal is a sequence of Unicode scalar values and
-escape sequences between double quotes. A direct double quote or backslash
-must be escaped. A line feed or carriage return is not permitted within an
-interpreted string literal. Each scalar is encoded as UTF-8, so every
-interpreted string literal contains valid UTF-8. Literal text is not Unicode
-normalized.
-
-A raw string literal is a sequence of source characters between backticks.
-Every character except a backtick is permitted, including backslashes, line
-feeds, and carriage returns. Its contents are preserved exactly as their UTF-8
-bytes; escape sequences have no special meaning.
-
-```fern
-"hello, 世界\n"
-`C:\new\file`
-`first line
-second line`
-```
-
-A string literal is an untyped string constant.
-[String constants](#string-constants) specifies how it acquires a type.
-Adjacent string literals do not concatenate; without an operator or separator
-between them, the source is invalid.
 
 ## Declarations
 
@@ -260,16 +182,13 @@ const name: T [= e];
 A declaration introduces a binding. When an initializer is present, it is
 initialized to the value of `e`. A type annotation determines the binding's
 type. A typed initializer must have that same type, while an untyped constant
-must be representable by the annotated type;
-[Pointer conversion and comparison](#pointer-conversion-and-comparison) gives
-the one exception. Other numeric conversions must be explicit. Without an
-annotation, the binding takes the initializer's type. Untyped integer,
-floating-point, boolean, rune, and string constants default to `int`, `f64`,
-`bool`, `rune`, and `string`, respectively. A declaration without an
-initializer must have a type annotation and receives that type's zero value.
-Zero values are `0` for integer and floating-point types, `false` for `bool`,
-U+0000 for `rune`, the empty string for `string`, `null` for pointer types, the
-empty slice for slice types, and recursive zero values for arrays and structs.
+must be representable by the annotated type. Other numeric conversions must be
+explicit. Without an annotation, the binding takes the initializer's type.
+Untyped integer, floating-point, and boolean constants default to `int`, `f64`,
+and `bool`, respectively. A declaration without an initializer must have a type
+annotation and receives that type's zero value. Zero values are `0` for integer
+and floating-point types, `false` for `bool`, and recursive zero values for
+arrays and structs.
 A binding reference has the binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
@@ -366,34 +285,23 @@ fn main() -> void {
 ### Type declarations
 
 ```text
-type Name T;
 type Name struct {
     field: T,
 }
 ```
 
-A type declaration is module-level only. `type Name T;` creates a new nominal
-type whose underlying type is `T`. The new type is distinct from `T` and every
-other type, so assignments and arguments do not implicitly cross the boundary.
-It retains the underlying type's representation, range, zero value, operators,
-and other value semantics. Explicit conversions are required to move between
-the named type and its underlying type.
-
-The struct form creates a named struct type. A struct must contain at least one
-field. Fields are declared as `name: T`, separated by commas; a trailing comma
-is permitted. Field names must be unique. Struct fields have no separate
-visibility modifier: fields of a public struct are accessible wherever the
-struct type is accessible.
+A type declaration is module-level only and creates a named struct type. A
+struct must contain at least one field. Fields are declared as `name: T`,
+separated by commas; a trailing comma is permitted. Field names must be unique.
+Struct fields have no separate visibility modifier: fields of a public struct
+are accessible wherever the struct type is accessible.
 
 A struct declaration is invalid when following struct fields and array element
 types can reach that same struct type, directly or indirectly. Every struct
-therefore has a finite value size. A [pointer](#pointer-types) or
-[slice](#slice-types) field breaks such a cycle, because neither one's size
-depends on the type it refers to.
+therefore has a finite value size.
 
 Type declarations whose right-hand side is a struct end at the closing `}` and
-do not have a semicolon. Other type declarations end with `;`. Anonymous struct
-types are not part of the language.
+do not have a semicolon. Anonymous struct types are not part of the language.
 
 Structs are value types. Initialization, assignment, argument passing, and
 return copy every field recursively. A field is selected with `value.field`.
@@ -431,9 +339,7 @@ Struct literals whose fields are all constant expressions are constant
 expressions.
 
 The equality operators `==` and `!=` compare structs structurally, recursively
-comparing corresponding fields. A struct is comparable when every field is
-comparable. These operators are not defined for structs with non-comparable
-fields. Ordering operators are not defined on structs.
+comparing corresponding fields. Ordering operators are not defined on structs.
 
 ## Integer Semantics
 
@@ -472,8 +378,8 @@ when its width matches one of them; the same holds for `uint`. There are no
 `byte`, `char`, `short`, or `long` types.
 
 `int` is the general-purpose integer: the default type of constants, the type of
-lengths and indices, and the type most code should use. `uint` is the type of
-allocation sizes and of integers converted from pointers.
+lengths and indices, and the type most code should use. `uint` is the unsigned
+integer of the same width.
 
 Signed types use two's complement representation.
 
@@ -595,9 +501,6 @@ untyped integer must fit the destination type. An untyped floating-point
 constant rounds once to the nearest value of the destination floating-point
 type, using round-to-nearest, ties-to-even, and that value must be finite.
 Conversions of a constant expression that would trap are compile-time errors.
-
-`rune` is not a numeric type. [Rune conversions](#rune-conversions) specifies
-its explicit conversions to and from integer types.
 
 #### Truncating conversion
 
@@ -723,24 +626,18 @@ computing a different result.
 
 ### Indexing and lengths
 
-The [TODO](../eng/todo.md) records implementation status. [Arrays](#arrays),
-[Slices](#slices), and [Strings](#strings) specify those types, their values,
-and their operations.
-[Implicit dereference](#implicit-dereference) specifies indexing, slicing, and
-`len` through a pointer.
+[Arrays](#arrays) specifies array types, their values, and their operations.
 
-The length of any array, slice, or string has type `int`. Indices and slice
-bounds have type `int`. An index must have type `int` or be an untyped constant
-representable by `int`; an index of any other integer type requires an explicit
-conversion.
+Lengths and indices have type `int`. An index must have type `int` or be an
+untyped constant representable by `int`; an index of any other integer type
+requires an explicit conversion.
 
 An index is valid if `0 <= i < len`. Accessing an out-of-range index traps.
 Because indices are signed, an expression such as `i - 1` when `i == 0` produces
 `-1` and fails the bounds check rather than wrapping to a huge value.
 
 The maximum length of an object is `2ʷ⁻¹ − 1` elements, where `w` is the pointer
-width. Allocation sizes use `uint`; converting between lengths and allocation
-sizes follows Numeric conversions.
+width.
 
 ### Bitwise operations
 
@@ -843,44 +740,27 @@ expressions, and its result is then an untyped boolean constant. A comparison
 with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
-`==` and `!=` further require comparable operand types. Comparability follows
-the types whose size is part of their type; each type's own section gives its
-rule.
-
-[Array comparison](#array-comparison) specifies `==` and `!=` on arrays,
-[Slice comparison](#slice-comparison) specifies that slices are not comparable,
-[String comparison](#string-comparison) specifies bytewise string ordering,
-[Rune comparison](#rune-comparison) specifies code-point rune ordering,
-and [Pointer conversion and comparison](#pointer-conversion-and-comparison)
-specifies them on pointers.
+`==` and `!=` are defined on every type. [Array comparison](#array-comparison)
+and [Struct literals](#struct-literals) specify them on aggregates.
 
 ### Assignment
 
 `x = e;` stores the value of `e` in the mutable location `x`. It requires `e` to
-have the type of `x`, to be an untyped constant that fits, or to be a pointer
-converted under
-[Pointer conversion and comparison](#pointer-conversion-and-comparison).
-Assignment is a statement and ends with a semicolon.
+have the type of `x` or to be an untyped constant that fits. Assignment is a
+statement and ends with a semicolon.
 
-A *location* is a binding, a field of a location, an element of an array
-location, an element of a slice, or a dereference `*p`. A location is *mutable*
-when it is a `var` binding, a field or array element of a mutable location, an
-element of a slice of type `[]T`, or `*p` where `p` has type `*T`. A `const`
-binding, a parameter, `*p` where `p` has type `*const T`, and an element of a
-slice of type `[]const T` are immutable, and so is every field and array element
-of an immutable location. A slice element's mutability comes from the slice's
-type alone. An expression that is not a location, such as a call result or an
-arithmetic result, is neither assignable nor addressable.
+A *location* is a binding, a field of a location, or an element of an array
+location. A location is *mutable* when it is a `var` binding or a field or
+element of a mutable location. A `const` binding and a parameter are immutable,
+and so is every field and array element of an immutable location. An expression
+that is not a location, such as a call result or an arithmetic result, is not
+assignable.
 
 An assignment target is a mutable location. `a[i] = e;` stores into the element
-of `a` at index `i`. `p.x = e;` stores into field `x` of `p`. `*p = e;` stores
-into the location `p` refers to. Whether the binding `p` is `var` or `const`
-does not affect `*p = e;`, and whether a slice binding `s` is `var` or `const`
-does not affect `s[i] = e;`: `const` prevents reassigning the binding, not
-writing through it. Every index, slice-bound, field-selection, and dereference
-expression in the target is evaluated left to right, then `e`: in
-`grid[r][c] = e;` the order is `r`, `c`, `e`. A compound assignment to an
-element, field, or dereference evaluates the target once.
+of `a` at index `i`. `p.x = e;` stores into field `x` of `p`. Every index and
+field-selection expression in the target is evaluated left to right, then `e`:
+in `grid[r][c] = e;` the order is `r`, `c`, `e`. A compound assignment to an
+element or field evaluates the target once.
 
 Compound assignments `+= -= *= /= %= &= |= ^= <<= >>=` and their wrapping forms
 `+%= -%= *%=` are equivalent to the corresponding binary operation
@@ -912,19 +792,14 @@ specific width should use fixed-width types; their distinctness from `int` and
 |-----------|----------|
 | Constant does not fit target type | Compile error |
 | Constant index out of range | Compile error |
-| Constant slice bound out of range for an array or constant string | Compile error |
 | Integer constant expression would trap | Compile error |
 | Floating-point constant expression is non-finite | Compile error |
-| Constant integer-to-rune conversion receives a non-scalar value | Compile error |
 | `+ - *` overflow | Trap |
 | Integer `/` or `%` by zero | Trap |
 | `MIN / -1`, `MIN % -1`, `-MIN` | Trap |
 | Checked conversion would discard information | Trap |
-| Runtime integer-to-rune conversion receives a non-scalar value | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
-| Out-of-range slice bounds | Trap |
-| Dereference of `null` | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
 | Untyped constant shift result does not fit its target type | Compile error |
 | Wrapping operators | Defined, no trap |
@@ -1008,8 +883,7 @@ cannot stand in for an integer.
 `true` and `false` are untyped boolean constants. An untyped boolean constant
 acquires type `bool` from the context in which it is used, and `bool` is its
 default type. A `var` or `const` binding may have type `bool`.
-[Comparison](#comparison) specifies the operators that produce `bool` from
-comparable operands.
+[Comparison](#comparison) specifies the operators that produce `bool`.
 
 ```fern
 var ready = true; // ready: bool
@@ -1059,61 +933,6 @@ Short-circuiting does not exempt an unevaluated constant operand from the
 compile-time checks that apply to constant expressions. `false && 1 / 0 == 0` is
 rejected.
 
-## Rune Semantics
-
-### The rune type
-
-`rune` is a distinct value type whose values are the Unicode scalar values
-U+0000-U+D7FF and U+E000-U+10FFFF. It has the same 32-bit representation and
-alignment as `u32`, but it is not an integer type. Its zero value is U+0000.
-
-### Rune constants
-
-A character literal is an untyped rune constant. An untyped rune constant may
-acquire type `rune` or a named type whose underlying type is `rune`; it cannot
-acquire an integer type. Without a contextual type, it defaults to `rune`.
-Character literals, rune conversions of integer constant expressions,
-parentheses around rune constant expressions, and references to `const`
-bindings initialized by rune constant expressions are rune constant
-expressions.
-
-```fern
-type Letter rune;
-
-var r = 'A';        // rune
-var letter: Letter = 'A';
-var byte: u8 = 'A'; // invalid: a rune constant does not acquire u8
-```
-
-### Rune conversions
-
-`R(x)`, where `R` is `rune` or a named type whose underlying type is `rune`,
-converts an integer value to that rune type. The value must be in
-U+0000-U+D7FF or U+E000-U+10FFFF; otherwise the conversion traps. `T(r)`
-converts a rune value or untyped rune constant `r` to integer type `T` and
-traps when the scalar value is not representable by `T`. Either conversion is
-a compile-time error instead when its operand is constant and the conversion
-would trap.
-
-```fern
-var ascii = u8('A');
-var face = rune(0x1F642);
-var invalid = rune(0xD800); // compile error: surrogate
-```
-
-Truncating conversions to or from `rune` are not defined. There is no built-in
-conversion from a rune to a string.
-
-### Rune comparison
-
-`==`, `!=`, `<`, `<=`, `>`, and `>=` compare two rune values by Unicode scalar
-value and yield `bool`. An untyped rune constant adopts the other operand's
-rune type. A comparison is a constant expression when both operands are
-constant expressions, and its result is then an untyped boolean constant.
-
-Arithmetic, wrapping, bitwise, shift, and logical operators are not defined on
-runes.
-
 ## Arrays
 
 ### Array types
@@ -1140,8 +959,7 @@ value.
 
 An array is a value rather than a reference. Initialization, assignment,
 argument passing, and return each copy every element. Modifying one array
-afterward does not modify the other. An array does not implicitly become a
-slice; [Slicing expressions](#slicing-expressions) specifies how to make one.
+afterward does not modify the other.
 
 ```fern
 fn main() -> void {
@@ -1210,8 +1028,7 @@ var worse: [_]int = [0...]; // error: no length
 ### Indexing
 
 `a[i]` is the element of the array `a` at index `i` and is an expression of the
-element type. Indexing requires an operand of array type, or a pointer to one
-under [Implicit dereference](#implicit-dereference).
+element type. Indexing requires an operand of array type.
 [Indexing and lengths](#indexing-and-lengths) gives the type of `i` and
 the range of valid indices; an out-of-range index traps. Because an array's
 length is part of its type, an out-of-range constant index is rejected at
@@ -1245,12 +1062,8 @@ len(a)
 ```
 
 `len` is a reserved word and uses call syntax without being a call, as an
-integer conversion does. Its operand is an expression of array, slice, or
-string type, or a pointer to one under
-[Implicit dereference](#implicit-dereference). A trailing comma after that
-operand is permitted, and the result has type `int`. The rest of this section
-specifies the array case; [Slice length](#slice-length) and
-[String length](#string-length) specify the other cases.
+integer conversion does. Its operand is an expression of array type. A trailing
+comma after that operand is permitted, and the result has type `int`.
 
 `len(a)` yields the length recorded in the operand's type. The operand is still
 evaluated, so a trap inside it, such as an out-of-range index, still occurs.
@@ -1272,9 +1085,6 @@ every pair of corresponding elements is equal, and `!=` is its negation. Arrays
 of different lengths or different element types are different types and cannot
 be compared. `<`, `<=`, `>`, and `>=` are not defined on arrays.
 
-An array is comparable when its element type is comparable. An array whose
-element type is a slice is therefore not comparable.
-
 An implementation may compare the elements in any order. Element comparison
 cannot trap, so the order is not observable.
 
@@ -1295,458 +1105,6 @@ fn main() -> void {
     exit(0); // reports 0
 }
 ```
-
-## Pointers
-
-### Pointer types
-
-```text
-*T
-*const T
-```
-
-A pointer refers to a location of its target type `T`, or is `null`. Writing
-through a `*T` is permitted; writing through a `*const T` is not. The two are
-distinct types, and the target type distinguishes them further: `*int`,
-`*const int`, and `*i64` are three distinct types.
-
-A pointer type is a value type. It may be the type of a binding, a parameter, a
-function result, a struct field, or an array element. Its target type may be any
-value type, including another pointer type. `void` is not a value type and
-cannot be a target type.
-
-The zero value of a pointer type is `null`.
-
-A pointer is a value. Initialization, assignment, argument passing, and return
-copy it, and the copy refers to the same location. Copying a pointer does not
-copy the location it refers to.
-
-Because a pointer's size does not depend on its target type, a struct may reach
-itself through a pointer field:
-
-```fern
-type Node struct {
-    value: int,
-    next: *Node,
-}
-```
-
-### The null pointer
-
-`null` is a reserved word denoting a pointer that refers to no location. It is
-an untyped constant and takes a pointer type from context under the rules of
-Typing by context: an annotated binding, a parameter type, a result type, an
-assignment target, or the other operand of a comparison. `null` with no such
-context is invalid.
-
-```fern
-fn main() -> void {
-    var p: *int = null;
-    var q = null; // invalid: no context supplies a pointer type
-}
-```
-
-### Address-of
-
-`&x` yields a pointer to the location `x`. [Assignment](#assignment) defines
-which expressions are locations and when a location is mutable. `&x` yields
-`*T` when `x` is a mutable location of type `T`, and `*const T` when `x` is an
-immutable one. Taking the address of an expression that is not a location is
-invalid.
-
-Evaluating `&x` evaluates every index, field-selection, and dereference
-expression in `x`, from left to right, and traps on an out-of-range index or a
-`null` dereference just as reading `x` would.
-
-`&x` is never a constant expression. A module-level initializer therefore cannot
-take an address, and `null` is the only pointer value one can hold.
-
-```fern
-fn main() -> void {
-    var x = 7;
-    const c = 9;
-    var p = &x;       // *int
-    var q = &c;       // *const int
-    exit(*p + *q);    // reports 16
-}
-```
-
-### Dereference
-
-`*p` denotes the location that `p` refers to and has the pointer's target type.
-Dereferencing `null` traps.
-
-`*p` is itself a location, so it may be addressed, and it may be assigned when
-`p` has type `*T`. [Assignment](#assignment) gives the statement form.
-
-Unary `*` and unary `&` are unary operators and take the precedence given under
-Precedence, associativity, and evaluation order.
-
-```fern
-fn main() -> void {
-    var x = 7;
-    const p = &x;
-    *p = 42;
-    exit(x); // reports 42
-}
-```
-
-### Implicit dereference
-
-Field selection, indexing, slicing, and `len` accept a pointer operand and
-dereference it once: `p.x` means `(*p).x`, `p[i]` means `(*p)[i]`, `p[lo:hi]`
-means `(*p)[lo:hi]`, and `len(p)` means `len(*p)`. Each traps when `p` is
-`null`. Because a pointer operand can trap, `len(p)` is never a constant
-expression.
-
-When the corresponding non-pointer expression produces a location, its
-mutability follows the pointer. For example, `p.x = e;` is valid when `p` has
-type `*Point` and invalid when `p` has type `*const Point`.
-
-One level is dereferenced, not a chain: for `pp` of type `**Point`, write
-`(*pp).x`. Implicit dereference applies to these four forms and nowhere else;
-iterating the value a pointer refers to is written `for v in *p`.
-
-```fern
-type Point struct {
-    x: int,
-    y: int,
-}
-
-fn shift(p: *Point) -> void {
-    p.x = p.x + 1;
-}
-
-fn main() -> void {
-    var q = Point { x = 1, y = 2 };
-    shift(&q);
-    exit(q.x); // reports 2
-}
-```
-
-### Pointer conversion and comparison
-
-A `*T` may be used wherever a `*const T` with the same target type is expected:
-as the initializer of an annotated binding, a call argument, a `return`
-expression, an assigned value, or the other operand of a comparison. The value
-is unchanged; the conversion only withdraws the ability to write through the
-pointer. There is no conversion in the other direction, and no conversion
-between pointers with different target types.
-
-`==` and `!=` compare two pointers whose target types are the same, whether or
-not their constness matches, and compare any pointer against `null`. Two
-pointers are equal when they refer to the same location, or when both are
-`null`. `<`, `<=`, `>`, and `>=` are not defined on pointers, and neither are
-the arithmetic, bitwise, and logical operators. There is no pointer arithmetic.
-A comparison of two pointers is never a constant expression.
-
-`uint(p)` converts a pointer to `uint`, yielding its address. It never traps,
-and `null` converts to `0`. There is no conversion from an integer to a pointer.
-
-```fern
-fn read(p: *const int) -> int {
-    return *p;
-}
-
-fn main() -> void {
-    var x = 5;
-    var p = &x;
-    const q: *const int = p; // a *int is accepted here
-    if p == q {
-        exit(read(p)); // reports 5
-    }
-    exit(1);
-}
-```
-
-### Pointer validity
-
-A pointer is valid only while the location it refers to exists. A local
-binding's location exists from its declaration until its enclosing block ends. A
-module-level binding's location exists for the whole program run.
-
-Using the value of a pointer to a location that no longer exists is invalid.
-Fern does not detect it: neither the compiler nor the running program checks
-pointer validity, and this is the only rule in the language that goes unchecked.
-Keeping a pointer no longer than its referent is the programmer's obligation.
-
-```fern
-fn escape() -> *int {
-    var x = 1;
-    return &x; // x ceases to exist when the function returns
-}
-```
-
-## Slices
-
-### Slice types
-
-```text
-[]T
-[]const T
-```
-
-A slice refers to a contiguous run of elements of a single element type `T`. It
-holds the location of the first element and the number of elements, which is its
-*length*. Writing through a `[]T` is permitted; writing through a `[]const T` is
-not. The two are distinct types, and the element type distinguishes them
-further: `[]int`, `[]const int`, and `[]i64` are three distinct types.
-
-A slice carries no capacity and cannot grow. It is a view of storage that
-something else owns, and no operation appends to a slice or reallocates the
-storage it refers to.
-
-A slice type is a value type. It may be the type of a binding, a parameter, a
-function result, a struct field, an array element, or the element type of
-another slice. Its element type may be any value type, including an array type
-or another slice type. `void` is not a value type and cannot be an element type.
-
-A slice is a value. Initialization, assignment, argument passing, and return
-copy its location and its length, and the copy refers to the same elements.
-Copying a slice does not copy the elements.
-
-The zero value of a slice type is the empty slice: length `0`, referring to no
-elements. `null` is a pointer constant and does not take a slice type, so a
-slice is never `null`, and `len(s) == 0` is how a program tests for emptiness.
-Every empty slice behaves alike: it yields `0` from `len`, traps on any index,
-and executes a `for` body zero times.
-
-There is no slice literal. A slice value comes from a slicing expression, from
-the zero value, or from copying another slice.
-
-Because a slice's size does not depend on its element type, a struct may reach
-itself through a slice field, as it may through a pointer field.
-
-A `[]T` may be used wherever a `[]const T` with the same element type is
-expected: as the initializer of an annotated binding, a call argument, a
-`return` expression, or an assigned value. The value is unchanged; the
-conversion only withdraws the ability to write through the slice. There is no
-conversion in the other direction, no conversion between slices with different
-element types, no conversion between an array and a slice, and no conversion
-between a slice and an integer.
-
-A slice refers to storage it does not own, so
-[Pointer validity](#pointer-validity) governs it unchanged: using a slice whose
-elements no longer exist is invalid, and Fern does not detect it.
-
-### Slicing expressions
-
-```text
-a[lo:hi]
-a[lo:]
-a[:hi]
-a[:]
-```
-
-For an array or slice operand, a slicing expression yields a slice of the
-elements of `a` from index `lo` up to but not including index `hi`. Its length
-is `hi - lo`. An omitted `lo` means `0` and an omitted `hi` means `len(a)`, so
-`a[:]` covers all of `a`. `lo` and `hi` have the type given under
-[Indexing and lengths](#indexing-and-lengths). There is no third bound, because
-a slice has no capacity to set. [String slicing](#string-slicing) specifies the
-string case.
-
-The operand may be an array that is a location, a slice, or a pointer to an
-array under [Implicit dereference](#implicit-dereference). An array that is not
-a location, such as a call result or an array literal, cannot be sliced: the
-result would refer to storage that has already ceased to exist. A slice operand
-carries no such restriction, because a slice already holds the location of its
-elements, so the result of a call that returns a slice may be sliced.
-
-The result's element type is the operand's element type. The result is `[]T`
-when the operand is a mutable array location, a `*[N]T`, or a `[]T`, and
-`[]const T` when the operand is an immutable array location, a `*const [N]T`, or
-a `[]const T`. Slicing therefore grants no access the operand did not already
-have.
-
-The bounds must satisfy `0 <= lo <= hi <= len(a)`. `lo == hi` is permitted and
-yields an empty slice. Bounds outside that range trap. When the operand's length
-is part of its type — an array, or a pointer to one — and the offending bound
-is a constant expression, it is rejected at compile time instead, as an
-out-of-range constant index into an array is.
-
-The operand is evaluated first, then `lo`, then `hi`. A slicing expression is
-never a constant expression, because it takes the location of the operand's
-elements. A module-level binding of slice type can therefore hold only the empty
-slice, just as a module-level binding of pointer type can hold only `null`.
-
-```fern
-fn sum(xs: []const int) -> int {
-    var total = 0;
-    for v in xs {
-        total = total + v;
-    }
-    return total;
-}
-
-fn main() -> void {
-    const a: [5]int = [1, 2, 3, 4, 5];
-    exit(sum(a[1:4])); // reports 9
-}
-```
-
-```fern
-fn main() -> void {
-    var a: [4]int = [1, 2, 3, 4];
-    var s = a[1:3]; // []int, length 2
-    s[0] = 99;
-    exit(a[1]); // reports 99
-}
-```
-
-### Slice indexing
-
-`s[i]` is the element of the slice `s` at index `i` and is an expression of the
-element type. [Indexing and lengths](#indexing-and-lengths) gives the type of
-`i` and the range of valid indices; an out-of-range index traps. A slice's
-length is part of its value rather than its type, so a constant index is not
-rejected at compile time, unlike an index into an array.
-
-`s[i]` is a location. It is mutable when `s` has type `[]T` and immutable when
-`s` has type `[]const T`; [Assignment](#assignment) gives the statement form and
-its evaluation order. `&s[i]` yields `*T` or `*const T` accordingly.
-
-`s[i]` is never a constant expression.
-
-### Slice length
-
-`len(s)` yields the length of the slice `s` and has type `int`.
-[Length](#length) gives the form of `len` and its trailing-comma rule. Because a
-slice's length is part of its value rather than its type, `len(s)` is never a
-constant expression.
-
-```fern
-fn main() -> void {
-    const a: [5]int = [1, 2, 3, 4, 5];
-    exit(len(a[1:4])); // reports 3
-}
-```
-
-### Slice comparison
-
-A slice type is not comparable. `==` and `!=` are not defined on slices, and
-neither are `<`, `<=`, `>`, `>=`, nor the arithmetic, bitwise, and logical
-operators. A slice is never `null`, so it is not compared to `null` either;
-`len(s) == 0` tests for emptiness.
-
-A struct with a slice field and an array whose element type is a slice are also
-not comparable, by the rules under [Struct literals](#struct-literals) and
-[Array comparison](#array-comparison).
-
-## Strings
-
-### The string type
-
-`string` is a distinct value type whose values are arbitrary, possibly empty
-sequences of bytes. A string may contain NUL bytes or bytes that are not valid
-UTF-8. Its length is its number of bytes. A string's bytes are immutable: no
-operation can assign through a string value. NUL has no special meaning within
-a string.
-
-A string value holds its byte sequence and length. Initialization, assignment,
-argument passing, and return copy the value without copying its bytes. The copy
-refers to the same immutable bytes. A `var` string binding may be assigned a
-different string value; this does not modify either byte sequence.
-
-The zero value of `string` is the empty string. A string is never `null`, and
-all empty strings behave alike: `len` yields `0`, every index traps, all empty
-strings compare equal, and iteration executes zero times.
-
-`string` may be the type of a binding, parameter, function result, struct
-field, array element, or slice element. A named type may have `string` as its
-underlying type and retains these value semantics and operations.
-
-`[]const u8(s)` produces a slice of the bytes in string `s` without copying
-them. The slice has length `len(s)` and refers to the same immutable storage.
-There is no built-in conversion from a byte slice to a string or between a
-string and a rune or rune slice.
-
-### String constants
-
-A string literal is an untyped string constant. It may acquire type `string` or
-a named type whose underlying type is `string`; without a contextual type it
-defaults to `string`. String literals, explicit conversions between `string`
-and a named string type, parentheses around string constant expressions, and
-references to `const` bindings initialized by string constant expressions are
-string constant expressions.
-
-`len(s)` is a constant expression when `s` is a string constant expression.
-A string comparison is a constant expression when both operands are constant
-expressions. String indexing and slicing are never constant expressions.
-
-```fern
-type Path string;
-
-var text = "fern";       // string
-var path: Path = `src/main.fern`;
-const bytes = len("é"); // 2
-```
-
-### String indexing
-
-`s[i]` is the byte at index `i` in string `s` and has type `u8`.
-[Indexing and lengths](#indexing-and-lengths) gives the type and valid range of
-`i`. An out-of-range index traps, except that an out-of-range constant index
-into a constant string is rejected at compile time.
-
-A string index is neither assignable nor addressable. Use `[]const u8(s)` when
-an immutable byte location or slice is required. String indexing is never a
-constant expression.
-
-```fern
-const s = "é";
-const first = s[0]; // invalid: indexing is not a constant expression
-
-fn main() -> void {
-    exit(s[0]); // reports 195, the first UTF-8 byte
-}
-```
-
-### String slicing
-
-The slicing forms under [Slicing expressions](#slicing-expressions) also
-accept a string operand. They select bytes from `lo` up to but not including
-`hi`, with omitted bounds taking the same defaults, and produce a string that
-refers to those bytes without copying them. The bounds must satisfy
-`0 <= lo <= hi <= len(s)`. Invalid bounds trap, except that invalid constant
-bounds on a constant string are rejected at compile time.
-
-String slicing does not require UTF-8 boundaries. The result may therefore
-contain invalid UTF-8 even when its operand is a valid UTF-8 string literal.
-The operand is evaluated first, then `lo`, then `hi`. A string slicing
-expression is never a constant expression.
-
-```fern
-const text = "é"; // C3 A9
-
-fn main() -> void {
-    const first = text[0:1];
-    exit(first[0]); // reports 195; first is not valid UTF-8
-}
-```
-
-### String length
-
-`len(s)` yields the number of bytes in string `s` and has type `int`.
-[Length](#length) gives the form of `len` and its trailing-comma rule. The
-result is a constant expression exactly when `s` is a string constant
-expression.
-
-### String comparison
-
-`==`, `!=`, `<`, `<=`, `>`, and `>=` compare two strings of identical type
-lexicographically by their unsigned byte values. At the first unequal byte, the
-string with the smaller byte compares less; if every byte of the shorter string
-matches, the shorter string compares less. Two strings are equal when they
-have identical lengths and bytes.
-
-An untyped string constant adopts the other operand's string type. A comparison
-is a constant expression when both operands are constant expressions, and its
-result is then an untyped boolean constant.
-
-Strings have no arithmetic, wrapping, bitwise, shift, or logical operators. In
-particular, `+` does not concatenate strings. Constructing strings from runtime
-data and concatenating strings are not language operations.
 
 ## Statements and Execution
 
@@ -1839,18 +1197,15 @@ fn main() -> void {
 }
 ```
 
-For an array or slice `a`, `for v in a { ... }` executes the body once for each
-element in index order, with `v` bound to a copy of the element.
+For an array `a`, `for v in a { ... }` executes the body once for each element
+in index order, with `v` bound to a copy of the element.
 `for v, i in a { ... }` also binds `i`, of type `int`, to that element's index.
-`in` is a reserved word, and the two names must differ. Iterating an empty slice
-executes the body zero times. The string case is specified below.
+`in` is a reserved word, and the two names must differ.
 
-`a` is evaluated once, before the first iteration, and the loop walks that
-value, so the number of iterations is fixed before the first one. When `a` is an
-array, the loop walks a copy, and assigning to an element of that array inside
-the body does not change the remaining iterations. When `a` is a slice, the copy
-refers to the same elements, so assigning through the slice inside the body does
-change what the remaining iterations read.
+`a` is evaluated once, before the first iteration, and the loop walks a copy of
+that value, so the number of iterations is fixed before the first one, and
+assigning to an element of that array inside the body does not change the
+remaining iterations.
 
 `v` and `i` are immutable bindings whose scope is the loop body, bound afresh on
 each iteration. The body may shadow them, and neither is visible after the loop.
@@ -1863,24 +1218,6 @@ fn main() -> void {
         total = total + v;
     }
     exit(total); // reports 10
-}
-```
-
-When `a` is a string, the loop decodes its bytes as UTF-8 from left to right.
-Each iteration binds `v`, of type `rune`, to the next decoded scalar. The
-optional `i`, of type `int`, is that scalar's starting byte index. Each byte
-that cannot begin a valid encoding yields U+FFFD and advances the next
-iteration by one byte. The string value is evaluated once before iteration;
-its immutable byte sequence fixes every iteration value and index.
-
-```fern
-fn main() -> void {
-    const text = "Aé";
-    var last = 0;
-    for r, i in text {
-        last = i;
-    }
-    exit(last); // reports 1, the byte index of é
 }
 ```
 

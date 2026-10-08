@@ -397,7 +397,7 @@ fn infallible_conversions_do_not_emit_trap_blocks_or_messages() {
     let text = emit(&program, None);
     assert!(!text.contains("$abort"));
     assert!(!text.contains("$write"));
-    assert_eq!(data_symbols(&text), ["emptyslice"]);
+    assert!(data_symbols(&text).is_empty());
     assert!(!text.contains("jnz"));
 }
 

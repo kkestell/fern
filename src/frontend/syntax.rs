@@ -191,16 +191,6 @@ pub(crate) enum AnnotationKind {
         length: Option<Idx<Expression>>,
         element: Idx<TypeAnnotation>,
     },
-    /// `*T`, or `*const T` when `constant` is set.
-    Pointer {
-        constant: bool,
-        target: Idx<TypeAnnotation>,
-    },
-    /// `[]T`, or `[]const T` when `constant` is set.
-    Slice {
-        constant: bool,
-        element: Idx<TypeAnnotation>,
-    },
 }
 
 /// One `field = e` initializer of a struct literal.
@@ -225,8 +215,6 @@ pub(crate) enum ExpressionKind {
     /// evaluation can read the value the program wrote.
     Floating(String),
     Boolean(bool),
-    /// `null`, the pointer that refers to no location.
-    Null,
     Reference(QualifiedName),
     Grouping {
         expression: Idx<Expression>,
@@ -258,18 +246,6 @@ pub(crate) enum ExpressionKind {
         operator_span: Range<usize>,
         operand: Idx<Expression>,
     },
-    /// `&x`, a pointer to the location `x`.
-    AddressOf {
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
-        operator_span: Range<usize>,
-        operand: Idx<Expression>,
-    },
-    /// `*p`, the location `p` refers to.
-    Dereference {
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
-        operator_span: Range<usize>,
-        operand: Idx<Expression>,
-    },
     Conversion {
         destination: Scalar,
         truncating: bool,
@@ -296,11 +272,6 @@ pub(crate) enum ExpressionKind {
     Index {
         operand: Idx<Expression>,
         index: Idx<Expression>,
-    },
-    Slice {
-        operand: Idx<Expression>,
-        low: Option<Idx<Expression>>,
-        high: Option<Idx<Expression>>,
     },
     Length {
         operand: Idx<Expression>,
@@ -348,7 +319,6 @@ pub(crate) fn walk_expression(
         ExpressionKind::Integer(_)
         | ExpressionKind::Floating(_)
         | ExpressionKind::Boolean(_)
-        | ExpressionKind::Null
         | ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {
@@ -360,14 +330,6 @@ pub(crate) fn walk_expression(
             ..
         }
         | ExpressionKind::LogicalNot {
-            operand: expression,
-            ..
-        }
-        | ExpressionKind::AddressOf {
-            operand: expression,
-            ..
-        }
-        | ExpressionKind::Dereference {
             operand: expression,
             ..
         }
@@ -388,15 +350,6 @@ pub(crate) fn walk_expression(
         } => {
             walk_expression(syntax, *left, visit);
             walk_expression(syntax, *right, visit);
-        }
-        ExpressionKind::Slice { operand, low, high } => {
-            walk_expression(syntax, *operand, visit);
-            if let Some(low) = low {
-                walk_expression(syntax, *low, visit);
-            }
-            if let Some(high) = high {
-                walk_expression(syntax, *high, visit);
-            }
         }
         ExpressionKind::Call(call) => {
             for &argument in &call.arguments {

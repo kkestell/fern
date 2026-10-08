@@ -54,14 +54,6 @@ impl CheckedProgram<'_> {
                 self.resolve_struct_fields(id, &written.span, scopes)?;
                 Ok(self.struct_type(id))
             }
-            AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
-                constant: *constant,
-                target: Box::new(self.resolve_referenced_type(*target, scopes)?),
-            }),
-            AnnotationKind::Slice { constant, element } => Ok(Type::Slice {
-                constant: *constant,
-                element: Box::new(self.resolve_referenced_type(*element, scopes)?),
-            }),
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
                 let length = match length {
@@ -77,52 +69,8 @@ impl CheckedProgram<'_> {
                 })
             }
         }?;
-        if !matches!(
-            &written.kind,
-            AnnotationKind::Pointer { .. } | AnnotationKind::Slice { .. }
-        ) {
-            self.validate_aggregate_layout(&ty, &written.span)?;
-        }
+        self.validate_aggregate_layout(&ty, &written.span)?;
         Ok(ty)
-    }
-
-    /// Resolves a type a pointer targets or a slice contains without following
-    /// its inline layout. Both are reached through the value rather than stored
-    /// in it, so either kind of field may break a recursive struct declaration.
-    fn resolve_referenced_type(
-        &mut self,
-        annotation: Idx<TypeAnnotation>,
-        scopes: &ScopeStack<'_>,
-    ) -> Result<Type, Diagnostic> {
-        let syntax = self.syntax;
-        let written = &syntax.annotations[annotation];
-        match &written.kind {
-            AnnotationKind::Scalar(scalar) => Ok(Type::Scalar(*scalar)),
-            AnnotationKind::Named(name) => {
-                let id = self.resolve_type_name(name, scopes)?;
-                Ok(self.struct_type(id))
-            }
-            AnnotationKind::Pointer { constant, target } => Ok(Type::Pointer {
-                constant: *constant,
-                target: Box::new(self.resolve_referenced_type(*target, scopes)?),
-            }),
-            AnnotationKind::Slice { constant, element } => Ok(Type::Slice {
-                constant: *constant,
-                element: Box::new(self.resolve_referenced_type(*element, scopes)?),
-            }),
-            AnnotationKind::Array { length, element } => {
-                let Some(length) = length else {
-                    return Err(Diagnostic::new(
-                        written.span.clone(),
-                        "`[_]` requires an array-literal initializer",
-                    ));
-                };
-                Ok(Type::Array {
-                    length: self.array_length(*length, scopes)?,
-                    element: Box::new(self.resolve_referenced_type(*element, scopes)?),
-                })
-            }
-        }
     }
 
     /// Rejects layouts that native emission cannot address before they reach

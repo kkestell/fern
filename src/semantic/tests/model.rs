@@ -55,7 +55,6 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             ExpressionValue::Reference(id) => Some(*id),
             ExpressionValue::Integer
             | ExpressionValue::CompoundAssignmentTarget
-            | ExpressionValue::Null
             | ExpressionValue::Floating
             | ExpressionValue::Boolean
             | ExpressionValue::Conversion { .. }
@@ -66,11 +65,8 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             | ExpressionValue::Logical { .. }
             | ExpressionValue::Array { .. }
             | ExpressionValue::Index { .. }
-            | ExpressionValue::Slice { .. }
             | ExpressionValue::Length { .. }
             | ExpressionValue::LogicalNot { .. }
-            | ExpressionValue::AddressOf { .. }
-            | ExpressionValue::Dereference { .. }
             | ExpressionValue::Struct { .. }
             | ExpressionValue::Field { .. }
             | ExpressionValue::Call { .. } => None,

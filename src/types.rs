@@ -185,8 +185,8 @@ impl fmt::Display for Scalar {
 pub(crate) struct StructId(pub(crate) usize);
 
 /// The greatest number of inline struct declarations one value may contain.
-/// Every compiler phase uses this bound before recursively walking a struct
-/// graph.
+/// Semantic checking enforces this bound, so no later phase walks a deeper
+/// struct graph.
 pub(crate) const MAX_STRUCT_CONTAINMENT_DEPTH: usize = 128;
 
 /// The greatest byte size Fern's native aggregate layout permits. This leaves
@@ -207,48 +207,23 @@ impl PartialEq for StructType {
     }
 }
 
-/// The type of a value. Array and slice types compare structurally, while two
+/// The type of a value. Array types compare structurally, while two
 /// struct types are the same type only when they name one declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Type {
     Scalar(Scalar),
-    Pointer { constant: bool, target: Box<Type> },
-    Slice { constant: bool, element: Box<Type> },
     Array { length: u64, element: Box<Type> },
     Struct(StructType),
 }
 
 impl Type {
-    /// Whether a value of this type can initialize storage of `destination`.
-    /// The non-identical conversions withdraw mutability, through a pointer
-    /// or through a slice.
-    pub(crate) fn value_compatible(&self, destination: &Self) -> bool {
-        self == destination
-            || matches!(
-                (self, destination),
-                (
-                    Self::Pointer { constant: false, target: source },
-                    Self::Pointer { constant: true, target: destination },
-                ) if source == destination
-            )
-            || matches!(
-                (self, destination),
-                (
-                    Self::Slice { constant: false, element: source },
-                    Self::Slice { constant: true, element: destination },
-                ) if source == destination
-            )
-    }
-
     /// The scalar this type is, or `None` for an array or a struct. Callers
     /// that go on to do arithmetic use this to state that aggregates do not
     /// reach them.
     pub(crate) fn scalar(&self) -> Option<Scalar> {
         match self {
             Self::Scalar(scalar) => Some(*scalar),
-            Self::Pointer { .. } | Self::Slice { .. } | Self::Array { .. } | Self::Struct(_) => {
-                None
-            }
+            Self::Array { .. } | Self::Struct(_) => None,
         }
     }
 }
@@ -257,20 +232,6 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Scalar(scalar) => write!(f, "{scalar}"),
-            Self::Pointer { constant, target } => {
-                if *constant {
-                    write!(f, "*const {target}")
-                } else {
-                    write!(f, "*{target}")
-                }
-            }
-            Self::Slice { constant, element } => {
-                if *constant {
-                    write!(f, "[]const {element}")
-                } else {
-                    write!(f, "[]{element}")
-                }
-            }
             Self::Array { length, element } => write!(f, "[{length}]{element}"),
             Self::Struct(ty) => f.write_str(&ty.name),
         }
@@ -301,7 +262,7 @@ pub(crate) enum ComparisonOperator {
 }
 
 impl ComparisonOperator {
-    /// Equality is defined on comparable types; the ordering comparisons are
+    /// Equality is defined on every type; the ordering comparisons are
     /// defined only on numeric types.
     pub(crate) fn is_equality(self) -> bool {
         matches!(self, Self::Equal | Self::NotEqual)
@@ -385,20 +346,6 @@ mod tests {
         }
     }
 
-    fn pointer(constant: bool, target: Type) -> Type {
-        Type::Pointer {
-            constant,
-            target: Box::new(target),
-        }
-    }
-
-    fn slice(constant: bool, element: Type) -> Type {
-        Type::Slice {
-            constant,
-            element: Box::new(element),
-        }
-    }
-
     #[test]
     fn array_types_compare_structurally() {
         let two_by_three = array(2, array(3, Scalar::Int.into()));
@@ -406,56 +353,6 @@ mod tests {
         assert_ne!(two_by_three, array(3, array(2, Scalar::Int.into())));
         assert_ne!(two_by_three, array(2, array(3, Scalar::I64.into())));
         assert_ne!(two_by_three, Type::Scalar(Scalar::Int));
-    }
-
-    #[test]
-    fn pointer_types_compare_structurally() {
-        assert_eq!(
-            pointer(false, Scalar::Int.into()),
-            pointer(false, Scalar::Int.into())
-        );
-        assert_ne!(
-            pointer(false, Scalar::Int.into()),
-            pointer(true, Scalar::Int.into())
-        );
-        assert_ne!(
-            pointer(false, Scalar::Int.into()),
-            pointer(false, Scalar::I64.into())
-        );
-        assert_ne!(
-            pointer(false, Scalar::Int.into()),
-            pointer(false, pointer(false, Scalar::Int.into()))
-        );
-    }
-
-    #[test]
-    fn slice_types_compare_structurally() {
-        let mutable = slice(false, Scalar::Int.into());
-        assert_eq!(mutable, slice(false, Scalar::Int.into()));
-        assert_ne!(mutable, slice(true, Scalar::Int.into()));
-        assert_ne!(mutable, slice(false, Scalar::I64.into()));
-        assert_ne!(mutable, slice(false, slice(false, Scalar::Int.into())));
-        assert_ne!(mutable, array(1, Scalar::Int.into()));
-        assert_ne!(mutable, pointer(false, Scalar::Int.into()));
-    }
-
-    #[test]
-    fn mutable_pointers_can_withdraw_mutability() {
-        let mutable = pointer(false, Scalar::Int.into());
-        let constant = pointer(true, Scalar::Int.into());
-        assert!(mutable.value_compatible(&constant));
-        assert!(!constant.value_compatible(&mutable));
-        assert!(!mutable.value_compatible(&pointer(true, Scalar::I64.into())));
-    }
-
-    #[test]
-    fn mutable_slices_can_withdraw_mutability() {
-        let mutable = slice(false, Scalar::Int.into());
-        let constant = slice(true, Scalar::Int.into());
-        assert!(mutable.value_compatible(&constant));
-        assert!(!constant.value_compatible(&mutable));
-        assert!(!mutable.value_compatible(&slice(true, Scalar::I64.into())));
-        assert!(!mutable.value_compatible(&pointer(true, Scalar::Int.into())));
     }
 
     #[test]
@@ -476,26 +373,6 @@ mod tests {
         );
         assert_eq!(declared(0, "Point").to_string(), "Point");
         assert_eq!(array(2, declared(0, "Point")).to_string(), "[2]Point");
-        assert_eq!(pointer(false, Scalar::Int.into()).to_string(), "*int");
-        assert_eq!(pointer(true, Scalar::Int.into()).to_string(), "*const int");
-        assert_eq!(slice(false, Scalar::Int.into()).to_string(), "[]int");
-        assert_eq!(slice(true, Scalar::Int.into()).to_string(), "[]const int");
-        assert_eq!(
-            slice(false, slice(true, Scalar::Int.into())).to_string(),
-            "[][]const int"
-        );
-        assert_eq!(
-            slice(false, pointer(false, Scalar::Int.into())).to_string(),
-            "[]*int"
-        );
-        assert_eq!(
-            slice(true, array(3, Scalar::Int.into())).to_string(),
-            "[]const [3]int"
-        );
-        assert_eq!(
-            pointer(true, pointer(false, Scalar::Int.into())).to_string(),
-            "*const *int"
-        );
     }
 
     #[test]
@@ -507,8 +384,6 @@ mod tests {
     fn only_a_scalar_type_has_a_scalar() {
         assert_eq!(Type::Scalar(Scalar::U8).scalar(), Some(Scalar::U8));
         assert_eq!(array(1, Scalar::U8.into()).scalar(), None);
-        assert_eq!(pointer(false, Scalar::U8.into()).scalar(), None);
-        assert_eq!(slice(false, Scalar::U8.into()).scalar(), None);
     }
 
     #[test]

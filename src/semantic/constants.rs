@@ -471,11 +471,7 @@ fn contextualize_constant(value: &Constant, destination: Scalar) -> Option<Const
             integer_fits(value, destination).then(|| Constant::Integer(value.clone()))
         }
         Constant::Rational(value) => round_to_float(value, destination).map(Constant::from),
-        Constant::Null
-        | Constant::EmptySlice
-        | Constant::Float(_)
-        | Constant::Array(_)
-        | Constant::Struct(_) => {
+        Constant::Float(_) | Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("an untyped constant is an integer, an exact value, or a boolean")
         }
     }
@@ -524,11 +520,7 @@ fn converted(value: &Constant, destination: Scalar) -> Option<Constant> {
             let whole = exact.is_integer().then(|| exact.to_integer())?;
             integer_fits(&whole, destination).then_some(Constant::Integer(whole))
         }
-        Constant::Null
-        | Constant::EmptySlice
-        | Constant::Rational(_)
-        | Constant::Array(_)
-        | Constant::Struct(_) => {
+        Constant::Rational(_) | Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("a converted constant has a concrete numeric type")
         }
     }
@@ -625,9 +617,9 @@ pub(super) fn integer_literal(spelling: &str) -> CheckedExpression {
     }
 }
 
-/// Compares two constant operands of one type. Equality reaches every
-/// comparable type, so an array folds elementwise; ordering reaches the
-/// numbers, which is all checking lets through.
+/// Compares two constant operands of one type. Equality reaches every type,
+/// so an array folds elementwise; ordering reaches the numbers, which is all
+/// checking lets through.
 pub(super) fn compare_constants(
     operator: ComparisonOperator,
     left: &Constant,

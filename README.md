@@ -1,9 +1,7 @@
 # Fern
 
 Fern is a low-level programming language. The
-[language specification](docs/spec.md) defines its behavior; the
-[TODO](eng/todo.md) tracks implementation work. The specification includes
-language features ahead of the compiler.
+[language specification](docs/spec.md) defines its behavior.
 
 The examples form a tour of the currently supported language, grouped by topic:
 
@@ -24,11 +22,6 @@ The examples form a tour of the currently supported language, grouped by topic:
   forms.
 - [Structs](examples/structs.fern) covers declarations, literals and fill,
   field selection and assignment, copying, and equality.
-- [Pointers](examples/pointers.fern) covers mutable and const pointer types,
-  `null`, address-of, explicit and implicit dereference, indirect assignment,
-  pointer copies, comparison, and conversion to `uint`.
-- [Slices](examples/slices.fern) covers mutable and const slice types, slicing,
-  indexing, `len`, copying, and iteration.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is

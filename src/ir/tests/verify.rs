@@ -1,375 +1,5 @@
 use super::*;
-use crate::types::{ComparisonOperator, MAX_STRUCT_CONTAINMENT_DEPTH, UnaryOperator};
-
-#[test]
-fn verification_checks_slice_literals_places_and_values() {
-    let ints = slice(false, Scalar::Int.into());
-    let values = vec![
-        Value {
-            span: None,
-            ty: ints.clone(),
-            kind: ValueKind::Load(Place::Local(LocalId(0))),
-        },
-        Value {
-            span: Some(0..1),
-            ty: ints.clone(),
-            kind: ValueKind::SliceRange {
-                slice: Operand::Value(ValueId(0)),
-                low: integer(0, Scalar::Int),
-                high: integer(1, Scalar::Int),
-            },
-        },
-        Value {
-            span: None,
-            ty: Scalar::Int.into(),
-            kind: ValueKind::Load(Place::SliceElement {
-                slice: Operand::Value(ValueId(1)),
-                index: integer(0, Scalar::Int),
-                span: 0..1,
-            }),
-        },
-        Value {
-            span: None,
-            ty: slice(true, Scalar::Int.into()),
-            kind: ValueKind::WholeSlice(Place::Local(LocalId(1))),
-        },
-        Value {
-            span: None,
-            ty: Scalar::Int.into(),
-            kind: ValueKind::SliceLength {
-                slice: Operand::Value(ValueId(3)),
-            },
-        },
-    ];
-    let function = main_function(
-        values,
-        vec![ints.clone(), array(2, Scalar::Int.into())],
-        vec![Block {
-            instructions: vec![
-                Instruction::Store {
-                    place: Place::Local(LocalId(0)),
-                    operand: empty_slice(ints.clone()),
-                },
-                Instruction::Value(ValueId(0)),
-                Instruction::Value(ValueId(1)),
-                Instruction::Value(ValueId(2)),
-                Instruction::Value(ValueId(3)),
-                Instruction::Value(ValueId(4)),
-            ],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-    one_function(function).verify().unwrap();
-}
-
-#[test]
-fn verification_rejects_malformed_slice_values_and_places() {
-    let ints = slice(false, Scalar::Int.into());
-    let bytes = slice(false, Scalar::U8.into());
-
-    let error = program(vec![], empty_slice(Scalar::Int.into()))
-        .verify()
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("IR empty slice has non-slice type `int`"),
-        "{error}"
-    );
-
-    for (value, expected) in [
-        (
-            Value {
-                span: None,
-                ty: Scalar::Int.into(),
-                kind: ValueKind::Load(Place::SliceElement {
-                    slice: integer(0, Scalar::Int),
-                    index: integer(0, Scalar::Int),
-                    span: 0..1,
-                }),
-            },
-            "IR indexes slice value `int`",
-        ),
-        (
-            Value {
-                span: None,
-                ty: Scalar::Int.into(),
-                kind: ValueKind::Load(Place::SliceElement {
-                    slice: empty_slice(ints.clone()),
-                    index: integer(0, Scalar::U8),
-                    span: 0..1,
-                }),
-            },
-            "IR index has type `u8`, expected `int`",
-        ),
-        (
-            Value {
-                span: None,
-                ty: Scalar::Int.into(),
-                kind: ValueKind::SliceLength {
-                    slice: integer(0, Scalar::Int),
-                },
-            },
-            "invalid IR value 0",
-        ),
-        (
-            Value {
-                span: Some(0..1),
-                ty: ints.clone(),
-                kind: ValueKind::SliceRange {
-                    slice: empty_slice(ints.clone()),
-                    low: integer(0, Scalar::U8),
-                    high: integer(1, Scalar::Int),
-                },
-            },
-            "invalid IR value 0",
-        ),
-        (
-            Value {
-                span: Some(0..1),
-                ty: bytes.clone(),
-                kind: ValueKind::SliceRange {
-                    slice: empty_slice(ints.clone()),
-                    low: integer(0, Scalar::Int),
-                    high: integer(1, Scalar::Int),
-                },
-            },
-            "invalid IR value 0",
-        ),
-        (
-            Value {
-                span: Some(0..1),
-                ty: Scalar::Bool.into(),
-                kind: ValueKind::Comparison {
-                    operator: ComparisonOperator::Equal,
-                    left: empty_slice(ints.clone()),
-                    right: empty_slice(bytes.clone()),
-                },
-            },
-            "invalid IR value 0",
-        ),
-        (
-            Value {
-                span: Some(0..1),
-                ty: Scalar::Bool.into(),
-                kind: ValueKind::Comparison {
-                    operator: ComparisonOperator::Equal,
-                    left: empty_slice(ints.clone()),
-                    right: empty_slice(ints.clone()),
-                },
-            },
-            "invalid IR value 0",
-        ),
-    ] {
-        let error = program(vec![value], integer(0, Scalar::Int))
-            .verify()
-            .unwrap_err();
-        assert!(error.to_string().contains(expected), "{error}");
-    }
-
-    let mismatched_whole = Value {
-        span: None,
-        ty: bytes.clone(),
-        kind: ValueKind::WholeSlice(Place::Local(LocalId(0))),
-    };
-    let function = main_function(
-        vec![mismatched_whole],
-        vec![array(2, Scalar::Int.into())],
-        vec![Block {
-            instructions: vec![Instruction::Value(ValueId(0))],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-    let error = one_function(function).verify().unwrap_err();
-    assert!(error.to_string().contains("invalid IR value 0"), "{error}");
-}
-
-#[test]
-fn verification_rejects_equality_on_aggregates_that_contain_slices() {
-    let ints = slice(false, Scalar::Int.into());
-    let array_of_slices = array(2, ints.clone());
-    let values = vec![
-        Value {
-            span: None,
-            ty: array_of_slices.clone(),
-            kind: ValueKind::Load(Place::Local(LocalId(0))),
-        },
-        Value {
-            span: Some(0..1),
-            ty: Scalar::Bool.into(),
-            kind: ValueKind::Comparison {
-                operator: ComparisonOperator::Equal,
-                left: Operand::Value(ValueId(0)),
-                right: Operand::Value(ValueId(0)),
-            },
-        },
-    ];
-    let function = main_function(
-        values,
-        vec![array_of_slices],
-        vec![Block {
-            instructions: vec![
-                Instruction::Store {
-                    place: element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
-                    operand: empty_slice(ints.clone()),
-                },
-                Instruction::Value(ValueId(0)),
-                Instruction::Value(ValueId(1)),
-            ],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-    let error = one_function(function).verify().unwrap_err();
-    assert!(error.to_string().contains("invalid IR value 1"), "{error}");
-
-    let holder = declared(0, "Holder");
-    let values = vec![
-        Value {
-            span: None,
-            ty: holder.clone(),
-            kind: ValueKind::Load(Place::Local(LocalId(0))),
-        },
-        Value {
-            span: Some(0..1),
-            ty: Scalar::Bool.into(),
-            kind: ValueKind::Comparison {
-                operator: ComparisonOperator::Equal,
-                left: Operand::Value(ValueId(0)),
-                right: Operand::Value(ValueId(0)),
-            },
-        },
-    ];
-    let function = main_function(
-        values,
-        vec![holder],
-        vec![Block {
-            instructions: vec![
-                Instruction::Store {
-                    place: field(Place::Local(LocalId(0)), 0),
-                    operand: empty_slice(ints.clone()),
-                },
-                Instruction::Value(ValueId(0)),
-                Instruction::Value(ValueId(1)),
-            ],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-    let error = with_structs(vec![Struct { fields: vec![ints] }], function)
-        .verify()
-        .unwrap_err();
-    assert!(error.to_string().contains("invalid IR value 1"), "{error}");
-}
-
-#[test]
-fn verification_accepts_pointers_to_non_comparable_types() {
-    let pointer = Type::Pointer {
-        constant: false,
-        target: Box::new(slice(false, Scalar::Int.into())),
-    };
-    let holder = declared(0, "Holder");
-    let values = vec![
-        Value {
-            span: Some(0..1),
-            ty: Scalar::Bool.into(),
-            kind: ValueKind::Comparison {
-                operator: ComparisonOperator::Equal,
-                left: Operand::Literal(Literal::Null(pointer.clone())),
-                right: Operand::Literal(Literal::Null(pointer.clone())),
-            },
-        },
-        Value {
-            span: None,
-            ty: holder.clone(),
-            kind: ValueKind::Load(Place::Local(LocalId(0))),
-        },
-        Value {
-            span: Some(0..1),
-            ty: Scalar::Bool.into(),
-            kind: ValueKind::Comparison {
-                operator: ComparisonOperator::Equal,
-                left: Operand::Value(ValueId(1)),
-                right: Operand::Value(ValueId(1)),
-            },
-        },
-    ];
-    let function = main_function(
-        values,
-        vec![holder],
-        vec![Block {
-            instructions: vec![
-                Instruction::Store {
-                    place: field(Place::Local(LocalId(0)), 0),
-                    operand: Operand::Literal(Literal::Null(pointer.clone())),
-                },
-                Instruction::Value(ValueId(0)),
-                Instruction::Value(ValueId(1)),
-                Instruction::Value(ValueId(2)),
-            ],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-
-    with_structs(
-        vec![Struct {
-            fields: vec![pointer],
-        }],
-        function,
-    )
-    .verify()
-    .unwrap();
-}
-
-#[test]
-fn verification_rejects_non_pointer_nulls_and_indirect_places() {
-    let invalid_null = Global {
-        ty: Scalar::Int.into(),
-        values: vec![Literal::Null(Scalar::Int.into())],
-    };
-    let mut malformed = one_function(main_function(
-        vec![],
-        vec![],
-        vec![Block {
-            instructions: vec![],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    ));
-    malformed.globals = vec![invalid_null];
-    assert!(
-        malformed
-            .verify()
-            .unwrap_err()
-            .to_string()
-            .contains("IR null has non-pointer type `int`")
-    );
-
-    let invalid_indirect = Value {
-        span: None,
-        ty: Scalar::Int.into(),
-        kind: ValueKind::Load(Place::Indirect {
-            pointer: integer(0, Scalar::Int),
-            span: 0..1,
-        }),
-    };
-    let error = program(vec![invalid_indirect], integer(0, Scalar::Int))
-        .verify()
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("IR dereferences `int`"),
-        "{error}"
-    );
-}
+use crate::types::{ComparisonOperator, UnaryOperator};
 
 #[test]
 fn verification_rejects_invalid_array_places() {
@@ -431,7 +61,7 @@ fn verification_rejects_invalid_array_places() {
 fn verification_rejects_array_values_outside_copies_and_equality() {
     let row = array(2, Scalar::Int.into());
     let operation = |kind| Value {
-        span: Some(0..1),
+        span: None,
         ty: Scalar::Bool.into(),
         kind,
     };
@@ -598,31 +228,6 @@ fn verification_checks_a_globals_values_against_its_type() {
         let error = program.verify().unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
-}
-
-#[test]
-fn verification_rejects_an_aggregate_too_large_for_backend_layout() {
-    let mut program = one_function(main_function(
-        vec![],
-        vec![],
-        vec![Block {
-            instructions: vec![],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    ));
-    program.globals = vec![Global {
-        ty: array(1 << 60, Scalar::Int.into()),
-        values: vec![],
-    }];
-    let error = program.verify().unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("IR aggregate layout exceeds compiler limit of 1 PiB"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -813,42 +418,6 @@ fn verification_accepts_checked_conversion_operands() {
 }
 
 #[test]
-fn verification_admits_only_nontruncating_pointer_to_uint_conversion() {
-    let pointer = Type::Pointer {
-        constant: false,
-        target: Box::new(Scalar::Int.into()),
-    };
-    let conversion = |destination, truncating| Value {
-        span: None,
-        ty: destination,
-        kind: ValueKind::Convert {
-            operand: Operand::Literal(Literal::Null(pointer.clone())),
-            truncating,
-        },
-    };
-    program(
-        vec![conversion(Scalar::Uint.into(), false)],
-        integer(0, Scalar::Int),
-    )
-    .verify()
-    .unwrap();
-    for (destination, truncating) in [
-        (Scalar::Uint.into(), true),
-        (Scalar::Int.into(), false),
-        (pointer.clone(), false),
-    ] {
-        assert!(
-            program(
-                vec![conversion(destination, truncating)],
-                integer(0, Scalar::Int),
-            )
-            .verify()
-            .is_err()
-        );
-    }
-}
-
-#[test]
 fn verification_checks_operation_shapes_and_accepts_independent_shift_counts() {
     let operation = |ty: Scalar, kind| Value {
         span: Some(0..1),
@@ -908,6 +477,15 @@ fn verification_checks_operation_shapes_and_accepts_independent_shift_counts() {
                 right: integer(1, Scalar::U8),
             },
         },
+        // A comparison cannot trap, so it carries no span.
+        operation(
+            Scalar::Bool,
+            ValueKind::Comparison {
+                operator: ComparisonOperator::Equal,
+                left: integer(1, Scalar::U8),
+                right: integer(1, Scalar::U8),
+            },
+        ),
     ] {
         assert!(
             program(vec![value], integer(0, Scalar::Int))
@@ -960,92 +538,6 @@ fn verification_rejects_invalid_control_flow() {
     .verify()
     .unwrap_err();
     assert!(error.to_string().contains("not terminated"));
-}
-
-#[test]
-fn verification_rejects_loads_before_definite_initialization() {
-    let load = || Value {
-        span: None,
-        ty: Scalar::Int.into(),
-        kind: ValueKind::Load(Place::Local(LocalId(0))),
-    };
-    let same_block = main_function(
-        vec![load()],
-        vec![Scalar::Int.into()],
-        vec![Block {
-            instructions: vec![
-                Instruction::Value(ValueId(0)),
-                Instruction::Store {
-                    place: Place::Local(LocalId(0)),
-                    operand: integer(1, Scalar::Int),
-                },
-            ],
-            terminator: Terminator::Exit {
-                status: integer(0, Scalar::Int),
-            },
-        }],
-    );
-    let missing_path = main_function(
-        vec![load()],
-        vec![Scalar::Int.into()],
-        vec![
-            Block {
-                instructions: vec![],
-                terminator: Terminator::Branch {
-                    condition: integer(1, Scalar::Bool),
-                    then_target: BlockId(1),
-                    else_target: BlockId(2),
-                },
-            },
-            Block {
-                instructions: vec![Instruction::Store {
-                    place: Place::Local(LocalId(0)),
-                    operand: integer(1, Scalar::Int),
-                }],
-                terminator: Terminator::Jump { target: BlockId(3) },
-            },
-            Block {
-                instructions: vec![],
-                terminator: Terminator::Jump { target: BlockId(3) },
-            },
-            Block {
-                instructions: vec![Instruction::Value(ValueId(0))],
-                terminator: Terminator::Exit {
-                    status: integer(0, Scalar::Int),
-                },
-            },
-        ],
-    );
-    for function in [same_block, missing_path] {
-        let error = one_function(function).verify().unwrap_err();
-        assert!(error.to_string().contains("uninitialized local 0"));
-    }
-}
-
-#[test]
-fn arguments_initialize_the_parameters_before_the_entry_block() {
-    let reads_parameter = Function {
-        parameters: 1,
-        result: Some(Scalar::Int.into()),
-        values: vec![Value {
-            span: None,
-            ty: Scalar::Int.into(),
-            kind: ValueKind::Load(Place::Local(LocalId(0))),
-        }],
-        flow: ControlFlow {
-            entry: BlockId(0),
-            locals: vec![Scalar::Int.into()],
-            blocks: vec![Block {
-                instructions: vec![Instruction::Value(ValueId(0))],
-                terminator: Terminator::Return {
-                    value: Some(Operand::Value(ValueId(0))),
-                },
-            }],
-        },
-    };
-    two_functions(reads_parameter, vec![], vec![])
-        .verify()
-        .unwrap();
 }
 
 /// `main` runs `instructions` and exits; `callee` is `FunctionId(1)`.
@@ -1475,14 +967,15 @@ fn verification_admits_only_the_floating_point_operations() {
             single(2.0),
         ),
         unary(Scalar::F64, UnaryOperator::Negate, double(1.0)),
-        operation(
-            Scalar::Bool,
-            ValueKind::Comparison {
+        Value {
+            span: None,
+            ty: Scalar::Bool.into(),
+            kind: ValueKind::Comparison {
                 operator: ComparisonOperator::Less,
                 left: double(1.0),
                 right: double(2.0),
             },
-        ),
+        },
     ];
     for value in accepted {
         program(vec![value.clone()], integer(0, Scalar::Int))
@@ -1722,110 +1215,6 @@ fn verification_rejects_invalid_field_places() {
         error
             .to_string()
             .contains("IR store has type `int`, expected `u8`"),
-        "{error}"
-    );
-}
-
-#[test]
-fn verification_rejects_a_type_naming_a_struct_the_program_does_not_define() {
-    let exit = vec![Block {
-        instructions: vec![],
-        terminator: Terminator::Exit {
-            status: integer(0, Scalar::Int),
-        },
-    }];
-    // A local, a global, a value, and a field of a defined struct each reach
-    // type validation, so an unknown struct cannot arrive through any of them.
-    let unknown = array(2, declared(7, "Missing"));
-    let error = one_function(main_function(vec![], vec![unknown.clone()], exit.clone()))
-        .verify()
-        .unwrap_err();
-    assert!(error.to_string().contains("unknown struct 7"), "{error}");
-
-    let error = Program {
-        structs: vec![],
-        globals: vec![Global {
-            ty: declared(0, "Missing"),
-            values: vec![],
-        }],
-        functions: vec![main_function(vec![], vec![], exit.clone())],
-        main: FunctionId(0),
-    }
-    .verify()
-    .unwrap_err();
-    assert!(error.to_string().contains("unknown struct 0"), "{error}");
-
-    let error = with_structs(
-        vec![Struct {
-            fields: vec![unknown],
-        }],
-        main_function(vec![], vec![], exit),
-    )
-    .verify()
-    .unwrap_err();
-    assert!(error.to_string().contains("unknown struct 7"), "{error}");
-}
-
-#[test]
-fn verification_rejects_a_struct_table_whose_fields_form_a_cycle() {
-    let exit = vec![Block {
-        instructions: vec![],
-        terminator: Terminator::Exit {
-            status: integer(0, Scalar::Int),
-        },
-    }];
-    for structs in [
-        // A struct holding itself, and two structs holding each other through
-        // an array, which stores its elements inline just as a field does.
-        vec![Struct {
-            fields: vec![declared(0, "Loop")],
-        }],
-        vec![
-            Struct {
-                fields: vec![array(2, declared(1, "Second"))],
-            },
-            Struct {
-                fields: vec![declared(0, "First")],
-            },
-        ],
-    ] {
-        let error = with_structs(structs, main_function(vec![], vec![], exit.clone()))
-            .verify()
-            .unwrap_err();
-        assert!(error.to_string().contains("contains itself"), "{error}");
-    }
-}
-
-#[test]
-fn verification_limits_deep_acyclic_struct_tables() {
-    let structs = (0..=MAX_STRUCT_CONTAINMENT_DEPTH)
-        .map(|index| Struct {
-            fields: if index == MAX_STRUCT_CONTAINMENT_DEPTH {
-                vec![Scalar::Int.into()]
-            } else {
-                vec![declared(index + 1, &format!("S{}", index + 1))]
-            },
-        })
-        .collect();
-    let error = with_structs(
-        structs,
-        main_function(
-            vec![],
-            vec![],
-            vec![Block {
-                instructions: vec![],
-                terminator: Terminator::Exit {
-                    status: integer(0, Scalar::Int),
-                },
-            }],
-        ),
-    )
-    .verify()
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("IR struct containment exceeds compiler limit of 128"),
         "{error}"
     );
 }

@@ -1,7 +1,6 @@
 //! Expression inference, contextualization, indexing, lengths, and array literals.
 
 use crate::{
-    comparability,
     diagnostic::Diagnostic,
     frontend::syntax::{Expression, ExpressionKind, Syntax, find_call},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
@@ -29,39 +28,6 @@ fn no_field(
     )
 }
 
-/// Whether an expression is `null` wrapped in any number of groupings.
-fn is_null_expression(syntax: &Syntax, id: Idx<Expression>) -> bool {
-    match syntax.expressions[id].kind {
-        ExpressionKind::Null => true,
-        ExpressionKind::Grouping { expression } => is_null_expression(syntax, expression),
-        _ => false,
-    }
-}
-
-#[derive(Clone, Copy)]
-enum LocationUse {
-    Assignment,
-    AddressOf,
-    Slice,
-}
-
-impl LocationUse {
-    fn non_location_message(self) -> &'static str {
-        match self {
-            Self::Assignment => "cannot assign to an expression that is not a location",
-            Self::AddressOf => "cannot take the address of an expression that is not a location",
-            Self::Slice => "cannot slice an expression that is not a location",
-        }
-    }
-}
-
-struct LocationStep {
-    location: CheckedLocation,
-    ty: Type,
-    implicit_dereference: Option<std::ops::Range<usize>>,
-    mutable: bool,
-}
-
 impl CheckedProgram<'_> {
     pub(super) fn check_expression(
         &mut self,
@@ -70,25 +36,6 @@ impl CheckedProgram<'_> {
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let syntax = self.syntax;
-        if matches!(syntax.expressions[id].kind, ExpressionKind::Null) {
-            let Some(ty @ Type::Pointer { .. }) = destination else {
-                return Err(Diagnostic::new(
-                    syntax.expressions[id].span.clone(),
-                    "`null` requires a pointer type from context",
-                ));
-            };
-            return Ok(CheckedExpression {
-                ty,
-                untyped: false,
-                value: ExpressionValue::Null,
-                constant: Some(Constant::Null),
-            });
-        }
-        if let ExpressionKind::Grouping { expression } = syntax.expressions[id].kind
-            && is_null_expression(syntax, expression)
-        {
-            return self.check_grouping(expression, scopes, destination);
-        }
         // An array literal is the one expression whose type comes from its
         // destination rather than from concretizing an inferred type.
         if matches!(
@@ -114,7 +61,7 @@ impl CheckedProgram<'_> {
             };
             self.concretize(id, &mut checked, scalar)?;
         } else if let Some(destination) = destination
-            && !checked.ty.value_compatible(&destination)
+            && checked.ty != destination
         {
             return Err(mismatch(&checked, &destination));
         }
@@ -145,12 +92,6 @@ impl CheckedProgram<'_> {
                     constant: self.bindings[binding].constant.clone(),
                 })
             }
-            ExpressionKind::Null => Err(Diagnostic::new(
-                expression.span.clone(),
-                "`null` requires a pointer type from context",
-            )),
-            ExpressionKind::AddressOf { operand, .. } => self.infer_address_of(*operand, scopes),
-            ExpressionKind::Dereference { operand, .. } => self.infer_dereference(*operand, scopes),
             ExpressionKind::Grouping { expression } => self.infer_grouping(*expression, scopes),
             ExpressionKind::Unary {
                 operator,
@@ -194,9 +135,6 @@ impl CheckedProgram<'_> {
             ExpressionKind::ArrayLiteral { .. } => self.check_array_literal(id, scopes, None),
             ExpressionKind::Index { operand, index, .. } => {
                 self.infer_index(*operand, *index, scopes)
-            }
-            ExpressionKind::Slice { operand, low, high } => {
-                self.infer_slice(*operand, *low, *high, scopes)
             }
             ExpressionKind::Length { operand } => self.infer_length(*operand, scopes),
             ExpressionKind::StructLiteral { .. } => self.check_struct_literal(id, scopes),
@@ -328,10 +266,9 @@ impl CheckedProgram<'_> {
     }
 
     /// Checks one `[ … ]` step and gives the element type it reaches. The
-    /// operand must be an array or slice, and the index must be an `int`. An
-    /// array's type supplies a constant range check; a slice's length is part
-    /// of its value, so it does not. Index expressions and assignment targets
-    /// share this, so both spell one rule.
+    /// operand must be an array, whose type supplies a constant range check,
+    /// and the index must be an `int`. Index expressions and assignment
+    /// targets share this, so both spell one rule.
     pub(super) fn check_index_step(
         &mut self,
         operand: &Type,
@@ -339,19 +276,15 @@ impl CheckedProgram<'_> {
         index: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
-        let (element, length) = match operand {
-            Type::Array { length, element } => (&**element, Some(*length)),
-            Type::Slice { element, .. } => (&**element, None),
-            _ => {
-                return Err(Diagnostic::new(
-                    operand_span.clone(),
-                    format!("cannot index `{operand}`"),
-                ));
-            }
+        let Type::Array { length, element } = operand else {
+            return Err(Diagnostic::new(
+                operand_span.clone(),
+                format!("cannot index `{operand}`"),
+            ));
         };
         let checked = self.check_expression(index, scopes, Some(Scalar::Int.into()))?;
         if let Some(value) = checked.integer()
-            && length.is_some_and(|length| value.to_u64().is_none_or(|value| value >= length))
+            && value.to_u64().is_none_or(|value| value >= *length)
         {
             return Err(Diagnostic::new(
                 self.syntax.expressions[index].span.clone(),
@@ -359,7 +292,7 @@ impl CheckedProgram<'_> {
             ));
         }
         self.expressions.insert(index, checked);
-        Ok(element.clone())
+        Ok((**element).clone())
     }
 
     /// Checks a struct literal against the type it names itself, so an
@@ -495,22 +428,14 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let span = self.syntax.expressions[operand].span.clone();
-        let (operand_type, implicit_dereference) = match &checked_operand.ty {
-            Type::Pointer { target, .. } => (&**target, true),
-            _ => (&checked_operand.ty, false),
-        };
-        let (ordinal, ty) = self.check_field_step(operand_type, &span, name, name_span)?;
+        let (ordinal, ty) = self.check_field_step(&checked_operand.ty, &span, name, name_span)?;
         // `p.x` is not a constant expression, so the operand keeps its own
         // constant and is still evaluated.
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
             ty,
             untyped: false,
-            value: ExpressionValue::Field {
-                operand,
-                ordinal,
-                implicit_dereference,
-            },
+            value: ExpressionValue::Field { operand, ordinal },
             constant: None,
         })
     }
@@ -523,95 +448,14 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
         let span = self.syntax.expressions[operand].span.clone();
-        let (operand_type, implicit_dereference) = match &checked_operand.ty {
-            Type::Pointer { target, .. } => (&**target, true),
-            _ => (&checked_operand.ty, false),
-        };
-        let element = self.check_index_step(operand_type, &span, index, scopes)?;
+        let element = self.check_index_step(&checked_operand.ty, &span, index, scopes)?;
         // `a[i]` is never a constant expression, so both sub-expressions keep
         // their own constants and are still evaluated.
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
             ty: element,
             untyped: false,
-            value: ExpressionValue::Index {
-                operand,
-                index,
-                implicit_dereference,
-            },
-            constant: None,
-        })
-    }
-
-    fn infer_slice(
-        &mut self,
-        operand: Idx<Expression>,
-        low: Option<Idx<Expression>>,
-        high: Option<Idx<Expression>>,
-        scopes: &ScopeStack<'_>,
-    ) -> Result<CheckedExpression, Diagnostic> {
-        let LocationStep {
-            location: operand_location,
-            ty: operand_type,
-            implicit_dereference,
-            mutable,
-        } = self.location_step_operand(operand, scopes, true, LocationUse::Slice)?;
-        let (element, constant, length) = match &operand_type {
-            Type::Array { length, element } => ((**element).clone(), !mutable, Some(*length)),
-            Type::Slice { constant, element } => ((**element).clone(), *constant, None),
-            _ => {
-                return Err(Diagnostic::new(
-                    operand_location.span,
-                    format!("cannot slice `{operand_type}`"),
-                ));
-            }
-        };
-        let check_bound = |program: &mut Self, bound| {
-            let checked = program.check_expression(bound, scopes, Some(Scalar::Int.into()))?;
-            if let Some(length) = length
-                && let Some(value) = checked.integer()
-                && value.to_u64().is_none_or(|value| value > length)
-            {
-                return Err(Diagnostic::new(
-                    program.syntax.expressions[bound].span.clone(),
-                    format!("slice bound {value} is out of range for `{operand_type}`"),
-                ));
-            }
-            program.expressions.insert(bound, checked);
-            Ok::<_, Diagnostic>(())
-        };
-        if let Some(low) = low {
-            check_bound(self, low)?;
-        }
-        if let Some(high) = high {
-            check_bound(self, high)?;
-        }
-        if length.is_some()
-            && let (Some(low), Some(high)) = (low, high)
-        {
-            let low_value = self.expressions[low].integer().cloned();
-            let high_value = self.expressions[high].integer().cloned();
-            if let (Some(low_value), Some(high_value)) = (low_value, high_value)
-                && low_value > high_value
-            {
-                return Err(Diagnostic::new(
-                    self.syntax.expressions[high].span.clone(),
-                    format!("slice lower bound {low_value} exceeds upper bound {high_value}"),
-                ));
-            }
-        }
-        Ok(CheckedExpression {
-            ty: Type::Slice {
-                constant,
-                element: Box::new(element),
-            },
-            untyped: false,
-            value: ExpressionValue::Slice {
-                operand,
-                low,
-                high,
-                implicit_dereference: implicit_dereference.is_some(),
-            },
+            value: ExpressionValue::Index { operand, index },
             constant: None,
         })
     }
@@ -622,36 +466,25 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
-        let (operand_type, implicit_dereference) = match &checked_operand.ty {
-            Type::Pointer { target, .. } => (&**target, true),
-            _ => (&checked_operand.ty, false),
-        };
-        let length = match operand_type {
-            Type::Array { length, .. } => Some(*length),
-            Type::Slice { .. } => None,
-            _ => {
-                return Err(Diagnostic::new(
-                    self.syntax.expressions[operand].span.clone(),
-                    format!(
-                        "`len` requires an array or slice operand, found `{}`",
-                        checked_operand.ty
-                    ),
-                ));
-            }
+        let Type::Array { length, .. } = checked_operand.ty else {
+            return Err(Diagnostic::new(
+                self.syntax.expressions[operand].span.clone(),
+                format!(
+                    "`len` requires an array operand, found `{}`",
+                    checked_operand.ty
+                ),
+            ));
         };
         // The length comes from the operand's type, so it folds unless
         // reaching the type needs a call. The operand is evaluated either way.
-        let constant = length
-            .filter(|_| !implicit_dereference && find_call(self.syntax, operand).is_none())
-            .map(|length| Constant::Integer(BigInt::from(length)));
+        let constant = find_call(self.syntax, operand)
+            .is_none()
+            .then(|| Constant::Integer(BigInt::from(length)));
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
             ty: Scalar::Int.into(),
             untyped: false,
-            value: ExpressionValue::Length {
-                operand,
-                implicit_dereference,
-            },
+            value: ExpressionValue::Length { operand },
             constant,
         })
     }
@@ -686,313 +519,60 @@ impl CheckedProgram<'_> {
         Ok(result)
     }
 
-    /// A grouped `null` keeps the pointer context its position supplies. Other
-    /// grouping stays inference-only, so array literals do not gain context
-    /// through parentheses.
-    fn check_grouping(
-        &mut self,
-        inner: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-        destination: Option<Type>,
-    ) -> Result<CheckedExpression, Diagnostic> {
-        let checked = self.check_expression(inner, scopes, destination)?;
-        let result = CheckedExpression {
-            ty: checked.ty.clone(),
-            untyped: checked.untyped,
-            value: ExpressionValue::Grouping { expression: inner },
-            constant: checked.constant.clone(),
-        };
-        self.record_operand(inner, checked, result.constant.is_some());
-        Ok(result)
-    }
-
-    fn infer_address_of(
-        &mut self,
-        operand: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-    ) -> Result<CheckedExpression, Diagnostic> {
-        let location =
-            self.check_location_with_facts(operand, scopes, true, LocationUse::AddressOf)?;
-        Ok(CheckedExpression {
-            ty: Type::Pointer {
-                constant: !location.mutable,
-                target: Box::new(location.ty),
-            },
-            untyped: false,
-            value: ExpressionValue::AddressOf { operand },
-            constant: None,
-        })
-    }
-
-    fn infer_dereference(
-        &mut self,
-        operand: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-    ) -> Result<CheckedExpression, Diagnostic> {
-        let checked_operand = self.infer_expression(operand, scopes)?;
-        let Type::Pointer {
-            constant: _,
-            target,
-        } = &checked_operand.ty
-        else {
-            return Err(Diagnostic::new(
-                self.syntax.expressions[operand].span.clone(),
-                format!("cannot dereference `{}`", checked_operand.ty),
-            ));
-        };
-        let ty = (**target).clone();
-        self.record_operand(operand, checked_operand, false);
-        Ok(CheckedExpression {
-            ty,
-            untyped: false,
-            value: ExpressionValue::Dereference { operand },
-            constant: None,
-        })
-    }
-
-    /// Checks an expression in a position that requires a stored location.
-    /// This follows the source order of every index, field, and dereference
-    /// operand while retaining an arbitrary dereference value for later IR.
+    /// Checks an expression in a position that requires a stored location: a
+    /// binding, or an index or field selection from another location, in any
+    /// grouping. Index expressions are checked in source order.
     pub(super) fn check_location(
         &mut self,
         id: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedLocation, Diagnostic> {
-        self.check_location_with_facts(id, scopes, false, LocationUse::Assignment)
-    }
-
-    fn check_location_with_facts(
-        &mut self,
-        id: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-        record: bool,
-        use_: LocationUse,
-    ) -> Result<CheckedLocation, Diagnostic> {
         match &self.syntax.expressions[id].kind {
             ExpressionKind::Reference(name) => {
                 let binding = self.resolve(name, scopes)?;
-                let location = CheckedLocation {
+                Ok(CheckedLocation {
                     kind: CheckedLocationKind::Binding(binding),
                     ty: self.bindings[binding].ty.clone(),
-                    mutable: self.bindings[binding].mutable,
                     span: name.span.clone(),
-                };
-                if record {
-                    self.expressions.insert(
-                        id,
-                        CheckedExpression {
-                            ty: location.ty.clone(),
-                            untyped: false,
-                            value: ExpressionValue::Reference(binding),
-                            constant: self.bindings[binding].constant.clone(),
-                        },
-                    );
-                }
-                Ok(location)
+                })
             }
-            ExpressionKind::Grouping { expression } => {
-                let location = self.check_location_with_facts(*expression, scopes, record, use_)?;
-                if record {
-                    self.expressions.insert(
-                        id,
-                        CheckedExpression {
-                            ty: location.ty.clone(),
-                            untyped: false,
-                            value: ExpressionValue::Grouping {
-                                expression: *expression,
-                            },
-                            constant: None,
-                        },
-                    );
-                }
-                Ok(location)
-            }
-            ExpressionKind::Index { operand, index, .. } => {
-                let LocationStep {
-                    location: operand_location,
-                    ty: operand_type,
-                    implicit_dereference,
-                    mutable,
-                } = self.location_step_operand(*operand, scopes, record, use_)?;
+            ExpressionKind::Grouping { expression } => self.check_location(*expression, scopes),
+            ExpressionKind::Index { operand, index } => {
+                let operand_location = self.check_location(*operand, scopes)?;
                 let span = operand_location.span.clone();
-                let ty = self.check_index_step(&operand_type, &span, *index, scopes)?;
-                let implicit = implicit_dereference.is_some();
-                let mutable = match &operand_type {
-                    Type::Slice { constant, .. } => !*constant,
-                    _ => mutable,
-                };
-                let location = CheckedLocation {
+                let ty = self.check_index_step(&operand_location.ty, &span, *index, scopes)?;
+                Ok(CheckedLocation {
                     kind: CheckedLocationKind::Index {
                         operand: Box::new(operand_location),
                         index: *index,
-                        implicit_dereference,
                     },
                     ty,
-                    mutable,
                     span,
-                };
-                if record {
-                    self.expressions.insert(
-                        id,
-                        CheckedExpression {
-                            ty: location.ty.clone(),
-                            untyped: false,
-                            value: ExpressionValue::Index {
-                                operand: *operand,
-                                index: *index,
-                                implicit_dereference: implicit,
-                            },
-                            constant: None,
-                        },
-                    );
-                }
-                Ok(location)
+                })
             }
             ExpressionKind::Field {
                 operand,
                 name,
                 name_span,
             } => {
-                let LocationStep {
-                    location: operand_location,
-                    ty: operand_type,
-                    implicit_dereference,
-                    mutable,
-                } = self.location_step_operand(*operand, scopes, record, use_)?;
+                let operand_location = self.check_location(*operand, scopes)?;
                 let span = operand_location.span.clone();
                 let (ordinal, ty) =
-                    self.check_field_step(&operand_type, &span, *name, name_span)?;
-                let implicit = implicit_dereference.is_some();
-                let location = CheckedLocation {
+                    self.check_field_step(&operand_location.ty, &span, *name, name_span)?;
+                Ok(CheckedLocation {
                     kind: CheckedLocationKind::Field {
                         operand: Box::new(operand_location),
                         ordinal,
-                        implicit_dereference,
                     },
                     ty,
-                    mutable,
                     span,
-                };
-                if record {
-                    self.expressions.insert(
-                        id,
-                        CheckedExpression {
-                            ty: location.ty.clone(),
-                            untyped: false,
-                            value: ExpressionValue::Field {
-                                operand: *operand,
-                                ordinal,
-                                implicit_dereference: implicit,
-                            },
-                            constant: None,
-                        },
-                    );
-                }
-                Ok(location)
-            }
-            ExpressionKind::Dereference { operand, .. } => {
-                let checked = self.infer_dereference(*operand, scopes)?;
-                let Type::Pointer { constant, .. } = &self
-                    .expressions
-                    .get(*operand)
-                    .map(|value| &value.ty)
-                    .unwrap_or(&checked.ty)
-                else {
-                    unreachable!("dereference checking requires a pointer operand")
-                };
-                let mutable = !*constant;
-                let ty = checked.ty.clone();
-                self.expressions.insert(id, checked);
-                Ok(CheckedLocation {
-                    kind: CheckedLocationKind::Dereference { operand: *operand },
-                    ty,
-                    mutable,
-                    span: self.syntax.expressions[id].span.clone(),
                 })
             }
             _ => Err(Diagnostic::new(
                 self.syntax.expressions[id].span.clone(),
-                use_.non_location_message(),
+                "cannot assign to an expression that is not a location",
             )),
         }
-    }
-
-    /// Checks the shared base of an index or field location, dereferencing one
-    /// pointer level when needed and retaining the source span for its trap.
-    fn location_step_operand(
-        &mut self,
-        id: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-        record: bool,
-        use_: LocationUse,
-    ) -> Result<LocationStep, Diagnostic> {
-        let operand = self.location_operand(id, scopes, record, use_)?;
-        if let Type::Pointer { constant, target } = &operand.ty {
-            let target = (**target).clone();
-            let mutable = !*constant;
-            return Ok(LocationStep {
-                location: operand,
-                ty: target,
-                implicit_dereference: Some(self.syntax.expressions[id].span.clone()),
-                mutable,
-            });
-        }
-        let ty = operand.ty.clone();
-        let mutable = operand.mutable;
-        Ok(LocationStep {
-            location: operand,
-            ty,
-            implicit_dereference: None,
-            mutable,
-        })
-    }
-
-    /// Gives field and index locations a pointer or slice value to step
-    /// through even when that value is not itself a location, such as a call
-    /// result.
-    fn location_operand(
-        &mut self,
-        id: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-        record: bool,
-        use_: LocationUse,
-    ) -> Result<CheckedLocation, Diagnostic> {
-        let location = self.check_location_with_facts(id, scopes, record, use_);
-        let Err(location_error) = location else {
-            return location;
-        };
-        let checked = match self.infer_expression(id, scopes) {
-            Ok(checked) => checked,
-            // A call is never a location, so the location failure says nothing
-            // the operand did not already imply; report what the call itself
-            // got wrong. Any other operand keeps the location diagnostic.
-            Err(error) => {
-                return Err(
-                    if matches!(self.syntax.expressions[id].kind, ExpressionKind::Call(_)) {
-                        error
-                    } else {
-                        location_error
-                    },
-                );
-            }
-        };
-        let location = match &checked.ty {
-            Type::Pointer { constant, target } => CheckedLocation {
-                kind: CheckedLocationKind::Dereference { operand: id },
-                ty: (**target).clone(),
-                mutable: !*constant,
-                span: self.syntax.expressions[id].span.clone(),
-            },
-            Type::Slice { .. } => CheckedLocation {
-                kind: CheckedLocationKind::SliceValue { operand: id },
-                ty: checked.ty.clone(),
-                mutable: false,
-                span: self.syntax.expressions[id].span.clone(),
-            },
-            _ => return Err(location_error),
-        };
-        self.expressions.insert(id, checked);
-        Ok(location)
     }
 
     fn infer_unary(
@@ -1097,37 +677,19 @@ impl CheckedProgram<'_> {
         right: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
-        let left_null = is_null_expression(self.syntax, left);
-        let right_null = is_null_expression(self.syntax, right);
-        let (mut checked_left, mut checked_right) = if left_null {
-            // `null` has no evaluation of its own, so the right operand can
-            // provide its pointer type without changing runtime order.
-            let right = self.infer_expression(right, scopes)?;
-            let left = self.check_expression(left, scopes, Some(right.ty.clone()))?;
-            (left, right)
-        } else {
-            let left = self.infer_expression(left, scopes)?;
-            if right_null {
-                let right = self.check_expression(right, scopes, Some(left.ty.clone()))?;
-                (left, right)
-            } else {
-                (left, self.infer_expression(right, scopes)?)
-            }
-        };
+        let mut checked_left = self.infer_expression(left, scopes)?;
+        let mut checked_right = self.infer_expression(right, scopes)?;
         self.unify_comparison(
             operator,
             operator_span,
             (left, &mut checked_left),
             (right, &mut checked_right),
         )?;
-        let pointer_comparison = matches!(checked_left.ty, Type::Pointer { .. });
         let constant = match (
             checked_left.constant.as_ref(),
             checked_right.constant.as_ref(),
         ) {
-            (Some(left), Some(right)) if !pointer_comparison => {
-                Some(compare_constants(operator, left, right))
-            }
+            (Some(left), Some(right)) => Some(compare_constants(operator, left, right)),
             _ => None,
         };
         let result = CheckedExpression {
@@ -1160,52 +722,6 @@ impl CheckedProgram<'_> {
     ) -> Result<(), Diagnostic> {
         let (left_id, left) = left;
         let (right_id, right) = right;
-        if operator.is_equality() {
-            for operand in [&*left, &*right] {
-                if !comparability::comparable(self, &operand.ty) {
-                    let detail = if matches!(operand.ty, Type::Slice { .. }) {
-                        String::new()
-                    } else {
-                        ", which contains a slice".to_owned()
-                    };
-                    return Err(Diagnostic::new(
-                        operator_span.clone(),
-                        format!("`==` and `!=` are not defined on `{}`{detail}", operand.ty),
-                    ));
-                }
-            }
-        }
-        if let (
-            Type::Pointer {
-                target: left_target,
-                ..
-            },
-            Type::Pointer {
-                target: right_target,
-                ..
-            },
-        ) = (&left.ty, &right.ty)
-        {
-            if left_target != right_target {
-                return Err(Diagnostic::new(
-                    operator_span.clone(),
-                    format!(
-                        "comparison operands have different types `{}` and `{}`",
-                        left.ty, right.ty
-                    ),
-                ));
-            }
-            if !matches!(
-                operator,
-                ComparisonOperator::Equal | ComparisonOperator::NotEqual
-            ) {
-                return Err(Diagnostic::new(
-                    operator_span.clone(),
-                    format!("only `==` and `!=` are defined on `{}`", left.ty),
-                ));
-            }
-            return Ok(());
-        }
         let unified = match (left.ty.scalar(), right.ty.scalar()) {
             (Some(left_type), Some(right_type)) => match (left.untyped, right.untyped) {
                 (false, true) => return self.concretize(right_id, right, left_type),
@@ -1230,20 +746,10 @@ impl CheckedProgram<'_> {
             ));
         }
         if left.ty.scalar().is_none() && !operator.is_equality() {
-            let message = if comparability::comparable(self, &left.ty) {
-                format!("only `==` and `!=` are defined on `{}`", left.ty)
-            } else {
-                let detail = if matches!(left.ty, Type::Slice { .. }) {
-                    String::new()
-                } else {
-                    ", which contains a slice".to_owned()
-                };
-                format!(
-                    "`<`, `<=`, `>`, and `>=` are not defined on `{}`{detail}",
-                    left.ty,
-                )
-            };
-            return Err(Diagnostic::new(operator_span.clone(), message));
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                format!("only `==` and `!=` are defined on `{}`", left.ty),
+            ));
         }
         Ok(())
     }
@@ -1323,21 +829,6 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_operand = self.infer_expression(operand, scopes)?;
         // Only integers reinterpret their bits, while every number converts.
-        if !truncating
-            && destination == Scalar::Uint
-            && matches!(checked_operand.ty, Type::Pointer { .. })
-        {
-            self.record_operand(operand, checked_operand, false);
-            return Ok(CheckedExpression {
-                ty: Scalar::Uint.into(),
-                untyped: false,
-                value: ExpressionValue::Conversion {
-                    operand,
-                    truncating,
-                },
-                constant: None,
-            });
-        }
         let convertible = if truncating {
             integer_operand(&checked_operand)
         } else {

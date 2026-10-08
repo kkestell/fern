@@ -30,8 +30,8 @@ impl StructFields for Layout<'_> {
     }
 }
 
-/// Verification rejects a layout the target cannot address, so the backend
-/// reads a derivation that is known to be representable.
+/// Semantic checking rejects a layout the target cannot address, so the
+/// backend reads a derivation that is known to be representable.
 const REPRESENTABLE: &str = "verified IR has a representable layout";
 
 impl<'a> Layout<'a> {
@@ -47,8 +47,6 @@ impl<'a> Layout<'a> {
     pub(super) fn class(&self, ty: &Type) -> String {
         match ty {
             Type::Scalar(scalar) => qbe_type(*scalar).to_string(),
-            Type::Pointer { .. } => "l".to_owned(),
-            Type::Slice { .. } => ":slice".to_owned(),
             Type::Array { .. } => self.array_class(ty),
             Type::Struct(declared) => format!(":struct{}", declared.id.0),
         }
@@ -75,11 +73,6 @@ impl<'a> Layout<'a> {
         self.structs[id.0].fields.len()
     }
 
-    /// The byte offset of a slice's length word from its base address.
-    pub(super) fn slice_length_offset(&self) -> u64 {
-        crate::layout::scalar_bytes(crate::types::Scalar::Uint)
-    }
-
     fn offsets(&self, id: StructId) -> Vec<u64> {
         self.layouts
             .struct_layout(self, id)
@@ -88,7 +81,7 @@ impl<'a> Layout<'a> {
             .clone()
     }
 
-    /// Every scalar or pointer storage leaf and its byte offset, in the order
+    /// Every scalar storage leaf and its byte offset, in the order
     /// IR globals flatten their literals.
     pub(super) fn scalar_slots(&self, ty: &Type) -> Vec<(u64, Type)> {
         let mut slots = Vec::new();
@@ -104,7 +97,6 @@ impl<'a> Layout<'a> {
             layout: self,
             structs: vec![false; self.structs.len()],
             arrays: BTreeSet::new(),
-            slice: false,
             text: String::new(),
         };
         for function in functions {
@@ -124,8 +116,6 @@ impl<'a> Layout<'a> {
         let (element, count) = array_parts(ty);
         match element {
             Type::Scalar(scalar) => format!(":array{}{count}", qbe_type(*scalar)),
-            Type::Pointer { .. } => format!(":arrayl{count}"),
-            Type::Slice { .. } => format!(":arrayslice{count}"),
             Type::Struct(declared) => format!(":arraystruct{}x{count}", declared.id.0),
             Type::Array { .. } => unreachable!("array parts stop at a scalar or a struct"),
         }
@@ -134,8 +124,6 @@ impl<'a> Layout<'a> {
     fn collect_scalar_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Type)>) {
         match ty {
             Type::Scalar(scalar) => slots.push((base, (*scalar).into())),
-            Type::Pointer { .. } => slots.push((base, ty.clone())),
-            Type::Slice { .. } => slots.push((base, ty.clone())),
             Type::Array { length, element } => {
                 let stride = self.size(element);
                 for index in 0..*length {
@@ -161,7 +149,6 @@ struct TypeDefinitions<'a> {
     layout: &'a Layout<'a>,
     structs: Vec<bool>,
     arrays: BTreeSet<String>,
-    slice: bool,
     text: String,
 }
 
@@ -169,12 +156,6 @@ impl TypeDefinitions<'_> {
     fn define(&mut self, ty: &Type) {
         match ty {
             Type::Scalar(_) => {}
-            Type::Pointer { .. } => {}
-            Type::Slice { .. } => {
-                if !std::mem::replace(&mut self.slice, true) {
-                    self.text.push_str("type :slice = { l, l }\n");
-                }
-            }
             Type::Array { .. } => self.define_array(ty),
             Type::Struct(declared) => self.define_struct(declared.id),
         }

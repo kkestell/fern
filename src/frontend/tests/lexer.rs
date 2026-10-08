@@ -192,9 +192,9 @@ fn malformed_integers_cover_the_whole_candidate() {
 #[test]
 fn reserved_names_agree_in_all_name_positions() {
     for name in [
-        "const", "var", "true", "false", "null", "fn", "void", "exit", "i8", "i16", "i32", "i64",
-        "u8", "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for",
-        "break", "continue", "return", "in", "len", "pub", "use", "type", "struct",
+        "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
+        "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break",
+        "continue", "return", "in", "len", "pub", "use", "type", "struct",
     ] {
         for (prefix, suffix) in [
             ("fn ", "() -> void {}"),
@@ -222,7 +222,9 @@ fn reserved_names_agree_in_all_name_positions() {
         }
     }
 
-    for name in ["alloc", "free", "rune", "str", "uintptr", "size"] {
+    for name in [
+        "alloc", "free", "null", "rune", "str", "string", "uintptr", "size",
+    ] {
         parse(&format!("fn {name}() -> void {{}}"))
             .unwrap_or_else(|error| panic!("{name} should not be reserved: {error:?}"));
     }

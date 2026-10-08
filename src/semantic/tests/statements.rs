@@ -49,7 +49,7 @@ fn for_in_binds_an_element_and_an_optional_index() {
     );
     rejects_root(
         "fn main() -> void { var x = 1; for v in «x» {} }",
-        "`for … in` requires an array or slice, found `int`",
+        "`for … in` requires an array, found `int`",
     );
 }
 
@@ -635,16 +635,12 @@ fn checked_target_steps(source: &str) -> Vec<Vec<String>> {
         .map(|(_, target)| {
             fn steps(location: &CheckedLocation, found: &mut Vec<String>) {
                 match &location.kind {
-                    CheckedLocationKind::Binding(_)
-                    | CheckedLocationKind::SliceValue { .. }
-                    | CheckedLocationKind::Dereference { .. } => {}
+                    CheckedLocationKind::Binding(_) => {}
                     CheckedLocationKind::Index { operand, .. } => {
                         steps(operand, found);
                         found.push("index".to_owned());
                     }
-                    CheckedLocationKind::Field {
-                        operand, ordinal, ..
-                    } => {
+                    CheckedLocationKind::Field { operand, ordinal } => {
                         steps(operand, found);
                         found.push(format!("field {ordinal}"));
                     }
@@ -813,40 +809,9 @@ fn a_declaration_without_an_initializer_is_still_a_const_or_a_typed_binding() {
 }
 
 #[test]
-fn indirect_assignment_observes_pointer_mutability() {
-    accepts("var value = 1; const p = &value; *p = 2; *p += 1;");
-    accepts_source(
-        "type Point struct { x: int } fn main() -> void { var point = Point { x = 1 }; const p = &point; p.x = 2; }",
-    );
-    rejects(
-        "var p: *const int = null; *p = 1;",
-        "*p",
-        "cannot assign to an immutable location",
-    );
-    rejects(
-        "var value = 1; const p = &value; var q: *const int = p; *q = 2;",
-        "*q",
-        "cannot assign to an immutable location",
-    );
-    accepts_source(
-        "type Point struct { x: int }
-         fn point(pointer: *Point) -> *Point { return pointer; }
-         fn values(pointer: *[2]int) -> *[2]int { return pointer; }
-         fn main() -> void {
-             var p: Point;
-             var a: [2]int;
-             point(&p).x = 1;
-             point(&p).x += 1;
-             values(&a)[0] = 2;
-             values(&a)[0] += 1;
-         }",
-    );
-}
-
-#[test]
 fn an_assignment_target_must_be_a_location() {
-    // A statement starts an assignment target at a name, a `*`, or a `(`, so
-    // those are the heads a non-location target can reach checking through.
+    // A statement starts an assignment target at a name or a `(`, so those
+    // are the heads a non-location target can reach checking through.
     for (body, offending) in [
         ("var x = 1; int(x) = 2;", "int(x)"),
         ("var x = 1; i64.truncate(x) = 2;", "i64.truncate(x)"),
@@ -865,47 +830,4 @@ fn an_assignment_target_must_be_a_location() {
         "type Point struct { x: int }
          fn main() -> void { var p = Point { x = 1 }; (p).x = 2; }",
     );
-}
-
-#[test]
-fn a_slicing_expression_is_not_an_assignment_location() {
-    rejects_source(
-        "fn main() -> void { var values: [3]int = [1, 2, 3]; values[1:2] = values[0]; }",
-        "values[1:2]",
-        "cannot assign to an expression that is not a location",
-    );
-}
-
-#[test]
-fn slice_elements_follow_slice_mutability_and_iteration_rules() {
-    accepts_source(
-        "fn main() -> void {
-             var s: []int;
-             const c: []int;
-             s[0] = 1;
-             c[0] += 1;
-             for v, i in s { exit(i); }
-         }",
-    );
-    accepts_source(
-        "fn main() -> void {
-             var a: [3]int = [1, 2, 3];
-             a[1:][0] = 1;
-             for v in a[1:] { exit(v); }
-         }",
-    );
-    for (source, offending, message) in [
-        (
-            "fn main() -> void { var s: []const int; s[0] = 1; }",
-            "s[0]",
-            "cannot assign to an immutable location",
-        ),
-        (
-            "fn main() -> void { var s: []int; for v in s { v = 1; } }",
-            "v",
-            "cannot assign to immutable binding `v`",
-        ),
-    ] {
-        rejects_source(source, offending, message);
-    }
 }

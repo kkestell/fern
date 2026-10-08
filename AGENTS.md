@@ -15,7 +15,6 @@ described as "behavior" or a "specification."
 | `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
 | `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
 | `eng/todo.md`         | Ordered implementation tasks and their completion state. A task may have subtasks; mark the task complete when all its subtasks are complete.                                           |
-| `eng/string-design-options.md` | Non-authoritative string design proposals retained for comparison until `docs/spec.md` settles the language behavior.                                                        |
 | `eng/plans/`          | Implementation plans for a single TODO task or a defect repair: concrete file changes, focused tests, and decisions the owning documents leave open.                                    |
 | `eng/reviews/`        | Code-review reports: scope, findings, unresolved suspicions, and checks run.                                                                                                           |
 | `AGENTS.md`           | Repository workflow, document ownership, and instructions for agents.                                                                                                                  |
@@ -44,6 +43,8 @@ either is missing. The architecture document is not required to begin planning.
 - `src/source.rs`, `src/diagnostic.rs` — source loading and diagnostics.
 - `src/types.rs` — the Fern type and operator enums, their spellings, and the
   representation of a concrete floating-point value, shared by every phase.
+- `src/layout.rs` — the shared value layout: byte size, alignment, and field
+  offsets.
 - `src/frontend/`, `src/semantic/` — parsing and semantic implementations,
   tests, and snapshots.
 - `src/module.rs` — module discovery, import resolution, and the dependency
@@ -51,8 +52,6 @@ either is missing. The architecture document is not required to begin planning.
 - `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
 - `eng/architecture.md` — durable compiler phase, storage, identity,
   diagnostic, and verification boundaries.
-- `eng/string-design-options.md` — competing, non-authoritative string design
-  proposals.
 - `eng/reviews/` — checked-in code-review reports.
 - `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
   frontend and IR snapshot fixtures.

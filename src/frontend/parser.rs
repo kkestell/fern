@@ -24,7 +24,6 @@ fn reserved(name: &str) -> bool {
             | "var"
             | "true"
             | "false"
-            | "null"
             | "fn"
             | "void"
             | "exit"
@@ -107,8 +106,6 @@ enum StructLiterals {
 enum PrefixOperator {
     Value(UnaryOperator),
     LogicalNot,
-    AddressOf,
-    Dereference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,9 +431,7 @@ impl Parser<'_> {
                 self.assignment(StructLiterals::Permitted)?
             }
             Some(Token::Name) if self.starts_call() => StatementKind::Call { call: self.call()? },
-            Some(Token::Name | Token::Star | Token::LeftParen) => {
-                self.assignment(StructLiterals::Permitted)?
-            }
+            Some(Token::Name | Token::LeftParen) => self.assignment(StructLiterals::Permitted)?,
             Some(Token::Exit) => {
                 self.advance()?;
                 let (argument, _) = self.single_argument("exit")?;
@@ -687,19 +682,14 @@ impl Parser<'_> {
     }
 
     /// Returns the token that follows an assignment target starting at the
-    /// current token, and whether the target carried any step: a leading `*`,
-    /// a parenthesized group, an index, or a field selection. `None` when no
+    /// current token, and whether the target carried any step: a
+    /// parenthesized group, an index, or a field selection. `None` when no
     /// target starts here.
     fn token_after_target(&self) -> Option<(Token, bool)> {
         let mut lexer = self.lexer.clone();
-        let mut current = self.current?;
-        let mut slice = self.lexer.slice();
+        let current = self.current?;
+        let slice = self.lexer.slice();
         let mut stepped = false;
-        while current == Token::Star {
-            stepped = true;
-            current = lookahead(&mut lexer)?;
-            slice = lexer.slice();
-        }
         let mut following = if current == Token::LeftParen {
             stepped = true;
             let mut depth = 1usize;
@@ -885,26 +875,10 @@ impl Parser<'_> {
     }
 
     /// Parses a type annotation, which is a built-in scalar name, a declared
-    /// type name, one or more `[ … ]` lengths in front of an element
-    /// annotation, a slice annotation, or `*` or `*const` in front of a target
+    /// type name, or one or more `[ … ]` lengths in front of an element
     /// annotation.
     fn type_annotation(&mut self) -> Result<Idx<TypeAnnotation>, Diagnostic> {
         let start = self.span.start;
-        if self.current == Some(Token::Star) {
-            self.enter_nesting()?;
-            self.advance()?;
-            let constant = self.current == Some(Token::Const);
-            if constant {
-                self.advance()?;
-            }
-            let target = self.type_annotation()?;
-            self.nesting -= 1;
-            let span = start..self.syntax.annotations[target].span.end;
-            return Ok(self.syntax.annotations.alloc(TypeAnnotation {
-                kind: AnnotationKind::Pointer { constant, target },
-                span,
-            }));
-        }
         if self.current != Some(Token::LeftBracket) {
             // A built-in scalar name is reserved, so an ordinary identifier
             // here names a declared type.
@@ -921,20 +895,6 @@ impl Parser<'_> {
         }
         self.enter_nesting()?;
         self.advance()?;
-        if self.current == Some(Token::RightBracket) {
-            self.advance()?;
-            let constant = self.current == Some(Token::Const);
-            if constant {
-                self.advance()?;
-            }
-            let element = self.type_annotation()?;
-            self.nesting -= 1;
-            let span = start..self.syntax.annotations[element].span.end;
-            return Ok(self.syntax.annotations.alloc(TypeAnnotation {
-                kind: AnnotationKind::Slice { constant, element },
-                span,
-            }));
-        }
         let length = if self.current == Some(Token::Name) && self.lexer.slice() == "_" {
             self.advance()?;
             None
@@ -1052,8 +1012,6 @@ impl Parser<'_> {
     ) -> Result<Idx<Expression>, Diagnostic> {
         let operator = match self.current {
             Some(Token::Bang) => PrefixOperator::LogicalNot,
-            Some(Token::Ampersand) => PrefixOperator::AddressOf,
-            Some(Token::Star) => PrefixOperator::Dereference,
             Some(Token::Minus) => PrefixOperator::Value(UnaryOperator::Negate),
             Some(Token::WrappingMinus) => PrefixOperator::Value(UnaryOperator::WrappingNegate),
             Some(Token::Caret) => PrefixOperator::Value(UnaryOperator::Complement),
@@ -1067,14 +1025,6 @@ impl Parser<'_> {
         let span = operator_span.start..self.syntax.expressions[operand].span.end;
         let kind = match operator {
             PrefixOperator::LogicalNot => ExpressionKind::LogicalNot {
-                operator_span,
-                operand,
-            },
-            PrefixOperator::AddressOf => ExpressionKind::AddressOf {
-                operator_span,
-                operand,
-            },
-            PrefixOperator::Dereference => ExpressionKind::Dereference {
                 operator_span,
                 operand,
             },
@@ -1101,44 +1051,19 @@ impl Parser<'_> {
         let mut operand = self.primary_expression(literals)?;
         loop {
             let step_span = self.span.clone();
-            // Each step's own depth is its bound or index expression's, and a
-            // field selection carries no subexpression of its own.
+            // Each step's own depth is its index expression's, and a field
+            // selection carries no subexpression of its own.
             let (kind, end, step_depth) = match self.current {
                 Some(Token::LeftBracket) => {
                     self.enter_nesting()?;
                     self.advance()?;
-                    let low = if self.current == Some(Token::Colon) {
-                        None
-                    } else {
-                        Some(self.expression()?)
-                    };
-                    let (kind, end, depth) = if self.current == Some(Token::Colon) {
-                        self.advance()?;
-                        let high = if self.current == Some(Token::RightBracket) {
-                            None
-                        } else {
-                            Some(self.expression()?)
-                        };
-                        let end = self
-                            .expect(Token::RightBracket, "expected `]` after slice bounds")?
-                            .end;
-                        let depth = low
-                            .iter()
-                            .chain(high.iter())
-                            .map(|&bound| self.syntax.expressions[bound].depth)
-                            .max()
-                            .unwrap_or(0);
-                        (ExpressionKind::Slice { operand, low, high }, end, depth)
-                    } else {
-                        let index = low.expect("an index expression is present without `:`");
-                        let end = self
-                            .expect(Token::RightBracket, "expected `]` after index")?
-                            .end;
-                        let depth = self.syntax.expressions[index].depth;
-                        (ExpressionKind::Index { operand, index }, end, depth)
-                    };
+                    let index = self.expression()?;
+                    let end = self
+                        .expect(Token::RightBracket, "expected `]` after index")?
+                        .end;
                     self.nesting -= 1;
-                    (kind, end, depth)
+                    let depth = self.syntax.expressions[index].depth;
+                    (ExpressionKind::Index { operand, index }, end, depth)
                 }
                 Some(Token::Dot) => {
                     self.advance()?;
@@ -1190,9 +1115,6 @@ impl Parser<'_> {
             let value = self.current == Some(Token::True);
             self.advance()?;
             ExpressionKind::Boolean(value)
-        } else if self.current == Some(Token::Null) {
-            self.advance()?;
-            ExpressionKind::Null
         } else if self.current == Some(Token::LeftParen) {
             return self.grouping_expression(span);
         } else if self.current == Some(Token::LeftBracket) {

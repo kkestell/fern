@@ -297,9 +297,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        333..335,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -531,9 +529,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        534..535,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -607,9 +603,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        633..635,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),

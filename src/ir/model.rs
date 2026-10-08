@@ -37,32 +37,6 @@ pub(crate) enum Place {
         base: Box<Place>,
         ordinal: usize,
     },
-    /// A location reached by dereferencing `pointer`. The span identifies the
-    /// eventual null-check trap at the native boundary.
-    Indirect {
-        pointer: Operand,
-        span: std::ops::Range<usize>,
-    },
-    /// An element reached through a slice value. Unlike `Element`, a slice
-    /// does not store its elements inline.
-    SliceElement {
-        slice: Operand,
-        index: Operand,
-        span: std::ops::Range<usize>,
-    },
-}
-
-impl Place {
-    /// Storing through an element or field place writes inside its root,
-    /// which is how an aggregate local is initialized.
-    pub(super) fn root_local(&self) -> Option<LocalId> {
-        match self {
-            Self::Local(local) => Some(*local),
-            Self::Global(_) => None,
-            Self::Element { base, .. } | Self::Field { base, .. } => base.root_local(),
-            Self::Indirect { .. } | Self::SliceElement { .. } => None,
-        }
-    }
 }
 
 /// An immediate value no instruction computes. This is the only way the IR
@@ -78,12 +52,6 @@ pub(crate) enum Literal {
     /// A floating-point value, which keeps the bits of its interchange format
     /// rather than the integer they spell.
     Floating(Float),
-    /// A null pointer carries its concrete type because it can appear as an
-    /// operand independently of the destination that contextualized it.
-    Null(Type),
-    /// An empty slice carries its concrete type and occupies the two words of
-    /// that slice value.
-    EmptySlice(Type),
 }
 
 impl Literal {
@@ -91,8 +59,6 @@ impl Literal {
         match self {
             Self::Integer { ty, .. } => (*ty).into(),
             Self::Floating(value) => value.ty().into(),
-            Self::Null(ty) => ty.clone(),
-            Self::EmptySlice(ty) => ty.clone(),
         }
     }
 }
@@ -106,7 +72,6 @@ pub(crate) enum Operand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Load(Place),
-    AddressOf(Place),
     /// The result of the `Instruction::Call` that defines it. The call carries
     /// the arguments and the source span.
     CallResult,
@@ -132,19 +97,6 @@ pub(crate) enum ValueKind {
     LogicalNot {
         operand: Operand,
     },
-    /// The slice covering every element of an array place.
-    WholeSlice(Place),
-    /// A range of a slice value, which checks both bounds at the native
-    /// boundary using this value's span.
-    SliceRange {
-        slice: Operand,
-        low: Operand,
-        high: Operand,
-    },
-    /// The length word of a slice value.
-    SliceLength {
-        slice: Operand,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,10 +115,6 @@ pub(crate) struct Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Value(ValueId),
-    /// Evaluates a place only for its bounds or null-pointer traps.
-    Check {
-        place: Place,
-    },
     Store {
         place: Place,
         operand: Operand,
@@ -233,7 +181,7 @@ pub(crate) struct ControlFlow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
-    /// One entry per scalar, pointer, or slice, in memory order.
+    /// One entry per scalar, in memory order.
     pub values: Vec<Literal>,
 }
 

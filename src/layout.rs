@@ -1,10 +1,10 @@
 //! Byte size, alignment, and field offsets for Fern values.
 //!
-//! Semantic validation, IR verification, and the backend each hold a struct
-//! table of their own, so a phase supplies its table through [`StructFields`]
-//! and reads one derivation. [`Layouts`] memoizes a struct's layout the first
-//! time it is derived, which keeps the total work linear in the number of
-//! fields a program declares rather than exponential in containment depth.
+//! Semantic validation and the backend each hold a struct table of their own,
+//! so a phase supplies its table through [`StructFields`] and reads one
+//! derivation. [`Layouts`] memoizes a struct's layout the first time it is
+//! derived, which keeps the total work linear in the number of fields a
+//! program declares rather than exponential in containment depth.
 //!
 //! A cached layout is only sound once the struct's fields are final. In the
 //! semantic phase that means a struct whose fields have resolved; in the IR it
@@ -50,8 +50,6 @@ impl Layouts {
     pub(crate) fn size(&self, table: &dyn StructFields, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
-            Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
-            Type::Slice { .. } => scalar_bytes(Scalar::Uint).checked_mul(2),
             Type::Array { length, element } => length.checked_mul(self.size(table, element)?),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.size),
         }
@@ -62,8 +60,6 @@ impl Layouts {
     pub(crate) fn alignment(&self, table: &dyn StructFields, ty: &Type) -> Option<u64> {
         match ty {
             Type::Scalar(scalar) => Some(scalar_bytes(*scalar)),
-            Type::Pointer { .. } => Some(scalar_bytes(Scalar::Uint)),
-            Type::Slice { .. } => Some(scalar_bytes(Scalar::Uint)),
             Type::Array { element, .. } => self.alignment(table, element),
             Type::Struct(declared) => Some(self.struct_layout(table, declared.id)?.alignment),
         }

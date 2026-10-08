@@ -24,9 +24,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        91..92,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -59,9 +57,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        142..143,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -94,9 +90,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        185..187,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),
@@ -142,9 +136,7 @@ Program {
                     ),
                 },
                 Value {
-                    span: Some(
-                        233..235,
-                    ),
+                    span: None,
                     ty: Scalar(
                         Bool,
                     ),

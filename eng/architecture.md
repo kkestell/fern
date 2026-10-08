@@ -47,14 +47,10 @@ of `VerifiedProgram`; only verified IR reaches the backend.
 
 `layout` derives a value's byte size, alignment, and field offsets, deriving
 each struct once from the struct table the calling phase supplies and caching
-the result. Semantic validation, IR verification, and the backend all read
-that one derivation, so one description of memory answers for limit checking,
-allocation, copying, field addressing, and padding. `backend::layout` owns
-what is specific to emission: QBE classes and scalar storage slots.
-
-`comparability` answers whether `==` and `!=` are defined on a type from the
-same phase-supplied struct table, so semantic checking and IR verification
-enforce one rule.
+the result. Semantic validation and the backend both read that one derivation,
+so one description of memory answers for limit checking, allocation, copying,
+field addressing, and padding. `backend::layout` owns what is specific to
+emission: QBE classes and scalar storage slots.
 
 ## Diagnostics
 

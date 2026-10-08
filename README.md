@@ -71,16 +71,20 @@ only after QBE and the C toolchain succeed. A failed compilation preserves an
 existing output, and an output aliasing a source file is rejected.
 
 The compiler accepts recursive source nesting up to 128 levels, counting the
-function body, blocks, conversions, parenthesized groups, unary operators, and
-binary expression-tree depth. Deeper nesting produces a source diagnostic
-before recursive compiler phases can exhaust the stack. Inline struct
-containment uses the same 128-level limit. Untyped constant left-shift counts
-above 1,000,000 produce a compiler resource-limit diagnostic. Integer literals
-are limited to 4,096 digits, and untyped constant-folding results are limited
-to 2,000,000 significant bits. Diagnostics excerpt source lines longer than
+function body, blocks, each `else if` in a chain, array type dimensions, calls,
+conversions, `len`, parenthesized groups, array and struct literals, unary
+operators, binary expression-tree depth, and each index or field selection in a
+chain. Deeper nesting produces a source diagnostic before recursive compiler
+phases can exhaust the stack. Inline struct containment uses the same 128-level
+limit. Untyped constant left-shift counts above 1,000,000 produce a compiler
+resource-limit diagnostic. Integer literals are limited to 4,096 digits. A
+floating-point literal's digits, read as one integer, may be scaled by a power
+of ten from −500,000 through 500,000, even when its value is zero. Untyped
+constant-folding results are limited to 2,000,000 significant bits. Diagnostics excerpt source lines longer than
 240 bytes. Aggregate layouts are limited to 1 PiB. One initializer's repeated
 array fills and struct-literal zero fills expand to at most 1,000,000 scalar
-values in total.
+values in total, and so does the zero value of a `const` declared without an
+initializer.
 
 ## Development
 

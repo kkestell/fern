@@ -20,12 +20,7 @@ Program {
             ty: Scalar(
                 Int,
             ),
-            values: [
-                Integer {
-                    value: 0,
-                    ty: Int,
-                },
-            ],
+            values: None,
         },
     ],
     functions: [
@@ -142,6 +137,7 @@ Program {
                     ),
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -165,80 +161,18 @@ Program {
                 blocks: [
                     Block {
                         instructions: [
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            0,
-                                        ),
+                            Zero {
+                                place: Local(
+                                    LocalId(
+                                        0,
                                     ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 116..132,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
                                 ),
                             },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            0,
-                                        ),
+                            Zero {
+                                place: Local(
+                                    LocalId(
+                                        1,
                                     ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 116..132,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    ordinal: 0,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    ordinal: 1,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: U8,
-                                    },
                                 ),
                             },
                             Value(

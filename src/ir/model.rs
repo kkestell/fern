@@ -12,17 +12,22 @@ pub(crate) struct LocalId(pub usize);
 pub(crate) struct GlobalId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConstantId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FunctionId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BlockId(pub usize);
 
 /// A storage location a load reads and a store writes. Locals live for one call
-/// of one function; globals are the module-level `var` bindings.
+/// of one function; globals are the module-level `var` bindings. A constant is
+/// a folded aggregate the function reads from static data and never writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Place {
     Local(LocalId),
     Global(GlobalId),
+    Constant(ConstantId),
     /// `base[index]`. The span is the one the bounds-check trap reports, so
     /// every access through this place checks its index.
     Element {
@@ -119,6 +124,18 @@ pub(crate) enum Instruction {
         place: Place,
         operand: Operand,
     },
+    /// Sets every byte of an aggregate place to zero, which is the zero value
+    /// of every Fern type.
+    Zero {
+        place: Place,
+    },
+    /// Stores `operand` into each element of an array place from index
+    /// `start` through its last element.
+    Fill {
+        place: Place,
+        start: u64,
+        operand: Operand,
+    },
     /// Calls `function` with `arguments` in source order. `result` names the
     /// defined value exactly when the callee returns one.
     Call {
@@ -175,14 +192,15 @@ pub(crate) struct ControlFlow {
     pub blocks: Vec<Block>,
 }
 
-/// A module-level `var` of any module in the program. Its initializer is a
-/// constant expression, so it needs an initial value rather than
-/// initialization code.
+/// Static data: a module-level `var` of any module in the program, or a
+/// function's constant. Its value is known during compilation, so it needs an
+/// initial value rather than initialization code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
-    /// One entry per scalar, in memory order.
-    pub values: Vec<Literal>,
+    /// One entry per scalar, in memory order, or `None` when every byte is
+    /// zero.
+    pub values: Option<Vec<Literal>>,
 }
 
 #[derive(Debug)]
@@ -193,6 +211,8 @@ pub(crate) struct Function {
     pub result: Option<Type>,
     // Each position defines the corresponding function-local value ID.
     pub values: Vec<Value>,
+    // Each position defines the corresponding function-local constant ID.
+    pub constants: Vec<Global>,
     pub flow: ControlFlow,
 }
 

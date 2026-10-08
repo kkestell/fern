@@ -1,5 +1,6 @@
 use super::*;
 use crate::frontend::lexer::{MAX_INTEGER_LITERAL_DIGITS, is_floating};
+use crate::types::BinaryOperator;
 
 #[test]
 fn comments_may_touch_integer_operators() {
@@ -64,6 +65,29 @@ fn a_decimal_point_or_exponent_marker_makes_a_candidate_floating() {
         "0x1p3",
     ] {
         assert!(!is_floating(spelling), "{spelling}");
+    }
+}
+
+#[test]
+fn a_hexadecimal_e_digit_does_not_take_a_sign() {
+    for (operator, kind) in [("+", BinaryOperator::Add), ("-", BinaryOperator::Subtract)] {
+        for digits in ["0x1e", "0xE"] {
+            let source = format!("fn main() -> void {{ exit({digits}{operator}5); }}");
+            let syntax = parse(&source).unwrap();
+            let (_, expression) = syntax
+                .expressions
+                .iter()
+                .find(|(_, expression)| matches!(expression.kind, ExpressionKind::Binary { .. }))
+                .expect("the argument is a binary expression");
+            let ExpressionKind::Binary { operator, left, .. } = &expression.kind else {
+                unreachable!()
+            };
+            assert_eq!(*operator, kind, "{source}");
+            let ExpressionKind::Integer(spelling) = &syntax.expressions[*left].kind else {
+                panic!("expected an integer left operand in {source}")
+            };
+            assert_eq!(spelling, digits);
+        }
     }
 }
 

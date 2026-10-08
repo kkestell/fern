@@ -11,7 +11,7 @@ const SHAPES: &str = "type Inner struct { flag: u8, count: i64 }
 ";
 
 #[test]
-fn aggregate_types_are_defined_once_and_before_the_signatures_that_name_them() {
+fn struct_signatures_pass_addresses_rather_than_aggregate_types() {
     let qbe = emit(
         &lowered(&format!(
             "{SHAPES}
@@ -23,31 +23,19 @@ fn aggregate_types_are_defined_once_and_before_the_signatures_that_name_them() {
         )),
         None,
     );
-    let types: Vec<&str> = qbe
-        .lines()
-        .filter(|line| line.starts_with("type "))
-        .collect();
-    // Each definition follows the ones it names, and a scalar array is still
-    // spelled by its element class and count.
-    assert_eq!(
-        types,
-        [
-            "type :struct0 = { w, l }",
-            "type :arraystruct0x2 = { :struct0 2 }",
-            "type :struct1 = { :struct0, :arraystruct0x2, d }",
-            "type :arraystruct1x2 = { :struct1 2 }",
-            "type :arrayl3 = { l 3 }",
-        ]
-    );
-    for (definition, class) in [
-        ("type :struct0 ", ":struct0 $fn0("),
-        ("type :arraystruct1x2 ", ":arraystruct1x2 %param0"),
-        ("type :arrayl3 ", ":arrayl3 %param0"),
+    assert!(!qbe.contains("type "), "{qbe}");
+    for signature in [
+        "function $fn0(l %result, l %param0, l %param1) {",
+        "function l $fn1(l %param0) {",
+        "function $fn2(l %result) {",
     ] {
-        let defined = qbe.find(definition).expect(definition);
-        let used = qbe.find(class).expect(class);
-        assert!(defined < used, "{qbe}");
+        assert!(qbe.contains(signature), "{signature} missing from:\n{qbe}");
     }
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("program");
+    build_text(&qbe, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(4));
 }
 
 #[test]
@@ -94,7 +82,7 @@ fn a_struct_global_holds_its_scalars_at_their_layout_offsets() {
     for expected in [
         "data $global0 = { w 1, z 4, l 2 }",
         "data $global1 = { l 3, w 4, z 4, l 3, w 4, z 4 }",
-        "data $global2 = { l 0, w 0, z 4 }",
+        "data $global2 = { z 16 }",
     ] {
         assert!(qbe.contains(expected), "{expected} missing from:\n{qbe}");
     }

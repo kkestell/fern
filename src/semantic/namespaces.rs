@@ -166,7 +166,6 @@ pub(crate) fn check<'a>(
         module_bindings: Vec::new(),
         expressions: ArenaMap::default(),
         declarations: ArenaMap::default(),
-        zero_declarations: HashMap::new(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
         iterations: ArenaMap::default(),
@@ -637,11 +636,13 @@ impl CheckedProgram<'_> {
             let annotation = annotation.expect("a declaration without an initializer is annotated");
             let ty = self.resolve_annotation(annotation, &scopes, None)?;
             let binding = self.declarations[statement];
-            let span = syntax.statements[statement].span.clone();
-            let zero = self.zero_value(&ty, &span)?;
+            // Only a `const` folds its zero value into every use; a `var` is
+            // zeroed static data.
+            if !mutable {
+                let span = syntax.statements[statement].span.clone();
+                self.bindings[binding].constant = Some(self.zero_value(&ty, &span)?);
+            }
             self.bindings[binding].ty = ty;
-            self.bindings[binding].constant = (!mutable).then(|| zero.clone());
-            self.zero_declarations.insert(statement, zero);
             return Ok(());
         };
         // Signatures are resolved after this runs, so a call here has no

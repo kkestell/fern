@@ -57,6 +57,7 @@ pub(super) fn main_function(values: Vec<Value>, locals: Vec<Type>, blocks: Vec<B
         parameters: 0,
         result: None,
         values,
+        constants: vec![],
         flow: ControlFlow {
             entry: BlockId(0),
             locals,
@@ -164,6 +165,7 @@ pub(super) fn describe(place: &Place) -> String {
     match place {
         Place::Local(LocalId(id)) => format!("local{id}"),
         Place::Global(GlobalId(id)) => format!("global{id}"),
+        Place::Constant(ConstantId(id)) => format!("constant{id}"),
         Place::Element { base, index, .. } => {
             let index = match index {
                 Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
@@ -178,10 +180,19 @@ pub(super) fn describe(place: &Place) -> String {
     }
 }
 
+/// Spells every place an instruction writes, in order: a store names its
+/// place, a zero reads `zero local0`, and a fill from index 2 reads
+/// `local0[2..]`.
 pub(super) fn stored_places(function: &Function) -> Vec<String> {
-    stores(function)
-        .iter()
-        .map(|(place, _)| describe(place))
+    instructions(function)
+        .filter_map(|instruction| match instruction {
+            Instruction::Store { place, .. } => Some(describe(place)),
+            Instruction::Zero { place } => Some(format!("zero {}", describe(place))),
+            Instruction::Fill { place, start, .. } => {
+                Some(format!("{}[{start}..]", describe(place)))
+            }
+            _ => None,
+        })
         .collect()
 }
 

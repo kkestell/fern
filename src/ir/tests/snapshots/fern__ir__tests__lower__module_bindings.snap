@@ -9,12 +9,14 @@ Program {
             ty: Scalar(
                 Int,
             ),
-            values: [
-                Integer {
-                    value: 40,
-                    ty: Int,
-                },
-            ],
+            values: Some(
+                [
+                    Integer {
+                        value: 40,
+                        ty: Int,
+                    },
+                ],
+            ),
         },
     ],
     functions: [
@@ -72,6 +74,7 @@ Program {
                     ),
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,

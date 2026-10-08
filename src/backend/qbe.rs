@@ -323,11 +323,14 @@ pub(super) struct Emitter<'a> {
     pub(super) function: usize,
     /// The return type of the signature being emitted, absent for a function
     /// that returns nothing.
-    pub(super) qbe_result: Option<String>,
+    pub(super) qbe_result: Option<char>,
     /// How many element and field places the program has materialized, which
     /// names their address temporaries and their bounds-check symbols.
     pub(super) accesses: usize,
     /// How many aggregate comparisons have been emitted in this function.
     pub(super) comparisons: usize,
+    /// How many array fills have been emitted, which names their loop
+    /// temporaries and blocks.
+    pub(super) fills: usize,
     pub(super) diagnostics: Option<DiagnosticRenderer<'a>>,
 }

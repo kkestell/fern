@@ -1,12 +1,10 @@
 //! QBE aggregate classes and the layout Fern uses for aggregate storage.
 
 use crate::{
-    ir::model::{Function, Struct},
+    ir::model::Struct,
     layout::{Layouts, StructFields},
     types::{StructId, Type},
 };
-
-use std::collections::BTreeSet;
 
 use super::qbe::qbe_type;
 
@@ -42,13 +40,13 @@ impl<'a> Layout<'a> {
         }
     }
 
-    /// How a signature, a call argument, or a call result names this type. Two
-    /// array types made of the same elements share one QBE type definition.
-    pub(super) fn class(&self, ty: &Type) -> String {
+    /// How a signature or a call names this type. An aggregate travels as the
+    /// address of its storage: QBE's own aggregate convention copies one word
+    /// at a time, so its code would grow with the aggregate.
+    pub(super) fn class(&self, ty: &Type) -> char {
         match ty {
-            Type::Scalar(scalar) => qbe_type(*scalar).to_string(),
-            Type::Array { .. } => self.array_class(ty),
-            Type::Struct(declared) => format!(":struct{}", declared.id.0),
+            Type::Scalar(scalar) => qbe_type(*scalar),
+            Type::Array { .. } | Type::Struct(_) => 'l',
         }
     }
 
@@ -89,38 +87,6 @@ impl<'a> Layout<'a> {
         slots
     }
 
-    /// The aggregate type definitions the signatures name. QBE needs the
-    /// layout of every aggregate a function takes or returns, and a struct's
-    /// definition needs the definitions of the aggregates it contains.
-    pub(super) fn type_definitions(&self, functions: &[Function]) -> String {
-        let mut definitions = TypeDefinitions {
-            layout: self,
-            structs: vec![false; self.structs.len()],
-            arrays: BTreeSet::new(),
-            text: String::new(),
-        };
-        for function in functions {
-            for ty in function.flow.locals[..function.parameters]
-                .iter()
-                .chain(function.result.as_ref())
-            {
-                definitions.define(ty);
-            }
-        }
-        definitions.text
-    }
-
-    /// An array is named by the scalar or struct it is made of and how many of
-    /// them it holds, so `[2][3]int` and `[6]int` share one definition.
-    fn array_class(&self, ty: &Type) -> String {
-        let (element, count) = array_parts(ty);
-        match element {
-            Type::Scalar(scalar) => format!(":array{}{count}", qbe_type(*scalar)),
-            Type::Struct(declared) => format!(":arraystruct{}x{count}", declared.id.0),
-            Type::Array { .. } => unreachable!("array parts stop at a scalar or a struct"),
-        }
-    }
-
     fn collect_scalar_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Type)>) {
         match ty {
             Type::Scalar(scalar) => slots.push((base, (*scalar).into())),
@@ -141,61 +107,4 @@ impl<'a> Layout<'a> {
             }
         }
     }
-}
-
-/// Collects the type definitions a program needs, writing each one after the
-/// definitions it names and only once.
-struct TypeDefinitions<'a> {
-    layout: &'a Layout<'a>,
-    structs: Vec<bool>,
-    arrays: BTreeSet<String>,
-    text: String,
-}
-
-impl TypeDefinitions<'_> {
-    fn define(&mut self, ty: &Type) {
-        match ty {
-            Type::Scalar(_) => {}
-            Type::Array { .. } => self.define_array(ty),
-            Type::Struct(declared) => self.define_struct(declared.id),
-        }
-    }
-
-    fn define_array(&mut self, ty: &Type) {
-        let (element, count) = array_parts(ty);
-        self.define(element);
-        let class = self.layout.array_class(ty);
-        if self.arrays.insert(class.clone()) {
-            let element = self.layout.class(element);
-            self.text
-                .push_str(&format!("type {class} = {{ {element} {count} }}\n"));
-        }
-    }
-
-    fn define_struct(&mut self, id: StructId) {
-        if std::mem::replace(&mut self.structs[id.0], true) {
-            return;
-        }
-        let fields = self.layout.structs[id.0].fields.clone();
-        for field in &fields {
-            self.define(field);
-        }
-        let fields = fields
-            .iter()
-            .map(|field| self.layout.class(field))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.text
-            .push_str(&format!("type :struct{} = {{ {fields} }}\n", id.0));
-    }
-}
-
-/// The scalar or struct an array is made of and how many of them it holds.
-fn array_parts(mut ty: &Type) -> (&Type, u64) {
-    let mut count = 1;
-    while let Type::Array { length, element } = ty {
-        count *= length;
-        ty = element;
-    }
-    (ty, count)
 }

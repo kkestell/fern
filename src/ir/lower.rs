@@ -7,7 +7,7 @@ use crate::{
     semantic::model::{
         Binding, CheckedLocation, CheckedLocationKind, CheckedProgram, Constant, ExpressionValue,
     },
-    types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type},
+    types::{BinaryOperator, ComparisonOperator, Float, LogicalOperator, Scalar, Type},
 };
 use la_arena::Idx;
 use lasso::Spur;
@@ -56,15 +56,13 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
             unreachable!("module bindings are binding statements")
         };
         let ty = checked.bindings[binding].ty.clone();
-        let constant = match initializer {
-            Some(initializer) => checked.expressions[*initializer]
+        let values = initializer.and_then(|initializer| {
+            let constant = checked.expressions[initializer]
                 .constant
                 .as_ref()
-                .expect("module-level initializers are constant expressions"),
-            None => &checked.zero_declarations[&statement],
-        };
-        let mut values = Vec::new();
-        flatten(&checked, constant, &ty, &mut values);
+                .expect("module-level initializers are constant expressions");
+            static_values(&checked, constant, &ty)
+        });
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
         globals.push(Global { ty, values });
     }
@@ -168,6 +166,33 @@ fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
     }
 }
 
+/// The scalars a constant holds, in memory order, or `None` when every one of
+/// them is stored as zero bytes and static data needs no values at all.
+fn static_values(
+    checked: &CheckedProgram<'_>,
+    constant: &Constant,
+    ty: &Type,
+) -> Option<Vec<Literal>> {
+    let mut values = Vec::new();
+    flatten(checked, constant, ty, &mut values);
+    values
+        .iter()
+        .any(|value| match value {
+            Literal::Integer { value, .. } => *value != 0,
+            Literal::Floating(value) => value.bits() != 0,
+        })
+        .then_some(values)
+}
+
+/// The zero value of a scalar type.
+fn zero_literal(ty: Scalar) -> Literal {
+    match ty {
+        Scalar::F32 => Literal::Floating(Float::Binary32(0)),
+        Scalar::F64 => Literal::Floating(Float::Binary64(0)),
+        _ => Literal::Integer { value: 0, ty },
+    }
+}
+
 /// The scalars a constant holds, in memory order. A struct's fields have
 /// their own types, so the constant is walked together with its type rather
 /// than under one leaf type.
@@ -212,6 +237,7 @@ struct BuildingBlock {
 struct FlowBuilder {
     values: Vec<Value>,
     locals: Vec<Type>,
+    constants: Vec<Global>,
     blocks: Vec<BuildingBlock>,
     current: BlockId,
 }
@@ -221,6 +247,7 @@ impl FlowBuilder {
         Self {
             values: Vec::new(),
             locals: Vec::new(),
+            constants: Vec::new(),
             blocks: vec![BuildingBlock {
                 instructions: Vec::new(),
                 terminator: None,
@@ -259,6 +286,35 @@ impl FlowBuilder {
 
     fn store(&mut self, place: Place, operand: Operand) {
         self.store_in(self.current, place, operand);
+    }
+
+    /// Stores the zero value of `ty` into `place`.
+    fn store_zero(&mut self, place: Place, ty: &Type) {
+        let instruction = match ty.scalar() {
+            Some(scalar) => Instruction::Store {
+                place,
+                operand: Operand::Literal(zero_literal(scalar)),
+            },
+            None => Instruction::Zero { place },
+        };
+        self.blocks[self.current.0].instructions.push(instruction);
+    }
+
+    fn fill(&mut self, place: Place, start: u64, operand: Operand) {
+        self.blocks[self.current.0]
+            .instructions
+            .push(Instruction::Fill {
+                place,
+                start,
+                operand,
+            });
+    }
+
+    /// The static data holding a folded aggregate.
+    fn constant(&mut self, global: Global) -> Place {
+        let id = ConstantId(self.constants.len());
+        self.constants.push(global);
+        Place::Constant(id)
     }
 
     /// Stores into `block` rather than the current one. The store runs after
@@ -308,6 +364,7 @@ impl FlowBuilder {
             parameters,
             result,
             values: self.values,
+            constants: self.constants,
             flow: ControlFlow {
                 entry: BlockId(0),
                 locals: self.locals,
@@ -343,20 +400,15 @@ fn lower_flow_binding(
     };
     let binding = checked.declarations[statement];
     if checked.bindings[binding].constant.is_some() {
+        if let Some(initializer) = initializer {
+            lower_folded_effects(checked, *initializer, bindings, builder);
+        }
         return;
     }
     let ty = checked.bindings[binding].ty.clone();
     let Some(initializer) = initializer else {
-        let local = builder.local(ty.clone());
-        let place = Place::Local(local);
-        store_constant(
-            checked,
-            builder,
-            &place,
-            &ty,
-            &checked.zero_declarations[&statement],
-            &checked.syntax.statements[statement].span,
-        );
+        let place = Place::Local(builder.local(ty.clone()));
+        builder.store_zero(place.clone(), &ty);
         bindings.insert(binding, place);
         return;
     };
@@ -876,51 +928,6 @@ fn field_at(base: &Place, ordinal: usize) -> Place {
     }
 }
 
-/// Stores a folded aggregate into `place`, one scalar per element or field.
-fn store_constant(
-    checked: &CheckedProgram<'_>,
-    builder: &mut FlowBuilder,
-    place: &Place,
-    ty: &Type,
-    constant: &Constant,
-    span: &std::ops::Range<usize>,
-) {
-    match (ty, constant) {
-        (Type::Scalar(scalar), constant) => {
-            builder.store(
-                place.clone(),
-                Operand::Literal(scalar_literal(constant, *scalar)),
-            );
-        }
-        (Type::Array { element, .. }, Constant::Array(elements)) => {
-            for (index, value) in elements.iter().enumerate() {
-                let index = u64::try_from(index).expect("an array fits in the address space");
-                store_constant(
-                    checked,
-                    builder,
-                    &element_at(place, index, span),
-                    element,
-                    value,
-                    span,
-                );
-            }
-        }
-        (Type::Struct(_), Constant::Struct(fields)) => {
-            for (ordinal, value) in fields.iter().enumerate() {
-                store_constant(
-                    checked,
-                    builder,
-                    &field_at(place, ordinal),
-                    &field_type(checked, ty, ordinal),
-                    value,
-                    span,
-                );
-            }
-        }
-        _ => unreachable!("a folded constant has the shape of its type"),
-    }
-}
-
 /// Stores a struct literal's fields into `place`: the written initializers in
 /// source order, which is the order they are evaluated in, and then the zero
 /// value each omitted field is filled with.
@@ -934,19 +941,14 @@ fn store_fields(
     builder: &mut FlowBuilder,
 ) {
     let ty = checked.expressions[id].ty.clone();
-    let span = &checked.syntax.expressions[id].span;
     for &(ordinal, value) in initializers {
         let operand = lower_flow_operand(checked, value, bindings, builder);
         builder.store(field_at(place, ordinal), operand);
     }
-    for (ordinal, constant) in filled {
-        store_constant(
-            checked,
-            builder,
-            &field_at(place, *ordinal),
+    for (ordinal, _) in filled {
+        builder.store_zero(
+            field_at(place, *ordinal),
             &field_type(checked, &ty, *ordinal),
-            constant,
-            span,
         );
     }
 }
@@ -978,8 +980,8 @@ fn store_elements(
     }
     let last = last.expect("a fill follows at least one element");
     let filled = u64::try_from(elements.len()).expect("an array fits in the address space");
-    for index in filled..*length {
-        builder.store(element_at(place, index, span), last.clone());
+    if filled < *length {
+        builder.fill(place.clone(), filled, last);
     }
 }
 
@@ -995,10 +997,10 @@ fn lower_aggregate_place(
     let ty = &expression.ty;
     if let Some(constant) = expression.constant.as_ref() {
         lower_folded_effects(checked, id, bindings, builder);
-        let place = Place::Local(builder.local(ty.clone()));
-        let span = &checked.syntax.expressions[id].span;
-        store_constant(checked, builder, &place, ty, constant, span);
-        return place;
+        return builder.constant(Global {
+            ty: ty.clone(),
+            values: static_values(checked, constant, ty),
+        });
     }
     match &expression.value {
         ExpressionValue::Reference(binding) => bindings[binding].clone(),
@@ -1318,7 +1320,7 @@ struct HeldPlace {
 
 fn hold_place(builder: &FlowBuilder, place: Place) -> HeldPlace {
     match place {
-        Place::Local(_) | Place::Global(_) => HeldPlace {
+        Place::Local(_) | Place::Global(_) | Place::Constant(_) => HeldPlace {
             root: place,
             steps: Vec::new(),
         },

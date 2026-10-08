@@ -52,6 +52,13 @@ so one description of memory answers for limit checking, allocation, copying,
 field addressing, and padding. `backend::layout` owns what is specific to
 emission: QBE classes and scalar storage slots.
 
+Generated code does not grow with an aggregate's length. Lowering keeps a
+folded aggregate as a function's static data, which nothing writes, and zeroes
+a declaration without an initializer rather than storing its zero value. The
+backend passes and returns aggregates through addresses rather than QBE
+aggregate types, and copies, zeroes, and fills them with C library calls or
+loops.
+
 ## Diagnostics
 
 Source spans use the program-wide offset space in `SourceMap`. A diagnostic
@@ -64,3 +71,12 @@ later phase reads source files or reconstructs source locations.
 Unit tests sit beside the phase submodule that owns the behavior. Parser and
 lowering snapshots sit with those tests. `tests/compiler.rs` owns the compiler
 and CLI integration boundary.
+
+## Known limitations
+
+Large local aggregates exhaust the native stack. Every scalar narrower than 64
+bits occupies four bytes, so `[1000000]u8` takes 4 MB. Each aggregate load
+holds its own copy in storage allocated at function entry, and an array literal
+is built in a temporary local before it is copied into its binding, so one
+declaration can hold several copies at once. Exhausting the stack ends the
+process with a bare SIGSEGV rather than a trap diagnostic.

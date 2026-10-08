@@ -140,10 +140,15 @@ impl CheckedProgram<'_> {
                 let annotation =
                     annotation.expect("a declaration without an initializer is annotated");
                 let ty = self.resolve_annotation(annotation, scopes, None)?;
-                let span = self.syntax.statements[statement].span.clone();
-                let zero = self.zero_value(&ty, &span)?;
-                self.zero_declarations.insert(statement, zero.clone());
-                (ty, (!mutable).then_some(zero))
+                // Only a `const` folds its zero value into every use; lowering
+                // zeroes a `var`'s storage without one.
+                let zero = if mutable {
+                    None
+                } else {
+                    let span = self.syntax.statements[statement].span.clone();
+                    Some(self.zero_value(&ty, &span)?)
+                };
+                (ty, zero)
             }
         };
         self.record_binding(statement, name, mutable, ty, constant, scopes);

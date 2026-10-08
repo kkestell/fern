@@ -163,6 +163,10 @@ impl Program {
         }
         for function in &self.functions {
             verify_parameters(function)?;
+            for (id, constant) in function.constants.iter().enumerate() {
+                self.verify_global(constant)
+                    .map_err(|error| CompileError::new(format!("{error} (IR constant {id})")))?;
+            }
         }
         for function in &self.functions {
             self.verify_function(function)?;
@@ -180,12 +184,12 @@ impl Program {
 
     fn place_type(
         &self,
-        flow: &ControlFlow,
+        function: &Function,
         place: &Place,
         operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     ) -> Result<Type, CompileError> {
         match place {
-            Place::Local(LocalId(id)) => flow.locals.get(*id).cloned().ok_or_else(|| {
+            Place::Local(LocalId(id)) => function.flow.locals.get(*id).cloned().ok_or_else(|| {
                 CompileError::new(format!(
                     "internal compiler error: IR uses unknown local {id}"
                 ))
@@ -199,8 +203,17 @@ impl Program {
                         "internal compiler error: IR uses unknown global {id}"
                     ))
                 }),
+            Place::Constant(ConstantId(id)) => function
+                .constants
+                .get(*id)
+                .map(|constant| constant.ty.clone())
+                .ok_or_else(|| {
+                    CompileError::new(format!(
+                        "internal compiler error: IR uses unknown constant {id}"
+                    ))
+                }),
             Place::Element { base, index, .. } => {
-                let base = self.place_type(flow, base, operand_type)?;
+                let base = self.place_type(function, base, operand_type)?;
                 let Type::Array { element, .. } = base else {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR indexes `{base}`"
@@ -215,7 +228,7 @@ impl Program {
                 Ok(*element)
             }
             Place::Field { base, ordinal } => {
-                let base = self.place_type(flow, base, operand_type)?;
+                let base = self.place_type(function, base, operand_type)?;
                 let Type::Struct(declared) = &base else {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR selects a field of `{base}`"
@@ -232,6 +245,26 @@ impl Program {
                     })
             }
         }
+    }
+
+    /// The type of a place an instruction writes. Constants are static data
+    /// that every use reads, so nothing may write one.
+    fn destination_type(
+        &self,
+        function: &Function,
+        place: &Place,
+        operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
+    ) -> Result<Type, CompileError> {
+        let mut root = place;
+        while let Place::Element { base, .. } | Place::Field { base, .. } = root {
+            root = base;
+        }
+        if let Place::Constant(ConstantId(id)) = root {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR writes constant {id}"
+            )));
+        }
+        self.place_type(function, place, operand_type)
     }
 
     /// The scalar types a value of `ty` stores, in memory order. A struct's
@@ -254,20 +287,23 @@ impl Program {
     }
 
     fn verify_global(&self, global: &Global) -> Result<(), CompileError> {
+        let Some(values) = &global.values else {
+            return Ok(());
+        };
         let expected_count = self.scalar_count(&global.ty).ok_or_else(|| {
             CompileError::new("internal compiler error: IR global scalar count overflows")
         })?;
-        if u64::try_from(global.values.len()).expect("a Vec length fits u64") != expected_count {
+        if u64::try_from(values.len()).expect("a Vec length fits u64") != expected_count {
             return Err(CompileError::new(format!(
                 "internal compiler error: IR global of type `{}` holds {} values, expected {}",
                 global.ty,
-                global.values.len(),
+                values.len(),
                 expected_count
             )));
         }
-        let mut expected = Vec::with_capacity(global.values.len());
+        let mut expected = Vec::with_capacity(values.len());
         self.scalar_types(&global.ty, &mut expected);
-        for (value, expected) in global.values.iter().zip(&expected) {
+        for (value, expected) in values.iter().zip(&expected) {
             let ty = verify_literal(value)?;
             if ty != *expected {
                 return Err(CompileError::new(format!(
@@ -329,7 +365,6 @@ impl Program {
         (block_index, position): (usize, usize),
         instruction: &Instruction,
     ) -> Result<(), CompileError> {
-        let flow = &function.flow;
         let operand_type = |operand| {
             flow_operand_type(
                 operand,
@@ -342,18 +377,51 @@ impl Program {
         match instruction {
             Instruction::Value(ValueId(id)) => {
                 let value = &function.values[*id];
-                let place_type = |place: &Place| self.place_type(flow, place, &operand_type);
+                let place_type = |place: &Place| self.place_type(function, place, &operand_type);
                 if !valid_value(value, &operand_type, &place_type)? {
                     return Err(invalid_value(*id, value));
                 }
                 Ok(())
             }
             Instruction::Store { place, operand } => {
-                let destination = self.place_type(flow, place, &operand_type)?;
+                let destination = self.destination_type(function, place, &operand_type)?;
                 let source = operand_type(operand.clone())?;
                 if source != destination {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR store has type `{source}`, expected `{destination}`"
+                    )));
+                }
+                Ok(())
+            }
+            Instruction::Zero { place } => {
+                let destination = self.destination_type(function, place, &operand_type)?;
+                if destination.scalar().is_some() {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR zeroes scalar `{destination}`"
+                    )));
+                }
+                Ok(())
+            }
+            Instruction::Fill {
+                place,
+                start,
+                operand,
+            } => {
+                let destination = self.destination_type(function, place, &operand_type)?;
+                let Type::Array { length, element } = &destination else {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR fills `{destination}`"
+                    )));
+                };
+                if start >= length {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR fills `{destination}` from index {start}"
+                    )));
+                }
+                let source = operand_type(operand.clone())?;
+                if source != **element {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR fills `{destination}` with `{source}`"
                     )));
                 }
                 Ok(())
@@ -540,7 +608,7 @@ fn record_definition(
     let defined = match instruction {
         Instruction::Value(id) => Some((*id, false)),
         Instruction::Call { result, .. } => result.map(|id| (id, true)),
-        Instruction::Store { .. } => None,
+        Instruction::Store { .. } | Instruction::Zero { .. } | Instruction::Fill { .. } => None,
     };
     let Some((ValueId(id), from_call)) = defined else {
         return Ok(());

@@ -63,6 +63,7 @@ Program {
                     ),
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,

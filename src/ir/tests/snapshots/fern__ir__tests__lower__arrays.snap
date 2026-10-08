@@ -143,9 +143,9 @@ Program {
                     ),
                     kind: Load(
                         Element {
-                            base: Local(
-                                LocalId(
-                                    5,
+                            base: Constant(
+                                ConstantId(
+                                    0,
                                 ),
                             ),
                             index: Value(
@@ -251,6 +251,32 @@ Program {
                     ),
                 },
             ],
+            constants: [
+                Global {
+                    ty: Array {
+                        length: 3,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    values: Some(
+                        [
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 3,
+                                ty: Int,
+                            },
+                        ],
+                    ),
+                },
+            ],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -277,12 +303,6 @@ Program {
                     Scalar(
                         Int,
                     ),
-                    Array {
-                        length: 3,
-                        element: Scalar(
-                            Int,
-                        ),
-                    },
                 ],
                 blocks: [
                     Block {
@@ -398,72 +418,6 @@ Program {
                                     6,
                                 ),
                             ),
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 191..198,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 1,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 191..198,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 2,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 2,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 191..198,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 3,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     7,
@@ -575,9 +529,9 @@ Program {
                         ),
                     },
                     kind: Load(
-                        Local(
-                            LocalId(
-                                1,
+                        Constant(
+                            ConstantId(
+                                0,
                             ),
                         ),
                     ),
@@ -590,7 +544,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -642,7 +596,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -655,7 +609,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -699,7 +653,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -738,10 +692,21 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
+                },
+            ],
+            constants: [
+                Global {
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            Int,
+                        ),
+                    },
+                    values: None,
                 },
             ],
             flow: ControlFlow {
@@ -764,12 +729,6 @@ Program {
                             Int,
                         ),
                     },
-                    Array {
-                        length: 2,
-                        element: Scalar(
-                            Int,
-                        ),
-                    },
                     Scalar(
                         Int,
                     ),
@@ -777,50 +736,6 @@ Program {
                 blocks: [
                     Block {
                         instructions: [
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 356..362,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 356..362,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 0,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     0,
@@ -829,7 +744,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Value(
@@ -841,7 +756,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 operand: Literal(
@@ -929,7 +844,7 @@ Program {
                                 place: Element {
                                     base: Local(
                                         LocalId(
-                                            2,
+                                            1,
                                         ),
                                     ),
                                     index: Value(
@@ -967,7 +882,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 operand: Value(
@@ -1020,6 +935,25 @@ Program {
                         },
                     },
                     kind: Load(
+                        Constant(
+                            ConstantId(
+                                0,
+                            ),
+                        ),
+                    ),
+                },
+                Value {
+                    span: None,
+                    ty: Array {
+                        length: 2,
+                        element: Array {
+                            length: 3,
+                            element: Scalar(
+                                Int,
+                            ),
+                        },
+                    },
+                    kind: Load(
                         Local(
                             LocalId(
                                 0,
@@ -1060,26 +994,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
-                            ),
-                        ),
-                    ),
-                },
-                Value {
-                    span: None,
-                    ty: Array {
-                        length: 2,
-                        element: Array {
-                            length: 3,
-                            element: Scalar(
-                                Int,
-                            ),
-                        },
-                    },
-                    kind: Load(
-                        Local(
-                            LocalId(
-                                1,
+                                0,
                             ),
                         ),
                     ),
@@ -1117,7 +1032,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                1,
+                                0,
                             ),
                         ),
                     ),
@@ -1143,7 +1058,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                4,
+                                3,
                             ),
                         ),
                     ),
@@ -1156,7 +1071,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                6,
+                                5,
                             ),
                         ),
                     ),
@@ -1189,7 +1104,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                6,
+                                5,
                             ),
                         ),
                     ),
@@ -1203,7 +1118,7 @@ Program {
                         Element {
                             base: Local(
                                 LocalId(
-                                    5,
+                                    4,
                                 ),
                             ),
                             index: Value(
@@ -1223,7 +1138,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -1236,7 +1151,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                7,
+                                6,
                             ),
                         ),
                     ),
@@ -1271,7 +1186,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                6,
+                                5,
                             ),
                         ),
                     ),
@@ -1307,18 +1222,15 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
                 },
             ],
-            flow: ControlFlow {
-                entry: BlockId(
-                    0,
-                ),
-                locals: [
-                    Array {
+            constants: [
+                Global {
+                    ty: Array {
                         length: 2,
                         element: Array {
                             length: 3,
@@ -1327,6 +1239,41 @@ Program {
                             ),
                         },
                     },
+                    values: Some(
+                        [
+                            Integer {
+                                value: 1,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 2,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 3,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 4,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 5,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 6,
+                                ty: Int,
+                            },
+                        ],
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
                     Array {
                         length: 2,
                         element: Array {
@@ -1370,192 +1317,6 @@ Program {
                 blocks: [
                     Block {
                         instructions: [
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 0,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 1,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 0,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 2,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 0,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 2,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 3,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 1,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 4,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 1,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 5,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Element {
-                                        base: Local(
-                                            LocalId(
-                                                0,
-                                            ),
-                                        ),
-                                        index: Literal(
-                                            Integer {
-                                                value: 1,
-                                                ty: Int,
-                                            },
-                                        ),
-                                        span: 608..630,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 2,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 608..630,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 6,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     0,
@@ -1564,7 +1325,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        1,
+                                        0,
                                     ),
                                 ),
                                 operand: Value(
@@ -1581,7 +1342,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Value(
@@ -1595,7 +1356,7 @@ Program {
                                     base: Element {
                                         base: Local(
                                             LocalId(
-                                                2,
+                                                1,
                                             ),
                                         ),
                                         index: Literal(
@@ -1675,7 +1436,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 operand: Literal(
@@ -1711,7 +1472,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        4,
+                                        3,
                                     ),
                                 ),
                                 operand: Value(
@@ -1728,7 +1489,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        5,
+                                        4,
                                     ),
                                 ),
                                 operand: Value(
@@ -1740,7 +1501,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        6,
+                                        5,
                                     ),
                                 ),
                                 operand: Literal(
@@ -1799,7 +1560,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        7,
+                                        6,
                                     ),
                                 ),
                                 operand: Value(
@@ -1826,7 +1587,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 operand: Value(
@@ -1857,7 +1618,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        6,
+                                        5,
                                     ),
                                 ),
                                 operand: Value(

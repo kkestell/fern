@@ -13,7 +13,7 @@ described as "behavior" or a "specification."
 | Document              | Owns                                                                                                                                                                                   |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `docs/spec.md`        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution.                                                                                             |
-| `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation belongs here. |
+| `eng/architecture.md` | Durable implementation design and boundaries: phase separation, storage lifetimes, node identity, diagnostics, inspection, and verification. Internal AST representation and known implementation limitations belong here. |
 | `eng/todo.md`         | Ordered implementation tasks and their completion state. A task may have subtasks; mark the task complete when all its subtasks are complete.                                           |
 | `eng/plans/`          | Implementation plans for a single TODO task or a defect repair: concrete file changes, focused tests, and decisions the owning documents leave open.                                    |
 | `eng/reviews/`        | Code-review reports: scope, findings, unresolved suspicions, and checks run.                                                                                                           |

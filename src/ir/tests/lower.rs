@@ -13,15 +13,15 @@ fn array_globals_hold_their_elements_in_memory_order() {
         vec![
             Global {
                 ty: array(3, Scalar::Int.into()),
-                values: integers([1, 2, 3], Scalar::Int),
+                values: Some(integers([1, 2, 3], Scalar::Int)),
             },
             Global {
                 ty: array(2, array(2, Scalar::U8.into())),
-                values: integers([1, 2, 3, 4], Scalar::U8),
+                values: Some(integers([1, 2, 3, 4], Scalar::U8)),
             },
             Global {
                 ty: Scalar::Int.into(),
-                values: integers([7], Scalar::Int),
+                values: Some(integers([7], Scalar::Int)),
             },
         ]
     );
@@ -36,37 +36,30 @@ fn an_array_literal_stores_each_element_and_a_fill_repeats_the_last_one() {
     let main = main_of(&program);
     assert_eq!(
         stored_places(main),
-        ["local0[0]", "local0[1]", "local0[2]", "local0[3]", "local1"]
+        ["local0[0]", "local0[1]", "local0[2..]", "local1"]
     );
-    // The fill evaluates its element once and copies that value.
+    // The fill evaluates its element once and repeats that value.
     assert_eq!(call_targets(main), [FunctionId(0)]);
-    let filled: Vec<_> = stores(main)[1..4]
-        .iter()
-        .map(|(_, value)| value.clone())
-        .collect();
-    assert_eq!(
-        filled,
-        [filled[0].clone(), filled[0].clone(), filled[0].clone()]
-    );
+    let filled = instructions(main)
+        .find_map(|instruction| match instruction {
+            Instruction::Fill { operand, .. } => Some(operand.clone()),
+            _ => None,
+        })
+        .expect("the literal fills its remaining elements");
+    assert_eq!(filled, stores(main)[1].1);
 }
 
 #[test]
 fn a_nested_literal_stores_each_row_through_the_outer_element_place() {
-    // A folded literal writes its leaves straight through nested places.
+    // A folded literal is static data, copied whole into the binding.
     let folded =
         lowered("fn main() -> void { var grid: [2][2]int = [[1, 2], [3, 4]]; exit(grid[0][0]); }");
-    assert_eq!(
-        stored_places(main_of(&folded)),
-        [
-            "local0[0][0]",
-            "local0[0][1]",
-            "local0[1][0]",
-            "local0[1][1]",
-            "local1",
-        ]
-    );
+    let main = main_of(&folded);
+    assert_eq!(stored_places(main), ["local0"]);
+    assert_eq!(loads(main)[0], Place::Constant(ConstantId(0)));
 
-    // A row that is not constant is built on its own and copied in.
+    // A constant row is copied in from static data, while a row that is not
+    // constant is built on its own and copied in.
     let runtime = lowered(
         "fn side() -> int { return 4; }
              fn main() -> void {
@@ -76,30 +69,23 @@ fn a_nested_literal_stores_each_row_through_the_outer_element_place() {
     );
     assert_eq!(
         stored_places(main_of(&runtime)),
-        [
-            "local1[0]",
-            "local1[1]",
-            "local0[0]",
-            "local2[0]",
-            "local2[1]",
-            "local0[1]",
-            "local3",
-        ]
+        ["local0[0]", "local1[0]", "local1[1]", "local0[1]", "local2"]
     );
 }
 
 #[test]
-fn a_constant_array_materializes_into_a_local_at_each_use() {
+fn a_constant_array_is_read_from_static_data_at_each_use() {
     let program = lowered(
         "const a: [2]int = [10, 20];
              fn main() -> void { var i = 1; exit(a[i] + a[0]); }",
     );
     let main = main_of(&program);
-    // Two uses of the folded array, each filled elementwise before its read.
-    assert_eq!(
-        stored_places(main),
-        ["local0", "local1[0]", "local1[1]", "local2[0]", "local2[1]"]
-    );
+    // Each use of the folded array reads its own static data, which nothing
+    // stores into.
+    assert_eq!(stored_places(main), ["local0"]);
+    let loaded: Vec<String> = loads(main).iter().map(describe).collect();
+    assert_eq!(loaded, ["local0", "constant0[v0]", "constant1[0]"]);
+    assert_eq!(main.constants.len(), 2);
 }
 
 #[test]
@@ -113,26 +99,16 @@ fn assigning_a_whole_array_copies_it() {
              }",
     );
     let main = main_of(&program);
-    assert_eq!(
-        stored_places(main),
-        [
-            "local0[0]",
-            "local0[1]",
-            "local0[2]",
-            "local1",
-            "local2",
-            "local2[0]"
-        ]
-    );
+    assert_eq!(stored_places(main), ["local0", "local1", "local1[0]"]);
     // `b` is its own array, so writing an element of it leaves `a` alone.
-    let copy = stores(main)[4].1.clone();
+    let copy = stores(main)[1].1.clone();
     assert_eq!(
         main.values[match copy {
             Operand::Value(ValueId(id)) => id,
             _ => panic!("a whole-array copy reads a place"),
         }]
         .kind,
-        ValueKind::Load(Place::Local(LocalId(1)))
+        ValueKind::Load(Place::Local(LocalId(0)))
     );
 }
 
@@ -300,6 +276,27 @@ fn len_folds_to_the_length_while_its_operand_still_runs() {
             .any(|place| matches!(place, Place::Element { .. })),
         "an operator that folds the length does not swallow the operand"
     );
+
+    for statement in [
+        "const n = len(grid[row]);",
+        "var n = u8(len(grid[row]));",
+        "var n = f64(len(grid[row]));",
+        "var n = u8.truncate(len(grid[row]));",
+    ] {
+        let program = lowered(&format!(
+            "fn main() -> void {{
+                 var grid: [2][2]int = [[1, 2], [3, 4]];
+                 var row = 1;
+                 {statement}
+             }}"
+        ));
+        assert!(
+            loads(main_of(&program))
+                .iter()
+                .any(|place| matches!(place, Place::Element { .. })),
+            "{statement} still evaluates the operand"
+        );
+    }
 }
 
 #[test]
@@ -336,12 +333,11 @@ fn the_index_binding_reads_the_loop_counter() {
                  exit(last);
              }",
     );
-    // The literal, `a`, `last`, the copy the loop walks, the counter, and
-    // `v`. The index binding is the counter rather than a seventh local.
+    // `a`, `last`, the copy the loop walks, the counter, and `v`. The index
+    // binding is the counter rather than a sixth local.
     assert_eq!(
         main_of(&program).flow.locals,
         [
-            array(2, Scalar::Int.into()),
             array(2, Scalar::Int.into()),
             Scalar::Int.into(),
             array(2, Scalar::Int.into()),
@@ -408,7 +404,7 @@ fn arrays_pass_through_parameters_arguments_and_results() {
     let main = main_of(&program);
     assert_eq!(call_targets(main), [FunctionId(1), FunctionId(0)]);
     // The inner call's array result lands in a local before it is passed on.
-    assert_eq!(main.flow.locals[2], row);
+    assert_eq!(main.flow.locals[1], row);
 }
 
 #[test]
@@ -543,7 +539,7 @@ fn module_bindings_become_globals_with_constant_initial_values() {
         program.program().globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: integers([40], Scalar::Int),
+            values: Some(integers([40], Scalar::Int)),
         }]
     );
     insta::assert_debug_snapshot!("module_bindings", program.program());
@@ -565,14 +561,13 @@ fn declarations_without_an_initializer_lower_to_their_zero_value() {
         program.program().globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: integers([0], Scalar::Int),
+            values: None,
         }]
     );
-    // A local aggregate is zeroed one scalar at a time, through the same
-    // stores a written literal produces.
+    // A local aggregate is zeroed whole rather than one scalar at a time.
     assert_eq!(
-        stored_places(main_of(&program))[..4],
-        ["local0[0]", "local0[1]", "local1.0", "local1.1"]
+        stored_places(main_of(&program))[..2],
+        ["zero local0", "zero local1"]
     );
     insta::assert_debug_snapshot!("zero_declarations", program.program());
 }
@@ -786,7 +781,7 @@ fn cross_module_calls_reads_and_assignments_lower_like_local_ones() {
         program.globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: integers([0], Scalar::Int),
+            values: None,
         }]
     );
 
@@ -886,7 +881,7 @@ fn a_binding_two_modules_use_is_one_global() {
         program.globals,
         vec![Global {
             ty: Scalar::Int.into(),
-            values: integers([0], Scalar::Int),
+            values: None,
         }]
     );
 
@@ -921,11 +916,11 @@ fn globals_follow_dependency_order_and_fold_imported_constants() {
         vec![
             Global {
                 ty: Scalar::Int.into(),
-                values: integers([2], Scalar::Int),
+                values: Some(integers([2], Scalar::Int)),
             },
             Global {
                 ty: Scalar::Int.into(),
-                values: integers([6], Scalar::Int),
+                values: Some(integers([6], Scalar::Int)),
             },
         ]
     );
@@ -1188,22 +1183,24 @@ fn floating_constants_lower_to_the_bits_of_their_format() {
         vec![
             Global {
                 ty: Scalar::F32.into(),
-                values: vec![Literal::Floating(Float::Binary32(0.1f32.to_bits()))],
+                values: Some(vec![Literal::Floating(Float::Binary32(0.1f32.to_bits()))]),
             },
             Global {
                 ty: Scalar::F64.into(),
-                values: vec![Literal::Floating(Float::Binary64(0.1f64.to_bits()))],
+                values: Some(vec![Literal::Floating(Float::Binary64(0.1f64.to_bits()))]),
             },
             // A literal rounds once to its format, so `f32` and `f64` hold
             // different values for the same source text. Negating a typed
             // zero keeps the sign bit an untyped constant cannot carry.
             Global {
                 ty: Scalar::F32.into(),
-                values: vec![Literal::Floating(Float::Binary32((-0.0f32).to_bits()))],
+                values: Some(vec![Literal::Floating(Float::Binary32(
+                    (-0.0f32).to_bits()
+                ))]),
             },
             Global {
                 ty: array(2, array(1, Scalar::F64.into())),
-                values: doubles([0.5, -1.5]),
+                values: Some(doubles([0.5, -1.5])),
             },
         ]
     );
@@ -1293,7 +1290,7 @@ fn heterogeneous_struct_globals_flatten_in_field_order() {
             // `int`, `u8`, and `f64` literals in declaration order.
             Global {
                 ty: declared(1, "Cell"),
-                values: vec![
+                values: Some(vec![
                     Literal::Integer {
                         value: 1,
                         ty: Scalar::Int,
@@ -1304,11 +1301,11 @@ fn heterogeneous_struct_globals_flatten_in_field_order() {
                     },
                     Literal::Floating(Float::Binary64(0.5f64.to_bits())),
                     Literal::Floating(Float::Binary64(1.5f64.to_bits())),
-                ],
+                ]),
             },
             Global {
                 ty: declared(3, "Table"),
-                values: integers([0, 0], Scalar::Int),
+                values: None,
             },
         ]
     );
@@ -1334,21 +1331,20 @@ fn a_struct_literal_stores_its_written_fields_and_then_its_filled_ones() {
     assert_eq!(
         stored_places(main_of(&filled)),
         [
-            // `Point { x = x, ... }` writes `x` and fills `y` into its own
+            // `Point { x = x, ... }` writes `x` and zeroes `y` into its own
             // local, which then stores into the enclosing literal's `point`
-            // field before that literal fills its whole array field.
+            // field before that literal zeroes its whole array field.
             "local1.0",
             "local1.1",
             "local0.0",
-            "local0.1[0]",
-            "local0.1[1]",
+            "zero local0.1",
             "local2",
         ]
     );
 }
 
 #[test]
-fn a_folded_struct_stores_one_literal_per_scalar_it_holds() {
+fn a_folded_struct_is_static_data_holding_each_scalar() {
     let program = lowered_with_structs(
         "fn main() -> void {
              const cell = Cell { point = Point { x = 1, y = 2 }, weights = [0.5, 1.5] };
@@ -1357,32 +1353,24 @@ fn a_folded_struct_stores_one_literal_per_scalar_it_holds() {
          }",
     );
     let main = main_of(&program);
-    // A folded struct reaches storage the same way a folded array does: one
-    // literal store per scalar, through the field and element steps that
-    // reach it.
+    // A folded struct reaches storage the same way a folded array does: its
+    // static data holds one literal per scalar, and the binding copies it.
+    assert_eq!(stored_places(main), ["local0"]);
+    assert_eq!(loads(main), [Place::Constant(ConstantId(0))]);
     assert_eq!(
-        stored_places(main),
-        [
-            "local0.0.0",
-            "local0.0.1",
-            "local0.1[0]",
-            "local0.1[1]",
-            "local1"
-        ]
-    );
-    let operands: Vec<Operand> = stores(main)
-        .into_iter()
-        .map(|(_, operand)| operand)
-        .collect();
-    assert_eq!(
-        operands,
-        [
-            integer(1, Scalar::Int),
-            integer(2, Scalar::U8),
-            floating(Float::Binary64(0.5f64.to_bits())),
-            floating(Float::Binary64(1.5f64.to_bits())),
-            Operand::Value(ValueId(0)),
-        ]
+        main.constants[0].values,
+        Some(vec![
+            Literal::Integer {
+                value: 1,
+                ty: Scalar::Int
+            },
+            Literal::Integer {
+                value: 2,
+                ty: Scalar::U8
+            },
+            Literal::Floating(Float::Binary64(0.5f64.to_bits())),
+            Literal::Floating(Float::Binary64(1.5f64.to_bits())),
+        ])
     );
 }
 
@@ -1397,12 +1385,12 @@ fn field_selection_reads_scalar_and_aggregate_fields_through_one_place() {
          }",
     );
     let main = main_of(&program);
-    // `local0` materializes the literal and `local1` is `cell`. A scalar
+    // `constant0` holds the folded literal and `local0` is `cell`. A scalar
     // field and an aggregate field both load through a field place, and no
     // separate struct copy instruction exists.
-    let cell = Place::Local(LocalId(1));
+    let cell = Place::Local(LocalId(0));
     let loaded: Vec<String> = loads(main).iter().map(describe).collect();
-    assert_eq!(loaded, ["local0", "local1.0", "local1.1[1]", "local2.0"]);
+    assert_eq!(loaded, ["constant0", "local0.0", "local0.1[1]", "local1.0"]);
     assert_eq!(
         loads(main)[1],
         field(cell.clone(), 0),
@@ -1436,10 +1424,7 @@ fn copying_a_struct_copies_its_whole_value() {
         })
         .count();
     assert_eq!(whole, 1);
-    assert_eq!(
-        stored_places(main),
-        ["local0.0", "local0.1", "local1", "local2", "local2.0"]
-    );
+    assert_eq!(stored_places(main), ["local0", "local1", "local1.0"]);
 }
 
 #[test]
@@ -1534,7 +1519,7 @@ fn mixed_field_and_element_targets_build_their_steps_in_order() {
     );
     let places = stored_places(main_of(&program));
     let mixed: Vec<&String> = places.iter().filter(|place| place.contains("[v")).collect();
-    assert_eq!(mixed, ["local1[v2].0.0", "local3.0[v3].0"]);
+    assert_eq!(mixed, ["local0[v2].0.0", "local1.0[v3].0"]);
 }
 
 #[test]
@@ -1560,7 +1545,7 @@ fn an_assignment_through_a_mixed_target_rebuilds_it_after_a_split_value() {
     let Place::Element { base, index, .. } = &store.0 else {
         unreachable!("the target ends in an element step")
     };
-    assert_eq!(**base, field(Place::Local(LocalId(1)), 0));
+    assert_eq!(**base, field(Place::Local(LocalId(0)), 0));
     let Operand::Value(ValueId(id)) = index else {
         unreachable!("a runtime index is a value")
     };

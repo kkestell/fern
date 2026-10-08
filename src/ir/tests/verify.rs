@@ -224,7 +224,10 @@ fn verification_checks_a_globals_values_against_its_type() {
                 },
             }],
         ));
-        program.globals = vec![Global { ty, values }];
+        program.globals = vec![Global {
+            ty,
+            values: Some(values),
+        }];
         let error = program.verify().unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
@@ -567,6 +570,7 @@ fn callee(parameters: Vec<Scalar>, result: Option<Scalar>) -> Function {
         parameters: parameters.len(),
         result: result.map(Type::from),
         values: vec![],
+        constants: vec![],
         flow: ControlFlow {
             entry: BlockId(0),
             locals: parameters.into_iter().map(Type::from).collect(),
@@ -765,6 +769,7 @@ fn verification_checks_return_forms_against_the_declared_result() {
                 parameters: 0,
                 result,
                 values: vec![],
+                constants: vec![],
                 flow: ControlFlow {
                     entry: BlockId(0),
                     locals: vec![],
@@ -807,6 +812,7 @@ fn verification_rejects_a_value_function_that_falls_off_its_end() {
             parameters: 0,
             result: Some(Scalar::Int.into()),
             values: vec![],
+            constants: vec![],
             flow: ControlFlow {
                 entry: BlockId(0),
                 locals: vec![],
@@ -830,6 +836,7 @@ fn verification_checks_main_globals_and_global_places() {
         parameters: 1,
         result: None,
         values: vec![],
+        constants: vec![],
         flow: ControlFlow {
             entry: BlockId(0),
             locals: vec![Scalar::Int.into()],
@@ -863,7 +870,7 @@ fn verification_checks_main_globals_and_global_places() {
     };
     stores_to_global(vec![Global {
         ty: Scalar::Int.into(),
-        values: integers([0], Scalar::Int),
+        values: Some(integers([0], Scalar::Int)),
     }])
     .verify()
     .unwrap();
@@ -873,7 +880,7 @@ fn verification_checks_main_globals_and_global_places() {
 
     let error = stores_to_global(vec![Global {
         ty: Scalar::U8.into(),
-        values: integers([0], Scalar::U8),
+        values: Some(integers([0], Scalar::U8)),
     }])
     .verify()
     .unwrap_err();
@@ -883,7 +890,7 @@ fn verification_checks_main_globals_and_global_places() {
         structs: vec![],
         globals: vec![Global {
             ty: Scalar::U8.into(),
-            values: integers([256], Scalar::U8),
+            values: Some(integers([256], Scalar::U8)),
         }],
         functions: vec![main_function(
             vec![],
@@ -1225,7 +1232,7 @@ fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order()
         structs: point_and_cell(),
         globals: vec![Global {
             ty: declared(1, "Cell"),
-            values,
+            values: Some(values),
         }],
         functions: vec![main_function(
             vec![],
@@ -1280,6 +1287,82 @@ fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order()
         ),
     ] {
         let error = cell(values).verify().unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn verification_rejects_writes_to_constants_and_malformed_zeroes_and_fills() {
+    let row = array(2, Scalar::Int.into());
+    let program = |instruction: Instruction| {
+        let mut main = main_function(
+            vec![],
+            vec![row.clone()],
+            vec![Block {
+                instructions: vec![instruction],
+                terminator: Terminator::Exit {
+                    status: integer(0, Scalar::Int),
+                },
+            }],
+        );
+        main.constants = vec![Global {
+            ty: row.clone(),
+            values: None,
+        }];
+        one_function(main)
+    };
+    let local = Place::Local(LocalId(0));
+    let constant = Place::Constant(ConstantId(0));
+    program(Instruction::Zero {
+        place: local.clone(),
+    })
+    .verify()
+    .unwrap();
+    program(Instruction::Fill {
+        place: local.clone(),
+        start: 1,
+        operand: integer(7, Scalar::Int),
+    })
+    .verify()
+    .unwrap();
+    for (instruction, expected) in [
+        (
+            Instruction::Zero {
+                place: constant.clone(),
+            },
+            "IR writes constant 0",
+        ),
+        (
+            Instruction::Store {
+                place: element(constant, integer(0, Scalar::Int)),
+                operand: integer(1, Scalar::Int),
+            },
+            "IR writes constant 0",
+        ),
+        (
+            Instruction::Zero {
+                place: element(local.clone(), integer(0, Scalar::Int)),
+            },
+            "IR zeroes scalar `int`",
+        ),
+        (
+            Instruction::Fill {
+                place: local.clone(),
+                start: 2,
+                operand: integer(7, Scalar::Int),
+            },
+            "IR fills `[2]int` from index 2",
+        ),
+        (
+            Instruction::Fill {
+                place: local,
+                start: 0,
+                operand: integer(7, Scalar::U8),
+            },
+            "IR fills `[2]int` with `u8`",
+        ),
+    ] {
+        let error = program(instruction).verify().unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
 }

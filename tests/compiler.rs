@@ -1489,10 +1489,42 @@ fn a_module_directory_holds_its_own_fern_files_only() {
     fs::create_dir(&empty).unwrap();
     let error = fern::compile(&empty, &output).unwrap_err().to_string();
     assert!(error.contains("holds no `.fern` source files"), "{error}");
+    let error = fern::compile(&root.join("notes.txt"), &output)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is not a `.fern` file"), "{error}");
     let error = fern::compile(&nested.join("missing"), &output)
         .unwrap_err()
         .to_string();
     assert!(error.contains("cannot read"), "{error}");
+}
+
+#[test]
+fn large_aggregates_compile_and_execute() {
+    // Copies, comparisons, zero values, fills, and calls take code that does
+    // not grow with the aggregate, and static data past the 8 MiB a Mach-O
+    // arm64 relocation can offset is still addressable.
+    let (_dir, input, output) = fixture(
+        "var big: [10000000]int;
+         fn first(values: [50000]int) -> int { return values[0]; }
+         fn make(seed: int) -> [50000]int { var out: [50000]int = [seed...]; return out; }
+         fn main() -> void {
+             big[9999999] = 2;
+             var a: [50000]int;
+             var b = make(3);
+             if a == b { exit(1); }
+             a = b;
+             if a != b { exit(2); }
+             for var i = 0; i < 3; i += 1 {
+                 var fresh: [50000]int;
+                 if fresh[49999] != 0 { exit(3); }
+                 fresh[49999] = i;
+             }
+             exit(first(a) + a[49999] + big[9999999]);
+         }",
+    );
+    fern::compile(&input, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(8));
 }
 
 #[test]

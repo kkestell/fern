@@ -286,10 +286,6 @@ pub(crate) struct CheckedProgram<'a> {
     pub module_bindings: Vec<Idx<Statement>>,
     pub expressions: ArenaMap<Idx<Expression>, CheckedExpression>,
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
-    /// The zero value of every declaration written without an initializer.
-    /// A `var` cannot carry its value in `Binding::constant`, which means the
-    /// binding folds into its use sites, so lowering reads it here.
-    pub zero_declarations: HashMap<Idx<Statement>, Constant>,
     pub bindings: Arena<Binding>,
     pub assignments: ArenaMap<Idx<Statement>, CheckedTarget>,
     pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,

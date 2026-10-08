@@ -10,6 +10,7 @@ Program {
             parameters: 0,
             result: None,
             values: [],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,

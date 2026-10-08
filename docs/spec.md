@@ -848,7 +848,7 @@ floating-point constant expression is a constant expression.
 ```fern
 var half: f32 = .5;
 var defaulted = 1e0; // f64
-const ratio = 3.0 / 2.0; // untyped floating-point constant 1.5
+const ratio = 3.0 / 2.0; // f64 constant 1.5
 const bad: f64 = 1.0 / 0.0; // error
 ```
 

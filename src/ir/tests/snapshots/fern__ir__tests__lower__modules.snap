@@ -9,12 +9,7 @@ Program {
             ty: Scalar(
                 Int,
             ),
-            values: [
-                Integer {
-                    value: 0,
-                    ty: Int,
-                },
-            ],
+            values: None,
         },
     ],
     functions: [
@@ -96,6 +91,7 @@ Program {
                     },
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -182,6 +178,7 @@ Program {
                 ),
             ),
             values: [],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -281,6 +278,7 @@ Program {
                     ),
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -361,6 +359,7 @@ Program {
             parameters: 0,
             result: None,
             values: [],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -435,6 +434,7 @@ Program {
                     },
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,

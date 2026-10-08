@@ -33,6 +33,7 @@ fn program(values: Vec<Value>, exit: Operand) -> Program {
         functions: vec![Function {
             parameters: 0,
             result: None,
+            constants: vec![],
             flow: ControlFlow {
                 entry: BlockId(0),
                 locals: vec![],

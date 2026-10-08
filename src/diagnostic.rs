@@ -27,7 +27,7 @@ impl Diagnostic {
 
 pub(crate) struct DiagnosticRenderer<'a> {
     sources: &'a SourceMap,
-    files: Vec<FileRenderer<'a>>,
+    files: Vec<FileRenderer>,
 }
 
 impl<'a> DiagnosticRenderer<'a> {
@@ -39,7 +39,7 @@ impl<'a> DiagnosticRenderer<'a> {
                 .iter()
                 .map(|file| FileRenderer {
                     path: file.path.display().to_string(),
-                    source: ariadne::Source::from(file.text.as_str()),
+                    source: ariadne::Source::from(ariadne_text(&file.text)),
                 })
                 .collect(),
         }
@@ -54,12 +54,27 @@ impl<'a> DiagnosticRenderer<'a> {
     }
 }
 
-struct FileRenderer<'a> {
+struct FileRenderer {
     path: String,
-    source: ariadne::Source<&'a str>,
+    source: ariadne::Source<String>,
 }
 
-impl FileRenderer<'_> {
+/// Fern ends a line only at a line feed, a carriage return, or both together,
+/// while ariadne also ends one at vertical tab, form feed, and the Unicode line
+/// separators. Each of those becomes a space character of the same byte
+/// length, so offsets and character columns still match the source.
+fn ariadne_text(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\u{b}' | '\u{c}' => ' ',
+            '\u{85}' => '\u{a0}',
+            '\u{2028}' | '\u{2029}' => '\u{2007}',
+            other => other,
+        })
+        .collect()
+}
+
+impl FileRenderer {
     fn render(&self, local: &Range<usize>, message: &str) -> String {
         if let Some((line, line_number, column)) = self.source.get_byte_line(local.start)
             && let Some(line_text) = self.source.get_line_text(line)
@@ -110,7 +125,7 @@ impl FileRenderer<'_> {
         line_number: usize,
         column: usize,
     ) -> String {
-        let content = line_text.trim_end_matches(['\r', '\n', '\u{b}', '\u{c}']);
+        let content = line_text.trim_end_matches(['\r', '\n']);
         let focus_start = previous_boundary(content, column.min(content.len()));
         let focus_end = next_boundary(
             content,
@@ -218,6 +233,15 @@ mod tests {
         );
         assert!(rendered.contains("long.fern:2:"));
         assert!(rendered.contains(&format!("bytes {start}..{end}")));
+    }
+
+    #[test]
+    fn only_line_feeds_and_carriage_returns_end_lines() {
+        let text = "fn main() -> void {\u{c}\n    // a\u{2028}b\u{85}c\u{2029}\n    \u{b}const broken = 1;\n}\n";
+        let sources = SourceMap::from_named_texts(&[("lines.fern", text)]);
+        let start = text.find("broken").unwrap();
+        let rendered = Diagnostic::new(start..start + 6, "unused binding").render(&sources);
+        assert!(rendered.contains("lines.fern:3:12"), "{rendered}");
     }
 
     #[test]

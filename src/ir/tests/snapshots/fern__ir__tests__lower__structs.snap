@@ -65,16 +65,18 @@ Program {
                     name: "Point",
                 },
             ),
-            values: [
-                Integer {
-                    value: 19,
-                    ty: Int,
-                },
-                Integer {
-                    value: 23,
-                    ty: U8,
-                },
-            ],
+            values: Some(
+                [
+                    Integer {
+                        value: 19,
+                        ty: Int,
+                    },
+                    Integer {
+                        value: 23,
+                        ty: U8,
+                    },
+                ],
+            ),
         },
     ],
     functions: [
@@ -189,6 +191,7 @@ Program {
                     ),
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -287,57 +290,15 @@ Program {
                                     ),
                                 ),
                             },
-                            Store {
-                                place: Element {
-                                    base: Field {
-                                        base: Local(
-                                            LocalId(
-                                                1,
-                                            ),
+                            Zero {
+                                place: Field {
+                                    base: Local(
+                                        LocalId(
+                                            1,
                                         ),
-                                        ordinal: 1,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
                                     ),
-                                    span: 274..344,
+                                    ordinal: 1,
                                 },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            0,
-                                        ),
-                                    ),
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Field {
-                                        base: Local(
-                                            LocalId(
-                                                1,
-                                            ),
-                                        ),
-                                        ordinal: 1,
-                                    },
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 274..344,
-                                },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            0,
-                                        ),
-                                    ),
-                                ),
                             },
                             Value(
                                 ValueId(
@@ -389,9 +350,9 @@ Program {
                         ),
                     },
                     kind: Load(
-                        Local(
-                            LocalId(
-                                1,
+                        Constant(
+                            ConstantId(
+                                0,
                             ),
                         ),
                     ),
@@ -427,7 +388,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -457,7 +418,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                3,
+                                2,
                             ),
                         ),
                     ),
@@ -476,7 +437,7 @@ Program {
                         Field {
                             base: Local(
                                 LocalId(
-                                    4,
+                                    3,
                                 ),
                             ),
                             ordinal: 0,
@@ -494,9 +455,9 @@ Program {
                         },
                     ),
                     kind: Load(
-                        Local(
-                            LocalId(
-                                5,
+                        Constant(
+                            ConstantId(
+                                1,
                             ),
                         ),
                     ),
@@ -530,7 +491,7 @@ Program {
                             base: Field {
                                 base: Local(
                                     LocalId(
-                                        4,
+                                        3,
                                     ),
                                 ),
                                 ordinal: 0,
@@ -549,7 +510,7 @@ Program {
                             base: Field {
                                 base: Local(
                                     LocalId(
-                                        4,
+                                        3,
                                     ),
                                 ),
                                 ordinal: 0,
@@ -597,6 +558,52 @@ Program {
                     },
                 },
             ],
+            constants: [
+                Global {
+                    ty: Array {
+                        length: 2,
+                        element: Scalar(
+                            F64,
+                        ),
+                    },
+                    values: Some(
+                        [
+                            Floating(
+                                Binary64(
+                                    4602678819172646912,
+                                ),
+                            ),
+                            Floating(
+                                Binary64(
+                                    4609434218613702656,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                Global {
+                    ty: Struct(
+                        StructType {
+                            id: StructId(
+                                0,
+                            ),
+                            name: "Point",
+                        },
+                    ),
+                    values: Some(
+                        [
+                            Integer {
+                                value: 20,
+                                ty: Int,
+                            },
+                            Integer {
+                                value: 23,
+                                ty: U8,
+                            },
+                        ],
+                    ),
+                },
+            ],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -610,12 +617,6 @@ Program {
                             name: "Cell",
                         },
                     ),
-                    Array {
-                        length: 2,
-                        element: Scalar(
-                            F64,
-                        ),
-                    },
                     Struct(
                         StructType {
                             id: StructId(
@@ -638,14 +639,6 @@ Program {
                                 1,
                             ),
                             name: "Cell",
-                        },
-                    ),
-                    Struct(
-                        StructType {
-                            id: StructId(
-                                0,
-                            ),
-                            name: "Point",
                         },
                     ),
                 ],
@@ -669,52 +662,6 @@ Program {
                                 operand: Value(
                                     ValueId(
                                         0,
-                                    ),
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 443..453,
-                                },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            4602678819172646912,
-                                        ),
-                                    ),
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 443..453,
-                                },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            4609434218613702656,
-                                        ),
                                     ),
                                 ),
                             },
@@ -746,7 +693,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Value(
@@ -760,7 +707,7 @@ Program {
                                     base: Field {
                                         base: Local(
                                             LocalId(
-                                                2,
+                                                1,
                                             ),
                                         ),
                                         ordinal: 1,
@@ -807,7 +754,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 operand: Value(
@@ -824,7 +771,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        4,
+                                        3,
                                     ),
                                 ),
                                 operand: Value(
@@ -838,38 +785,6 @@ Program {
                                     6,
                                 ),
                             ),
-                            Store {
-                                place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    ordinal: 0,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 20,
-                                        ty: Int,
-                                    },
-                                ),
-                            },
-                            Store {
-                                place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            5,
-                                        ),
-                                    ),
-                                    ordinal: 1,
-                                },
-                                operand: Literal(
-                                    Integer {
-                                        value: 23,
-                                        ty: U8,
-                                    },
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     7,

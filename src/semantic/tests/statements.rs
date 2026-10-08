@@ -777,19 +777,6 @@ fn a_declaration_without_an_initializer_takes_its_type_s_zero_value() {
             (struct_type(0, "Pair"), None),
         ]
     );
-    // Every declaration written without an initializer records its zero for
-    // lowering, whether or not the binding also folds.
-    assert_eq!(checked.zero_declarations.len(), 4);
-    let values = checked.zero_declarations.values().collect::<Vec<_>>();
-    assert!(values.contains(&&Constant::Integer(big(0))));
-    assert!(values.contains(&&Constant::Array(vec![
-        Constant::Integer(big(0)),
-        Constant::Integer(big(0))
-    ])));
-    assert!(values.contains(&&Constant::Struct(vec![
-        Constant::Integer(big(0)),
-        Constant::Float(Float::Binary64(0)),
-    ])));
 }
 
 #[test]

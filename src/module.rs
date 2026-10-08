@@ -113,6 +113,11 @@ pub(crate) fn load(root: &Path, roots: &[PathBuf]) -> Result<Program, LoadError>
             ))));
         }
         paths
+    } else if root.is_file() && root.extension().is_none_or(|extension| extension != "fern") {
+        return Err(LoadError::Failed(CompileError::new(format!(
+            "{}: root source file is not a `.fern` file",
+            root.display()
+        ))));
     } else {
         vec![root.to_owned()]
     };

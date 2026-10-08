@@ -9,13 +9,15 @@ Program {
             ty: Scalar(
                 F64,
             ),
-            values: [
-                Floating(
-                    Binary64(
-                        4611686018427387904,
+            values: Some(
+                [
+                    Floating(
+                        Binary64(
+                            4611686018427387904,
+                        ),
                     ),
-                ),
-            ],
+                ],
+            ),
         },
     ],
     functions: [
@@ -97,6 +99,7 @@ Program {
                     },
                 },
             ],
+            constants: [],
             flow: ControlFlow {
                 entry: BlockId(
                     0,
@@ -162,8 +165,8 @@ Program {
                         ),
                     },
                     kind: Load(
-                        Local(
-                            LocalId(
+                        Constant(
+                            ConstantId(
                                 0,
                             ),
                         ),
@@ -180,7 +183,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                1,
+                                0,
                             ),
                         ),
                     ),
@@ -203,7 +206,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                1,
+                                0,
                             ),
                         ),
                     ),
@@ -245,7 +248,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -272,17 +275,35 @@ Program {
                     },
                 },
             ],
-            flow: ControlFlow {
-                entry: BlockId(
-                    0,
-                ),
-                locals: [
-                    Array {
+            constants: [
+                Global {
+                    ty: Array {
                         length: 2,
                         element: Scalar(
                             F64,
                         ),
                     },
+                    values: Some(
+                        [
+                            Floating(
+                                Binary64(
+                                    4602678819172646912,
+                                ),
+                            ),
+                            Floating(
+                                Binary64(
+                                    4609434218613702656,
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+            flow: ControlFlow {
+                entry: BlockId(
+                    0,
+                ),
+                locals: [
                     Array {
                         length: 2,
                         element: Scalar(
@@ -296,52 +317,6 @@ Program {
                 blocks: [
                     Block {
                         instructions: [
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            0,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 0,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 187..197,
-                                },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            4602678819172646912,
-                                        ),
-                                    ),
-                                ),
-                            },
-                            Store {
-                                place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            0,
-                                        ),
-                                    ),
-                                    index: Literal(
-                                        Integer {
-                                            value: 1,
-                                            ty: Int,
-                                        },
-                                    ),
-                                    span: 187..197,
-                                },
-                                operand: Literal(
-                                    Floating(
-                                        Binary64(
-                                            4609434218613702656,
-                                        ),
-                                    ),
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     0,
@@ -350,7 +325,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        1,
+                                        0,
                                     ),
                                 ),
                                 operand: Value(
@@ -425,7 +400,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Value(

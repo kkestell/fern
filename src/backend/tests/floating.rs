@@ -103,9 +103,7 @@ fn native_floating_literals_globals_calls_and_returns_keep_their_values() {
                  exit(42);
              }",
     );
-    // An array of either format is an aggregate of its own scalar class.
     let qbe = emit(&program, None);
-    assert!(qbe.contains("type :arrays2 = { s 2 }"), "{qbe}");
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("program");
     build_text(&qbe, &output).unwrap();

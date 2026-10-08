@@ -167,7 +167,12 @@ fn number(lexer: &mut logos::Lexer<'_, Token>) {
         lexer.bump(1);
         bump_word(lexer);
     }
-    while lexer.slice().ends_with(['e', 'E']) && lexer.remainder().starts_with(['+', '-']) {
+    // Only an exponent marker takes a sign; a hexadecimal `e` digit before
+    // `+` or `-` ends the literal.
+    while is_floating(lexer.slice())
+        && lexer.slice().ends_with(['e', 'E'])
+        && lexer.remainder().starts_with(['+', '-'])
+    {
         lexer.bump(1);
         bump_word(lexer);
     }

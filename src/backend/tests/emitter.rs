@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn array_signatures_declare_one_aggregate_type_for_each_layout() {
+fn aggregates_pass_and_return_through_addresses() {
     let program = lowered(
         "fn row(seed: int) -> [3]int { var out: [3]int = [seed...]; return out; }
              fn total(values: [3]int) -> int { return values[0] + values[2]; }
@@ -12,28 +12,45 @@ fn array_signatures_declare_one_aggregate_type_for_each_layout() {
              }",
     );
     let qbe = emit(&program, None);
-    let types: Vec<&str> = qbe
-        .lines()
-        .filter(|line| line.starts_with("type "))
-        .collect();
-    // `[3]int` is a parameter and a result, and both name one definition.
-    assert_eq!(
-        types,
-        ["type :arrayl3 = { l 3 }", "type :arrayl6 = { l 6 }"]
+    // QBE's aggregate types would copy an argument one word at a time, so no
+    // signature names one. An aggregate result is written through the
+    // address the caller passes first.
+    assert!(!qbe.contains("type "), "{qbe}");
+    assert!(
+        qbe.contains("function $fn0(l %result, l %param0) {"),
+        "{qbe}"
     );
-    let first_use = qbe
-        .find(":arrayl3 %param")
-        .expect("an aggregate parameter names its type");
-    assert!(qbe.find("type :arrayl3").unwrap() < first_use, "{qbe}");
+    assert!(qbe.contains("function l $fn1(l %param0) {"), "{qbe}");
+    assert!(qbe.contains("function $fn2(l %result) {"), "{qbe}");
     assert!(qbe.contains("blit %param0, %local0, 24"), "{qbe}");
 
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("program");
     build_text(&qbe, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
 
-    let scalars = emit(&lowered("fn main() -> void { exit(42); }"), None);
-    assert!(!scalars.contains("type "), "{scalars}");
+#[test]
+fn large_aggregates_copy_zero_and_fill_without_unrolling() {
+    let program = lowered(
+        "fn main() -> void {
+                 var zeroed: [100]int;
+                 var n = 3;
+                 var filled: [100]int = [n...];
+                 zeroed = filled;
+                 exit(zeroed[99] + filled[0]);
+             }",
+    );
+    let qbe = emit(&program, None);
+    assert!(qbe.contains("call $memset(l %local0, w 0, l 800)"), "{qbe}");
+    assert!(qbe.contains("call $memcpy("), "{qbe}");
+    assert!(qbe.contains("@fill0_loop"), "{qbe}");
+    assert!(!qbe.contains("blit"), "{qbe}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("program");
+    build_text(&qbe, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(6));
 }
 
 #[test]

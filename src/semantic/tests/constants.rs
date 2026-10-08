@@ -427,6 +427,7 @@ fn conversions_evaluate_constants_and_preserve_runtime_operands() {
             .iter()
             .filter(|(_, expression)| {
                 matches!(expression.value, ExpressionValue::Conversion { .. })
+                    && expression.constant.is_none()
             })
             .count(),
         3

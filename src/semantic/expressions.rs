@@ -845,19 +845,14 @@ impl CheckedProgram<'_> {
             self.concretize(operand, &mut checked_operand, operand_type)?;
         }
         let constant = convert_constant(&checked_operand, destination, truncating, span)?;
-        let value = match constant {
-            Some(Constant::Float(_)) => ExpressionValue::Floating,
-            Some(_) => ExpressionValue::Integer,
-            None => ExpressionValue::Conversion {
-                operand,
-                truncating,
-            },
-        };
         self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
             ty: destination.into(),
             untyped: false,
-            value,
+            value: ExpressionValue::Conversion {
+                operand,
+                truncating,
+            },
             constant,
         })
     }

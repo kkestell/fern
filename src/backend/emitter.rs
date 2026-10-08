@@ -3,8 +3,8 @@
 use crate::{
     diagnostic::DiagnosticRenderer,
     ir::model::{
-        BlockId, ControlFlow, Function, FunctionId, Instruction, Literal, Operand, Place,
-        Terminator, ValueId, ValueKind,
+        BlockId, ConstantId, ControlFlow, Function, FunctionId, Global, Instruction, Literal,
+        Operand, Place, Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
     source::SourceMap,
@@ -24,6 +24,80 @@ fn allocation(layout: &Layout<'_>, ty: &Type) -> &'static str {
     }
 }
 
+/// QBE expands `blit` into one load and one store per word, so a copy is
+/// emitted inline only up to this size. A longer copy calls `memcpy`, whose code
+/// does not grow with the copy.
+const MAX_INLINE_COPY_BYTES: u64 = 64;
+
+/// Copies `size` bytes from `source` to `destination`, which do not overlap.
+fn emit_copy(text: &mut String, source: &str, destination: &str, size: u64) {
+    if size <= MAX_INLINE_COPY_BYTES {
+        writeln!(text, "    blit {source}, {destination}, {size}")
+    } else {
+        writeln!(
+            text,
+            "    call $memcpy(l {destination}, l {source}, l {size})"
+        )
+    }
+    .unwrap();
+}
+
+/// Mach-O arm64 relocations hold a signed 24-bit addend, and QBE folds a
+/// constant offset into static data's relocation. Larger static data is
+/// addressed through a pointer cell, whose load QBE cannot fold.
+const MAX_DIRECT_STATIC_BYTES: u64 = 1 << 23;
+
+/// Names the static data holding constant `id` of function `function`.
+fn constant_symbol(function: usize, ConstantId(id): ConstantId) -> String {
+    format!("function{function}_constant{id}")
+}
+
+/// Writes static data. Its scalars sit where the layout puts them, so the gaps
+/// between them and the padding after the last one are zeroed, and data with
+/// no values is zero throughout.
+fn emit_data(emitter: &mut Emitter<'_>, symbol: &str, global: &Global) {
+    let mut items = Vec::new();
+    let mut written = 0;
+    if let Some(values) = &global.values {
+        for ((offset, ty), value) in emitter
+            .layout
+            .scalar_slots(&global.ty)
+            .into_iter()
+            .zip(values)
+        {
+            if offset != written {
+                items.push(format!("z {}", offset - written));
+            }
+            items.push(data_item(value.clone()));
+            written = offset + emitter.layout.size(&ty);
+        }
+    }
+    let size = emitter.layout.size(&global.ty);
+    if size != written {
+        items.push(format!("z {}", size - written));
+    }
+    writeln!(emitter.data, "data ${symbol} = {{ {} }}", items.join(", ")).unwrap();
+    if size > MAX_DIRECT_STATIC_BYTES {
+        writeln!(emitter.data, "data ${symbol}_address = {{ l ${symbol} }}").unwrap();
+    }
+}
+
+/// The address of static data, read from its pointer cell when the data is
+/// too large to address directly.
+fn static_address(emitter: &mut Emitter<'_>, symbol: String, ty: Type) -> (String, Type) {
+    if emitter.layout.size(&ty) <= MAX_DIRECT_STATIC_BYTES {
+        return (format!("${symbol}"), ty);
+    }
+    let access = emitter.accesses;
+    emitter.accesses += 1;
+    writeln!(
+        emitter.text,
+        "    %access{access}_static =l loadl ${symbol}_address"
+    )
+    .unwrap();
+    (format!("%access{access}_static"), ty)
+}
+
 /// Names the QBE symbol defining or calling function `id`. Fern source names
 /// never reach the object file, so a function named `write` or `exit` cannot
 /// collide with libc.
@@ -41,10 +115,14 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
     let flow = &function.flow;
     match place {
         Place::Local(local) => (format!("%local{}", local.0), flow.locals[local.0].clone()),
-        Place::Global(global) => (
-            format!("$global{}", global.0),
-            emitter.globals[global.0].ty.clone(),
-        ),
+        Place::Global(global) => {
+            let ty = emitter.globals[global.0].ty.clone();
+            static_address(emitter, format!("global{}", global.0), ty)
+        }
+        Place::Constant(constant) => {
+            let symbol = constant_symbol(emitter.function, *constant);
+            static_address(emitter, symbol, function.constants[constant.0].ty.clone())
+        }
         Place::Element { base, index, span } => {
             let (base, ty) = place_address(emitter, function, base);
             let spelling = ty.to_string();
@@ -136,54 +214,48 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         qbe_result: None,
         accesses: 0,
         comparisons: 0,
+        fills: 0,
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
     for (id, global) in program.globals.iter().enumerate() {
-        // A global holds its scalars where the layout puts them, so the gaps
-        // between them and the padding after the last one are zeroed.
-        let mut items = Vec::new();
-        let mut written = 0;
-        for ((offset, ty), value) in emitter
-            .layout
-            .scalar_slots(&global.ty)
-            .into_iter()
-            .zip(&global.values)
-        {
-            if offset != written {
-                items.push(format!("z {}", offset - written));
-            }
-            items.push(data_item(value.clone()));
-            written = offset + emitter.layout.size(&ty);
-        }
-        let size = emitter.layout.size(&global.ty);
-        if size != written {
-            items.push(format!("z {}", size - written));
-        }
-        writeln!(
-            emitter.data,
-            "data $global{id} = {{ {} }}",
-            items.join(", ")
-        )
-        .unwrap();
+        emit_data(&mut emitter, &format!("global{id}"), global);
     }
     for (index, function) in program.functions.iter().enumerate() {
         let id = FunctionId(index);
         let entry = id == program.main;
         emitter.function = index;
+        for (constant, data) in function.constants.iter().enumerate() {
+            emit_data(
+                &mut emitter,
+                &constant_symbol(index, ConstantId(constant)),
+                data,
+            );
+        }
         // `main` reports the process status, so it returns a word even though
-        // Fern declares it as returning nothing.
+        // Fern declares it as returning nothing. An aggregate result is
+        // written through the address the caller passes first.
         emitter.qbe_result = if entry {
-            Some("w".to_owned())
+            Some('w')
         } else {
-            function.result.as_ref().map(|ty| emitter.layout.class(ty))
+            function
+                .result
+                .as_ref()
+                .and_then(|ty| ty.scalar())
+                .map(qbe_type)
         };
-        let parameters = (0..function.parameters)
-            .map(|index| {
+        let result = function
+            .result
+            .as_ref()
+            .filter(|ty| ty.scalar().is_none())
+            .map(|_| "l %result".to_owned());
+        let parameters = result
+            .into_iter()
+            .chain((0..function.parameters).map(|index| {
                 format!(
                     "{} %param{index}",
                     emitter.layout.class(&function.flow.locals[index])
                 )
-            })
+            }))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
@@ -200,7 +272,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         emit_control_flow(&mut emitter, function, &function.flow);
         emitter.text.push_str("}\n");
     }
-    emitter.layout.type_definitions(&program.functions) + &emitter.data + &emitter.text
+    emitter.data + &emitter.text
 }
 
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
@@ -215,9 +287,11 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     }
     // An aggregate value holds its own copy of the aggregate. QBE allocates
     // once per `alloc` it executes, so the storage is allocated here rather
-    // than where the load runs, which may be inside a loop.
+    // than where the load or call runs, which may be inside a loop.
     for (id, value) in function.values.iter().enumerate() {
-        if matches!(value.kind, ValueKind::Load(_)) && value.ty.scalar().is_none() {
+        if matches!(value.kind, ValueKind::Load(_) | ValueKind::CallResult)
+            && value.ty.scalar().is_none()
+        {
             writeln!(
                 emitter.text,
                 "    %v{id}_storage =l {} {}",
@@ -236,11 +310,15 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
                 "    store{} %param{index}, %local{index}",
                 qbe_type(*scalar)
             ),
-            Type::Array { .. } | Type::Struct(_) => writeln!(
-                emitter.text,
-                "    blit %param{index}, %local{index}, {}",
-                emitter.layout.size(ty)
-            ),
+            Type::Array { .. } | Type::Struct(_) => {
+                emit_copy(
+                    &mut emitter.text,
+                    &format!("%param{index}"),
+                    &format!("%local{index}"),
+                    emitter.layout.size(ty),
+                );
+                Ok(())
+            }
         }
         .unwrap();
     }
@@ -251,7 +329,7 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
         for instruction in &block.instructions {
             emit_instruction(emitter, function, instruction);
         }
-        emit_terminator(emitter, BlockId(block_id), &block.terminator);
+        emit_terminator(emitter, function, BlockId(block_id), &block.terminator);
     }
 }
 
@@ -264,19 +342,24 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
         } => {
             let (address, ty) = place_address(emitter, function, destination);
             let source = operand(source.clone());
-            match ty {
-                Type::Scalar(scalar) => writeln!(
-                    emitter.text,
-                    "    store{} {source}, {address}",
-                    qbe_type(scalar)
-                ),
-                Type::Array { .. } | Type::Struct(_) => writeln!(
-                    emitter.text,
-                    "    blit {source}, {address}, {}",
-                    emitter.layout.size(&ty)
-                ),
-            }
+            emit_store(emitter, &source, &address, &ty);
+        }
+        Instruction::Zero { place } => {
+            let (address, ty) = place_address(emitter, function, place);
+            writeln!(
+                emitter.text,
+                "    call $memset(l {address}, w 0, l {})",
+                emitter.layout.size(&ty)
+            )
             .unwrap();
+        }
+        Instruction::Fill {
+            place,
+            start,
+            operand: source,
+        } => {
+            let (address, ty) = place_address(emitter, function, place);
+            emit_fill(emitter, &address, &ty, *start, &operand(source.clone()));
         }
         Instruction::Call {
             result,
@@ -287,6 +370,69 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
     }
 }
 
+/// Stores a value of type `ty` at `address`. An aggregate value is the
+/// address of its storage, so storing one copies it.
+fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type) {
+    match ty {
+        Type::Scalar(scalar) => writeln!(
+            emitter.text,
+            "    store{} {source}, {address}",
+            qbe_type(*scalar)
+        )
+        .unwrap(),
+        Type::Array { .. } | Type::Struct(_) => {
+            emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
+        }
+    }
+}
+
+/// Stores `source` into each element of the array at `address` from index
+/// `start` on, in a loop whose code does not grow with the array.
+fn emit_fill(emitter: &mut Emitter<'_>, address: &str, ty: &Type, start: u64, source: &str) {
+    let Type::Array { length, element } = ty else {
+        unreachable!("a verified fill stores into an array")
+    };
+    let stride = emitter.layout.size(element);
+    let fill = emitter.fills;
+    emitter.fills += 1;
+    let text = &mut emitter.text;
+    writeln!(text, "    jmp @fill{fill}_start").unwrap();
+    writeln!(text, "@fill{fill}_start").unwrap();
+    writeln!(text, "    jmp @fill{fill}_loop").unwrap();
+    writeln!(text, "@fill{fill}_loop").unwrap();
+    writeln!(
+        text,
+        "    %fill{fill}_index =l phi @fill{fill}_start {start}, @fill{fill}_body %fill{fill}_next"
+    )
+    .unwrap();
+    writeln!(
+        text,
+        "    %fill{fill}_more =w csltl %fill{fill}_index, {length}"
+    )
+    .unwrap();
+    writeln!(
+        text,
+        "    jnz %fill{fill}_more, @fill{fill}_body, @fill{fill}_done"
+    )
+    .unwrap();
+    writeln!(text, "@fill{fill}_body").unwrap();
+    writeln!(
+        text,
+        "    %fill{fill}_offset =l mul %fill{fill}_index, {stride}"
+    )
+    .unwrap();
+    writeln!(
+        text,
+        "    %fill{fill}_address =l add {address}, %fill{fill}_offset"
+    )
+    .unwrap();
+    emit_store(emitter, source, &format!("%fill{fill}_address"), element);
+    let text = &mut emitter.text;
+    writeln!(text, "    %fill{fill}_next =l add %fill{fill}_index, 1").unwrap();
+    writeln!(text, "    jmp @fill{fill}_loop").unwrap();
+    writeln!(text, "@fill{fill}_done").unwrap();
+}
+
 fn emit_call(
     emitter: &mut Emitter<'_>,
     callee: FunctionId,
@@ -294,23 +440,35 @@ fn emit_call(
     result: Option<ValueId>,
 ) {
     let target = &emitter.functions[callee.0];
+    // An aggregate result is written into the storage its value owns, whose
+    // address the callee takes first.
+    let aggregate_result = result.filter(|_| {
+        target
+            .result
+            .as_ref()
+            .is_some_and(|ty| ty.scalar().is_none())
+    });
     // The callee's leading locals hold its parameters, so they give each
     // argument its type.
-    let arguments = arguments
-        .iter()
-        .enumerate()
-        .map(|(index, argument)| {
+    let arguments = aggregate_result
+        .map(|ValueId(id)| format!("l %v{id}_storage"))
+        .into_iter()
+        .chain(arguments.iter().enumerate().map(|(index, argument)| {
             format!(
                 "{} {}",
                 emitter.layout.class(&target.flow.locals[index]),
                 operand(argument.clone())
             )
-        })
+        }))
         .collect::<Vec<_>>()
         .join(", ");
     let symbol = function_symbol(emitter.main, callee);
-    match result {
-        Some(ValueId(id)) => writeln!(
+    match (result, aggregate_result) {
+        (Some(ValueId(id)), Some(_)) => writeln!(
+            emitter.text,
+            "    call ${symbol}({arguments})\n    %v{id} =l copy %v{id}_storage"
+        ),
+        (Some(ValueId(id)), None) => writeln!(
             emitter.text,
             "    %v{id} ={} call ${symbol}({arguments})",
             emitter.layout.class(
@@ -320,12 +478,17 @@ fn emit_call(
                     .expect("a call result requires a callee that returns one")
             )
         ),
-        None => writeln!(emitter.text, "    call ${symbol}({arguments})"),
+        (None, _) => writeln!(emitter.text, "    call ${symbol}({arguments})"),
     }
     .unwrap();
 }
 
-fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Terminator) {
+fn emit_terminator(
+    emitter: &mut Emitter<'_>,
+    function: &Function,
+    block: BlockId,
+    terminator: &Terminator,
+) {
     match terminator {
         Terminator::Jump { target } => {
             writeln!(emitter.text, "    jmp @block{}", target.0).unwrap();
@@ -357,9 +520,16 @@ fn emit_terminator(emitter: &mut Emitter<'_>, block: BlockId, terminator: &Termi
             emitter.text.push_str("    hlt\n");
         }
         Terminator::Return { value } => match value {
-            Some(value) => {
-                writeln!(emitter.text, "    ret {}", operand(value.clone())).unwrap();
-            }
+            Some(value) => match function.result.as_ref().filter(|ty| ty.scalar().is_none()) {
+                Some(ty) => {
+                    let size = emitter.layout.size(ty);
+                    emit_copy(&mut emitter.text, &operand(value.clone()), "%result", size);
+                    emitter.text.push_str("    ret\n");
+                }
+                None => {
+                    writeln!(emitter.text, "    ret {}", operand(value.clone())).unwrap();
+                }
+            },
             // Falling off the end of `main` exits zero. Every other function
             // returning nothing has no QBE return type to give a value to.
             None => emitter.text.push_str(if emitter.qbe_result.is_some() {
@@ -384,11 +554,16 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                 }
                 // Loading an aggregate copies it, so a later call in the same
                 // expression cannot change what the value holds.
-                Type::Array { .. } | Type::Struct(_) => writeln!(
-                    emitter.text,
-                    "    blit {address}, %v{id}_storage, {}\n    %v{id} =l copy %v{id}_storage",
-                    emitter.layout.size(&value.ty)
-                ),
+                Type::Array { .. } | Type::Struct(_) => {
+                    let size = emitter.layout.size(&value.ty);
+                    emit_copy(
+                        &mut emitter.text,
+                        &address,
+                        &format!("%v{id}_storage"),
+                        size,
+                    );
+                    writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
+                }
             }
             .unwrap();
         }

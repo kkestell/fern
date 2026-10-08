@@ -1134,6 +1134,16 @@ fn aggregate_fills_stay_within_the_expanded_constant_limit() {
     accepts_source(
         "fn main() -> void { var x: [4][4][60000]u8 = [[[0...]...]...]; exit(int(x[0][0][0])); }",
     );
+    // A `const` without an initializer folds its zero value into every use,
+    // while a `var` is zeroed storage that expands nothing.
+    rejects_root(
+        "fn main() -> void { «const values: [1000001]int;» }",
+        "aggregate initializer exceeds compiler limit of 1000000 values",
+    );
+    accepts_source(
+        "var module: [2000000]int;
+         fn main() -> void { var local: [2000000]u8; exit(module[1] + int(local[1])); }",
+    );
 }
 
 #[test]

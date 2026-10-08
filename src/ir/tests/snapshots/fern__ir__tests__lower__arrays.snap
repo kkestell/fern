@@ -622,7 +622,7 @@ Program {
                             Int,
                         ),
                     },
-                    kind: Load(
+                    kind: Borrow(
                         Element {
                             base: Local(
                                 LocalId(
@@ -1029,7 +1029,7 @@ Program {
                             ),
                         },
                     },
-                    kind: Load(
+                    kind: Borrow(
                         Local(
                             LocalId(
                                 0,

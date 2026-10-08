@@ -385,7 +385,7 @@ Program {
                             name: "Cell",
                         },
                     ),
-                    kind: Load(
+                    kind: Borrow(
                         Local(
                             LocalId(
                                 1,
@@ -410,24 +410,6 @@ Program {
                     ty: Struct(
                         StructType {
                             id: StructId(
-                                1,
-                            ),
-                            name: "Cell",
-                        },
-                    ),
-                    kind: Load(
-                        Local(
-                            LocalId(
-                                2,
-                            ),
-                        ),
-                    ),
-                },
-                Value {
-                    span: None,
-                    ty: Struct(
-                        StructType {
-                            id: StructId(
                                 0,
                             ),
                             name: "Point",
@@ -437,7 +419,7 @@ Program {
                         Field {
                             base: Local(
                                 LocalId(
-                                    3,
+                                    2,
                                 ),
                             ),
                             ordinal: 0,
@@ -471,12 +453,12 @@ Program {
                         operator: Equal,
                         left: Value(
                             ValueId(
-                                6,
+                                5,
                             ),
                         ),
                         right: Value(
                             ValueId(
-                                7,
+                                6,
                             ),
                         ),
                     },
@@ -491,7 +473,7 @@ Program {
                             base: Field {
                                 base: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 ordinal: 0,
@@ -510,7 +492,7 @@ Program {
                             base: Field {
                                 base: Local(
                                     LocalId(
-                                        3,
+                                        2,
                                     ),
                                 ),
                                 ordinal: 0,
@@ -529,7 +511,7 @@ Program {
                     kind: Convert {
                         operand: Value(
                             ValueId(
-                                10,
+                                9,
                             ),
                         ),
                         truncating: false,
@@ -547,12 +529,12 @@ Program {
                         form: Infix,
                         left: Value(
                             ValueId(
-                                9,
+                                8,
                             ),
                         ),
                         right: Value(
                             ValueId(
-                                11,
+                                10,
                             ),
                         ),
                     },
@@ -609,14 +591,6 @@ Program {
                     0,
                 ),
                 locals: [
-                    Struct(
-                        StructType {
-                            id: StructId(
-                                1,
-                            ),
-                            name: "Cell",
-                        },
-                    ),
                     Struct(
                         StructType {
                             id: StructId(
@@ -768,18 +742,6 @@ Program {
                                     5,
                                 ),
                             ),
-                            Store {
-                                place: Local(
-                                    LocalId(
-                                        3,
-                                    ),
-                                ),
-                                operand: Value(
-                                    ValueId(
-                                        5,
-                                    ),
-                                ),
-                            },
                             Value(
                                 ValueId(
                                     6,
@@ -790,16 +752,11 @@ Program {
                                     7,
                                 ),
                             ),
-                            Value(
-                                ValueId(
-                                    8,
-                                ),
-                            ),
                         ],
                         terminator: Branch {
                             condition: Value(
                                 ValueId(
-                                    8,
+                                    7,
                                 ),
                             ),
                             then_target: BlockId(
@@ -812,6 +769,11 @@ Program {
                     },
                     Block {
                         instructions: [
+                            Value(
+                                ValueId(
+                                    8,
+                                ),
+                            ),
                             Value(
                                 ValueId(
                                     9,
@@ -827,16 +789,11 @@ Program {
                                     11,
                                 ),
                             ),
-                            Value(
-                                ValueId(
-                                    12,
-                                ),
-                            ),
                         ],
                         terminator: Exit {
                             status: Value(
                                 ValueId(
-                                    12,
+                                    11,
                                 ),
                             ),
                         },

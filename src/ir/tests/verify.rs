@@ -1366,3 +1366,88 @@ fn verification_rejects_writes_to_constants_and_malformed_zeroes_and_fills() {
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
+
+#[test]
+fn verification_rejects_writing_a_parameter_and_invalid_borrows() {
+    let row = array(2, Scalar::Int.into());
+    // `callee` takes one `[2]int` parameter and runs `instructions` over
+    // `values` before returning.
+    let program = |values: Vec<Value>, instructions: Vec<Instruction>| {
+        let mut program = two_functions(
+            Function {
+                parameters: 1,
+                result: None,
+                values,
+                constants: vec![],
+                flow: ControlFlow {
+                    entry: BlockId(0),
+                    locals: vec![row.clone(), row.clone()],
+                    blocks: vec![Block {
+                        instructions,
+                        terminator: Terminator::Return { value: None },
+                    }],
+                },
+            },
+            vec![],
+            vec![],
+        );
+        program.globals.push(Global {
+            ty: row.clone(),
+            values: None,
+        });
+        program
+    };
+    let borrow = |ty: Type, place| Value {
+        span: None,
+        ty,
+        kind: ValueKind::Borrow(place),
+    };
+
+    // Borrowing a parameter or a local and storing it elsewhere is valid.
+    program(
+        vec![borrow(row.clone(), Place::Local(LocalId(0)))],
+        vec![
+            Instruction::Value(ValueId(0)),
+            Instruction::Store {
+                place: Place::Local(LocalId(1)),
+                operand: Operand::Value(ValueId(0)),
+            },
+        ],
+    )
+    .verify()
+    .unwrap();
+
+    for (values, instructions, expected) in [
+        (
+            vec![],
+            vec![Instruction::Store {
+                place: element(Place::Local(LocalId(0)), integer(0, Scalar::Int)),
+                operand: integer(1, Scalar::Int),
+            }],
+            "IR writes parameter 0",
+        ),
+        (
+            vec![],
+            vec![Instruction::Zero {
+                place: Place::Local(LocalId(0)),
+            }],
+            "IR writes parameter 0",
+        ),
+        (
+            vec![borrow(row.clone(), Place::Global(GlobalId(0)))],
+            vec![Instruction::Value(ValueId(0))],
+            "invalid IR value",
+        ),
+        (
+            vec![borrow(
+                Scalar::Int.into(),
+                element(Place::Local(LocalId(1)), integer(0, Scalar::Int)),
+            )],
+            vec![Instruction::Value(ValueId(0))],
+            "invalid IR value",
+        ),
+    ] {
+        let error = program(values, instructions).verify().unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}

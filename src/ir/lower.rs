@@ -575,7 +575,9 @@ fn lower_location(
 }
 
 /// Lowers arguments left to right, holding each so a later argument that splits
-/// blocks cannot leave an earlier one unreadable in the call's block.
+/// blocks cannot leave an earlier one unreadable in the call's block. An
+/// aggregate argument is passed from its own storage unless a called function
+/// could write it; see `lower_argument`.
 fn lower_call(
     checked: &CheckedProgram<'_>,
     function: Idx<SyntaxFunction>,
@@ -587,7 +589,7 @@ fn lower_call(
     let mut held = Vec::with_capacity(arguments.len());
     for &argument in arguments {
         let ty = checked.expressions[argument].ty.clone();
-        let operand = lower_flow_operand(checked, argument, bindings, builder);
+        let operand = lower_argument(checked, argument, bindings, builder);
         held.push(hold_operand(builder, operand, ty));
     }
     let arguments = held
@@ -600,6 +602,47 @@ fn lower_call(
         checked.functions[function].result.clone(),
         span,
     )
+}
+
+/// An argument's operand. An aggregate whose place is rooted in a local or a
+/// constant is borrowed rather than copied, since nothing can write that place
+/// before the call returns. A module-level `var` can be written by the callee
+/// or by a later argument, so an argument read from one is loaded.
+fn lower_argument(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    let ty = checked.expressions[id].ty.clone();
+    if ty.scalar().is_some() || unwrapped_call(checked, id).is_some() {
+        return lower_flow_operand(checked, id, bindings, builder);
+    }
+    let place = lower_aggregate_place(checked, id, bindings, builder);
+    let kind = if matches!(place.root(), Place::Global(_)) {
+        ValueKind::Load(place)
+    } else {
+        ValueKind::Borrow(place)
+    };
+    builder.value(Value {
+        span: None,
+        ty,
+        kind,
+    })
+}
+
+/// The unfolded call `id` evaluates, looking through any parentheses around
+/// it.
+fn unwrapped_call(checked: &CheckedProgram<'_>, id: Idx<Expression>) -> Option<Idx<Expression>> {
+    let expression = &checked.expressions[id];
+    if expression.constant.is_some() {
+        return None;
+    }
+    match &expression.value {
+        ExpressionValue::Call { .. } => Some(id),
+        ExpressionValue::Grouping { expression } => unwrapped_call(checked, *expression),
+        _ => None,
+    }
 }
 
 fn lower_call_expression(
@@ -1135,8 +1178,7 @@ fn lower_flow_operand(
 ) -> Operand {
     let expression = &checked.expressions[id];
     let Some(scalar) = expression.ty.scalar() else {
-        let place = lower_aggregate_place(checked, id, bindings, builder);
-        return load_place(builder, place, expression.ty.clone());
+        return lower_aggregate_operand(checked, id, bindings, builder);
     };
     let ty: Type = scalar.into();
     if let Some(constant) = expression.constant.as_ref() {
@@ -1263,6 +1305,21 @@ fn lower_flow_operand(
         } => lower_logical(checked, *operator, *left, *right, bindings, builder),
         ExpressionValue::Call { .. } => lower_call_expression(checked, id, bindings, builder),
     }
+}
+
+/// An aggregate operand. A call's result already owns its storage, so it is
+/// the operand itself; anything else is loaded from its place.
+fn lower_aggregate_operand(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Operand {
+    if let Some(call) = unwrapped_call(checked, id) {
+        return lower_call_expression(checked, call, bindings, builder);
+    }
+    let place = lower_aggregate_place(checked, id, bindings, builder);
+    load_place(builder, place, checked.expressions[id].ty.clone())
 }
 
 /// An already-lowered operand and the block that produced it. Lowering what

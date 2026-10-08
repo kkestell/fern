@@ -180,7 +180,7 @@ Program {
                             F64,
                         ),
                     },
-                    kind: Load(
+                    kind: Borrow(
                         Local(
                             LocalId(
                                 0,
@@ -203,7 +203,7 @@ Program {
                             F64,
                         ),
                     },
-                    kind: Load(
+                    kind: Borrow(
                         Local(
                             LocalId(
                                 0,

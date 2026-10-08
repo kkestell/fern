@@ -14,6 +14,7 @@ described as "behavior" or a "specification."
 | ----------------- | ----------------------------------------------------------------------------------------- |
 | `docs/spec.md`    | The Fern language: source syntax, types, semantic rules, built-ins, and program execution. |
 | `agents/bugs.md`  | Known defects and implementation limitations.                                             |
+| `agents/todo.md`  | Planned improvements that are not defects.                                                |
 | `agents/plans/`   | Implementation plans written by `kplan`.                                                  |
 | `agents/work/`    | Work logs written by `kwork`.                                                             |
 | `agents/reviews/` | Code reviews written by `kreview`.                                                        |

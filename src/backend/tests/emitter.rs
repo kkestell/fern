@@ -22,12 +22,73 @@ fn aggregates_pass_and_return_through_addresses() {
     );
     assert!(qbe.contains("function l $fn1(l %param0) {"), "{qbe}");
     assert!(qbe.contains("function $fn2(l %result) {"), "{qbe}");
-    assert!(qbe.contains("blit %param0, %local0, 24"), "{qbe}");
+    // A callee reads an aggregate parameter from the caller's storage.
+    let total = function_text(&qbe, "$fn1");
+    assert!(!total.contains("blit"), "{total}");
+    assert!(!total.contains("%local0 ="), "{total}");
 
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("program");
     build_text(&qbe, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+/// The text of the function whose symbol is `symbol`, through its closing
+/// brace.
+fn function_text<'a>(qbe: &'a str, symbol: &str) -> &'a str {
+    // A call to the function names its symbol too, so find its header.
+    let header = qbe
+        .lines()
+        .find(|line| line.contains("function ") && line.contains(&format!(" {symbol}(")))
+        .unwrap_or_else(|| panic!("{qbe}"));
+    let start = qbe.find(header).unwrap();
+    let end = start + qbe[start..].find("\n}\n").expect("a closing brace");
+    &qbe[start..end]
+}
+
+#[test]
+fn a_returned_call_writes_its_result_straight_into_the_callers_storage() {
+    let program = lowered(
+        "type Big struct { values: [10]int, last: int }
+             fn build(seed: int) -> Big { return Big { values = [seed...], last = seed }; }
+             fn relay(seed: int) -> Big { return build(seed); }
+             fn chain(seed: int) -> Big { return (relay(seed + 1)); }
+             fn main() -> void { exit(chain(41).last); }",
+    );
+    let qbe = emit(&program, None);
+    for (symbol, callee) in [("$fn1", "$fn0"), ("$fn2", "$fn1")] {
+        let text = function_text(&qbe, symbol);
+        assert!(
+            text.contains(&format!("call {callee}(l %result,")),
+            "{text}"
+        );
+        assert!(!text.contains("blit"), "{text}");
+        assert!(!text.contains("memcpy"), "{text}");
+        assert!(!text.contains("_storage"), "{text}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("program");
+    build_text(&qbe, &output).unwrap();
+    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn a_borrowed_arguments_bounds_check_runs_before_later_arguments() {
+    // An out-of-range index traps, which aborts rather than exiting with a
+    // status, so `quit` never runs.
+    assert_eq!(
+        native_program_status(
+            "fn quit() -> int { exit(7); }
+             fn first(row: [2]int, unused: int) -> int { return row[0]; }
+             fn main() -> void {
+                 var rows: [2][2]int;
+                 var i = 2;
+                 exit(first(rows[i], quit()));
+             }"
+        ),
+        None
+    );
 }
 
 #[test]

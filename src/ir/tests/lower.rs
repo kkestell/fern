@@ -403,8 +403,100 @@ fn arrays_pass_through_parameters_arguments_and_results() {
     assert_eq!(functions[1].result, Some(row.clone()));
     let main = main_of(&program);
     assert_eq!(call_targets(main), [FunctionId(1), FunctionId(0)]);
-    // The inner call's array result lands in a local before it is passed on.
-    assert_eq!(main.flow.locals[1], row);
+    // The inner call's array result is passed on from its own storage.
+    assert_eq!(main.flow.locals, [row]);
+}
+
+/// The kind of each value `function` passes as a call argument, in
+/// instruction order.
+fn argument_kinds(function: &Function) -> Vec<&ValueKind> {
+    instructions(function)
+        .filter_map(|instruction| match instruction {
+            Instruction::Call { arguments, .. } => Some(arguments),
+            _ => None,
+        })
+        .flatten()
+        .map(|argument| match argument {
+            Operand::Value(ValueId(id)) => &function.values[*id].kind,
+            Operand::Literal(literal) => {
+                panic!("an aggregate argument is a value, not {literal:?}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn an_aggregate_argument_is_borrowed_unless_a_called_function_can_write_it() {
+    let program = lowered(
+        "var shared: [2]int = [1, 2];
+             var grid: [2][2]int;
+             fn take(row: [2]int) -> int { return row[0]; }
+             fn pass(row: [2]int) -> int { return take(row); }
+             fn main() -> void {
+                 var local: [2]int = [3, 4];
+                 var rows: [2][2]int;
+                 var i = 1;
+                 exit(take(local) + take(rows[i]) + take([5, 6]) + take([i, 6])
+                     + take(shared) + take(grid[i]) + pass(local));
+             }",
+    );
+    let main = main_of(&program);
+    let kinds = argument_kinds(main);
+    let borrowed = |kind: &ValueKind| match kind {
+        ValueKind::Borrow(place) => Some(describe(place.root())),
+        _ => None,
+    };
+    let loaded = |kind: &ValueKind| match kind {
+        ValueKind::Load(place) => Some(describe(place.root())),
+        _ => None,
+    };
+    let local = describe(&Place::Local(LocalId(0)));
+    let rows = describe(&Place::Local(LocalId(1)));
+    let shared = describe(&Place::Global(GlobalId(0)));
+    let grid = describe(&Place::Global(GlobalId(1)));
+    assert_eq!(borrowed(kinds[0]), Some(local.clone()));
+    assert_eq!(borrowed(kinds[1]), Some(rows));
+    assert!(matches!(kinds[2], ValueKind::Borrow(Place::Constant(_))));
+    // A literal that does not fold is built in a fresh local and borrowed
+    // from there.
+    assert!(matches!(
+        kinds[3],
+        ValueKind::Borrow(Place::Local(LocalId(id))) if *id > 2
+    ));
+    assert_eq!(loaded(kinds[4]), Some(shared));
+    assert_eq!(loaded(kinds[5]), Some(grid));
+    assert_eq!(borrowed(kinds[6]), Some(local));
+
+    // A parameter passed on is borrowed too.
+    let pass = &program.program().functions[1];
+    let kinds = argument_kinds(pass);
+    assert_eq!(
+        kinds.iter().map(|kind| borrowed(kind)).collect::<Vec<_>>(),
+        [Some(describe(&Place::Local(LocalId(0))))]
+    );
+}
+
+#[test]
+fn returning_an_aggregate_call_returns_its_result() {
+    let program = lowered(
+        "fn make() -> [2]int { return [1, 2]; }
+             fn relay() -> [2]int { return make(); }
+             fn grouped() -> [2]int { return (make()); }
+             fn main() -> void { exit(relay()[0] + grouped()[1]); }",
+    );
+    for function in &program.program().functions[1..3] {
+        assert!(function.flow.locals.is_empty(), "{function:?}");
+        let [block] = function.flow.blocks.as_slice() else {
+            panic!("{function:?}");
+        };
+        let Terminator::Return {
+            value: Some(Operand::Value(ValueId(id))),
+        } = block.terminator
+        else {
+            panic!("{function:?}");
+        };
+        assert_eq!(function.values[id].kind, ValueKind::CallResult);
+    }
 }
 
 #[test]

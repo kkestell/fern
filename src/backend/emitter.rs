@@ -2,7 +2,9 @@
 //!
 //! Generated code does not grow with an aggregate's length. Aggregates are
 //! passed and returned through addresses rather than QBE aggregate types, and
-//! are copied, zeroed, and filled with C library calls or loops.
+//! are copied, zeroed, and filled with C library calls or loops. A callee reads
+//! an aggregate parameter from the storage its caller passed, which is copied
+//! only when lowering loaded the argument rather than borrowing it.
 
 use crate::{
     diagnostic::DiagnosticRenderer,
@@ -118,6 +120,13 @@ fn function_symbol(main: FunctionId, id: FunctionId) -> String {
 fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) -> (String, Type) {
     let flow = &function.flow;
     match place {
+        // An aggregate parameter is never written, so it is read from the
+        // storage the caller passed rather than from a copy.
+        Place::Local(local)
+            if local.0 < function.parameters && is_aggregate(&flow.locals[local.0]) =>
+        {
+            (format!("%param{}", local.0), flow.locals[local.0].clone())
+        }
         Place::Local(local) => (format!("%local{}", local.0), flow.locals[local.0].clone()),
         Place::Global(global) => {
             let ty = emitter.globals[global.0].ty.clone();
@@ -216,6 +225,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         main: program.main,
         function: 0,
         qbe_result: None,
+        returned_calls: Vec::new(),
         accesses: 0,
         comparisons: 0,
         fills: 0,
@@ -247,6 +257,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
                 .and_then(|ty| ty.scalar())
                 .map(qbe_type)
         };
+        emitter.returned_calls = returned_calls(function);
         let result = function
             .result
             .as_ref()
@@ -279,8 +290,37 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
     emitter.data + &emitter.text
 }
 
+/// The aggregate call results the function's `return`s return. A value is
+/// used only in the block defining it, so each call shares its block with the
+/// `return`, and nothing reads `%result` before the function returns.
+fn returned_calls(function: &Function) -> Vec<ValueId> {
+    function
+        .flow
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            Terminator::Return {
+                value: Some(Operand::Value(id)),
+            } if function.values[id.0].kind == ValueKind::CallResult
+                && is_aggregate(&function.values[id.0].ty) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_aggregate(ty: &Type) -> bool {
+    ty.scalar().is_none()
+}
+
 fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
     for (id, ty) in flow.locals.iter().enumerate() {
+        // An aggregate parameter is read from the caller's storage.
+        if id < function.parameters && is_aggregate(ty) {
+            continue;
+        }
         writeln!(
             emitter.text,
             "    %local{id} =l {} {}",
@@ -294,7 +334,8 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
     // than where the load or call runs, which may be inside a loop.
     for (id, value) in function.values.iter().enumerate() {
         if matches!(value.kind, ValueKind::Load(_) | ValueKind::CallResult)
-            && value.ty.scalar().is_none()
+            && is_aggregate(&value.ty)
+            && !emitter.returned_calls.contains(&ValueId(id))
         {
             writeln!(
                 emitter.text,
@@ -305,26 +346,17 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
             .unwrap();
         }
     }
-    // The parameters are the leading locals, so the loop above allocated them.
+    // The parameters are the leading locals, so the loop above allocated the
+    // scalar ones. An aggregate parameter needs no entry copy.
     for index in 0..function.parameters {
-        let ty = &flow.locals[index];
-        match ty {
-            Type::Scalar(scalar) => writeln!(
+        if let Type::Scalar(scalar) = &flow.locals[index] {
+            writeln!(
                 emitter.text,
                 "    store{} %param{index}, %local{index}",
                 qbe_type(*scalar)
-            ),
-            Type::Array { .. } | Type::Struct(_) => {
-                emit_copy(
-                    &mut emitter.text,
-                    &format!("%param{index}"),
-                    &format!("%local{index}"),
-                    emitter.layout.size(ty),
-                );
-                Ok(())
-            }
+            )
+            .unwrap();
         }
-        .unwrap();
     }
     writeln!(emitter.text, "    jmp @block{}", flow.entry.0).unwrap();
 
@@ -454,8 +486,15 @@ fn emit_call(
     });
     // The callee's leading locals hold its parameters, so they give each
     // argument its type.
+    let storage = |id: ValueId| {
+        if emitter.returned_calls.contains(&id) {
+            "%result".to_owned()
+        } else {
+            format!("%v{}_storage", id.0)
+        }
+    };
     let arguments = aggregate_result
-        .map(|ValueId(id)| format!("l %v{id}_storage"))
+        .map(|id| format!("l {}", storage(id)))
         .into_iter()
         .chain(arguments.iter().enumerate().map(|(index, argument)| {
             format!(
@@ -468,9 +507,10 @@ fn emit_call(
         .join(", ");
     let symbol = function_symbol(emitter.main, callee);
     match (result, aggregate_result) {
-        (Some(ValueId(id)), Some(_)) => writeln!(
+        (Some(ValueId(id)), Some(result)) => writeln!(
             emitter.text,
-            "    call ${symbol}({arguments})\n    %v{id} =l copy %v{id}_storage"
+            "    call ${symbol}({arguments})\n    %v{id} =l copy {}",
+            storage(result)
         ),
         (Some(ValueId(id)), None) => writeln!(
             emitter.text,
@@ -526,8 +566,13 @@ fn emit_terminator(
         Terminator::Return { value } => match value {
             Some(value) => match function.result.as_ref().filter(|ty| ty.scalar().is_none()) {
                 Some(ty) => {
-                    let size = emitter.layout.size(ty);
-                    emit_copy(&mut emitter.text, &operand(value.clone()), "%result", size);
+                    // A returned call already wrote its result into `%result`.
+                    let written =
+                        matches!(value, Operand::Value(id) if emitter.returned_calls.contains(id));
+                    if !written {
+                        let size = emitter.layout.size(ty);
+                        emit_copy(&mut emitter.text, &operand(value.clone()), "%result", size);
+                    }
                     emitter.text.push_str("    ret\n");
                 }
                 None => {
@@ -570,6 +615,11 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                 }
             }
             .unwrap();
+        }
+        // A borrowed aggregate is the address of its place's own storage.
+        ValueKind::Borrow(source) => {
+            let (address, _) = place_address(emitter, function, source);
+            writeln!(emitter.text, "    %v{id} =l copy {address}").unwrap();
         }
         // A call result is defined by its call instruction.
         ValueKind::CallResult => {}

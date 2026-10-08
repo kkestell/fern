@@ -229,3 +229,60 @@ fn array_equality_emits_a_runtime_loop() {
     assert!(qbe.contains("csltl %aggregate0_index, 100000"), "{qbe}");
     assert!(qbe.lines().count() < 100, "{qbe}");
 }
+
+#[test]
+fn native_arguments_keep_their_values_while_the_call_runs() {
+    assert_eq!(
+        native_program_status(
+            "type Point struct { x: int, y: int }
+             var shared: Point = Point { x = 1, y = 2 };
+             fn overwrite() -> int { shared = Point { x = 50, y = 60 }; return 0; }
+             fn reread(point: Point) -> int {
+                 shared.x = 9;
+                 return point.x;
+             }
+             fn first(point: Point, unused: int) -> int { return point.x; }
+             fn depth(point: Point, count: int) -> int {
+                 if count == 0 { return point.y; }
+                 return depth(point, count - 1);
+             }
+             fn main() -> void {
+                 // The callee writing the global left its argument alone.
+                 if reread(shared) != 1 { exit(1); }
+                 if shared.x != 9 { exit(2); }
+                 // A later argument writing the global left an earlier one
+                 // alone.
+                 if first(shared, overwrite()) != 9 { exit(3); }
+                 if shared.x != 50 { exit(4); }
+                 // The caller writing a local after the call cannot reach
+                 // back into what the callee returned.
+                 var local = Point { x = 3, y = 4 };
+                 const seen = first(local, 0);
+                 local.x = 30;
+                 if seen != 3 { exit(5); }
+                 // A parameter passed on through recursion keeps its value.
+                 if depth(local, 5) != 4 { exit(6); }
+                 exit(42);
+             }"
+        ),
+        Some(42)
+    );
+}
+
+#[test]
+fn native_returned_calls_chain_their_results() {
+    assert_eq!(
+        native_program_status(
+            "type Point struct { x: int, y: int }
+             fn make(x: int, y: int) -> Point { return Point { x = x, y = y }; }
+             fn swap(point: Point) -> Point { return make(point.y, point.x); }
+             fn twice(point: Point) -> Point { return swap(swap(point)); }
+             fn main() -> void {
+                 const p = twice(make(40, 2));
+                 if p.x != 40 || p.y != 2 { exit(1); }
+                 exit(p.x + p.y);
+             }"
+        ),
+        Some(42)
+    );
+}

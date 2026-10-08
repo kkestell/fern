@@ -44,6 +44,16 @@ pub(crate) enum Place {
     },
 }
 
+impl Place {
+    /// The local, global, or constant beneath every element and field step.
+    pub(crate) fn root(&self) -> &Place {
+        match self {
+            Self::Element { base, .. } | Self::Field { base, .. } => base.root(),
+            Self::Local(_) | Self::Global(_) | Self::Constant(_) => self,
+        }
+    }
+}
+
 /// An immediate value no instruction computes. This is the only way the IR
 /// carries a value that no instruction computes, so an operand and a global's
 /// static data cannot disagree about a value's type or its bits.
@@ -77,6 +87,12 @@ pub(crate) enum Operand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueKind {
     Load(Place),
+    /// An aggregate read from its place's storage rather than from a copy of
+    /// it. Lowering defines one only as a call argument whose place is rooted
+    /// in a local or a constant: no expression writes a local, a called
+    /// function cannot reach its caller's locals, and nothing writes a
+    /// constant, so the place keeps its value until the call returns.
+    Borrow(Place),
     /// The result of the `Instruction::Call` that defines it. The call carries
     /// the arguments and the source span.
     CallResult,

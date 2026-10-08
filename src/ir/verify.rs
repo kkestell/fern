@@ -54,6 +54,14 @@ fn valid_value(
 ) -> Result<bool, CompileError> {
     Ok(match &value.kind {
         ValueKind::Load(place) => place_type(place)? == value.ty && value.span.is_none(),
+        // A called function can write a global, so an argument read from one
+        // is copied.
+        ValueKind::Borrow(place) => {
+            value.ty.scalar().is_none()
+                && !matches!(place.root(), Place::Global(_))
+                && place_type(place)? == value.ty
+                && value.span.is_none()
+        }
         // The defining call checks the result type against the callee's
         // signature, and owns the span the call reports.
         ValueKind::CallResult => value.span.is_none(),
@@ -248,21 +256,27 @@ impl Program {
     }
 
     /// The type of a place an instruction writes. Constants are static data
-    /// that every use reads, so nothing may write one.
+    /// that every use reads, so nothing may write one. Parameters are
+    /// immutable, so the backend reads an aggregate one from the caller's
+    /// storage, and nothing may write one either.
     fn destination_type(
         &self,
         function: &Function,
         place: &Place,
         operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     ) -> Result<Type, CompileError> {
-        let mut root = place;
-        while let Place::Element { base, .. } | Place::Field { base, .. } = root {
-            root = base;
-        }
-        if let Place::Constant(ConstantId(id)) = root {
-            return Err(CompileError::new(format!(
-                "internal compiler error: IR writes constant {id}"
-            )));
+        match place.root() {
+            Place::Constant(ConstantId(id)) => {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR writes constant {id}"
+                )));
+            }
+            Place::Local(LocalId(id)) if *id < function.parameters => {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR writes parameter {id}"
+                )));
+            }
+            _ => {}
         }
         self.place_type(function, place, operand_type)
     }

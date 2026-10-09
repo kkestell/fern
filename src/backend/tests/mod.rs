@@ -24,6 +24,20 @@ fn external_symbols_cannot_collide_with_generated_names() {
     assert!(qbe.contains("data $.fern.global0"));
     assert!(qbe.contains("call $global0("));
 }
+#[test]
+fn external_structs_use_qbe_aggregate_types() {
+    let qbe = emitted(
+        "type Outer struct {flag:u8,inner:[2][3]Inner,p:*Outer} type Inner struct {x:f32,n:[3]i16}
+         extern fn f(o:Outer)->Inner;fn main()->void {var i=Inner {x=1.0,n=[1,2,3]};
+         var o=Outer {flag=1,inner=[[i,i,i],[i,i,i]],p=null};var r=f(o);}",
+    );
+    let inner = qbe.find("type :fern.struct1 = { s, h 3 }").unwrap();
+    let outer = qbe
+        .find("type :fern.struct0 = { b, :fern.struct1 6, l }")
+        .unwrap();
+    assert!(inner < outer);
+    assert!(qbe.contains("=:fern.struct1 call $f(:fern.struct0 "));
+}
 
 #[test]
 fn core_qbe_snapshot() {

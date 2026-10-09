@@ -153,16 +153,20 @@ A call statement may discard a result. A `void` call is only a statement.
 
 External functions have no body and name a linker symbol exactly matching
 their declared name. They use the host C calling convention. Parameters and
-results are numeric or pointer types; a result may also be `void`. Integer
-types correspond to C integers of the same width and signedness; `int` and
-`uint` correspond to `intptr_t` and `uintptr_t`. `f32` and `f64` correspond to
-C `float` and `double`. Pointer types have C pointer representation and calling
-convention. The programmer must supply a declaration matching the actual C
-function. Declaring one symbol with inconsistent signatures, or calling it with
-an incorrect signature, is invalid. External symbol `main` is reserved for
-program startup. Variadic calls, callbacks, external globals, and aggregates
-passed directly across the external interface are not part of this core.
-Values may be exchanged through pointers.
+results are numeric, pointer, or struct types; a result may also be `void`.
+Integer types correspond to C integers of the same width and signedness; `int`
+and `uint` correspond to `intptr_t` and `uintptr_t`. `f32` and `f64` correspond
+to C `float` and `double`. Pointer types have C pointer representation and
+calling convention. A struct corresponds to a C struct with corresponding
+fields in the same order, and an array field to a C array of the same length
+and corresponding element. A struct passed across the interface cannot contain
+`bool` in any field or element, including those of nested structs and arrays.
+The programmer must supply a declaration matching the actual C function.
+Declaring one symbol with inconsistent signatures, or calling it with an
+incorrect signature, is invalid. External symbol `main` is reserved for program
+startup. Variadic calls, callbacks, external globals, and arrays passed
+directly across the external interface are not part of this core. Values may
+be exchanged through pointers.
 The implementation documents which libraries it links.
 
 An executable's root module must define `fn main() -> void`. A dependency's

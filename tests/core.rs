@@ -174,7 +174,11 @@ fn invalid_programs_preserve_outputs() {
         ("fn main()->void {const x=1;var p=&x;}", "immutable"),
         (
             "extern fn x(n:bool)->void;fn main()->void {}",
-            "numeric and pointer",
+            "numeric, pointer, and struct",
+        ),
+        (
+            "type S struct {b:bool} extern fn x(s:S)->void;fn main()->void {}",
+            "cannot contain bool",
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -320,6 +324,81 @@ fn c_abi_floating_point() {
             "-l".as_ref(),
             "m".as_ref(),
         ],
+    ));
+    let status = Command::new(output).status().unwrap();
+    assert!(status.success(), "{status}");
+}
+#[test]
+fn c_abi_structs() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = dir.path().join("helper.c");
+    let object = dir.path().join("helper.o");
+    fs::write(
+        &c,
+        r#"
+ #include <stddef.h>
+ #include <stdint.h>
+ typedef struct {float x,y;} Vec2;
+ typedef struct {uint8_t tag;int16_t small;double value;} Mixed;
+ typedef struct {int32_t values[10];void *next;} Big;
+ typedef struct {Vec2 corners[2];uint8_t id;} Box;
+ Vec2 vec2_scale(Vec2 v,float k){Vec2 r={v.x*k,v.y*k};return r;}
+ Mixed mixed_make(uint8_t tag,int16_t small,double value){Mixed m={tag,small,value};return m;}
+ int64_t mixed_sum(Mixed m){return m.tag+m.small+(int64_t)(m.value*4);}
+ Big big_make(int32_t start){Big b;for(int i=0;i<10;i++)b.values[i]=start+i;b.next=NULL;return b;}
+ int32_t big_clobber(Big b){int32_t s=0;for(int i=0;i<10;i++){s+=b.values[i];b.values[i]=-1;}return s;}
+ Box box_flip(Box b){Box r={{b.corners[1],b.corners[0]},b.id+1};return r;}
+ double spill(Vec2 a,Vec2 b,Vec2 c,Vec2 d,Vec2 e,Mixed m){
+ return a.x+b.x*2+c.x*3+d.x*4+e.x*5+m.small+m.value*6;
+ }"#,
+    )
+    .unwrap();
+    compile_c(&c, &object);
+    let input = dir.path().join("main.fern");
+    let output = dir.path().join("program");
+    fs::write(
+        &input,
+        format!(
+            r#"{EXIT}
+ type Vec2 struct {{x:f32,y:f32}}
+ type Mixed struct {{tag:u8,small:i16,value:f64}}
+ type Big struct {{values:[10]i32,next:*u8}}
+ type Box struct {{corners:[2]Vec2,id:u8}}
+ type Holder struct {{v:Vec2,m:Mixed}}
+ extern fn vec2_scale(v:Vec2,k:f32)->Vec2;
+ extern fn mixed_make(tag:u8,small:i16,value:f64)->Mixed;
+ extern fn mixed_sum(m:Mixed)->i64;
+ extern fn big_make(start:i32)->Big;
+ extern fn big_clobber(b:Big)->i32;
+ extern fn box_flip(b:Box)->Box;
+ extern fn spill(a:Vec2,b:Vec2,c:Vec2,d:Vec2,e:Vec2,m:Mixed)->f64;
+ fn scaled(v:Vec2)->Vec2 {{return vec2_scale(v,2.0);}}
+ fn main()->void {{
+ var v=Vec2 {{x=1.5,y=-2.0}};
+ var s=vec2_scale(v,2.0);
+ if s.x!=3.0 || s.y!=-4.0 {{exit(1);}}
+ var h=Holder {{v=v,m=mixed_make(1,2,3.0)}};
+ h.m=mixed_make(200,-300,0.5);
+ if h.m.tag!=200 || h.m.small!=-300 || h.m.value!=0.5 {{exit(2);}}
+ if mixed_sum(h.m)!=-98 {{exit(3);}}
+ mixed_make(9,9,9.0);
+ var b=big_make(5);
+ if b.next!=null || b.values[0]!=5 || b.values[9]!=14 {{exit(4);}}
+ var p=&b;
+ if big_clobber(*p)!=95 || b.values[0]!=5 || b.values[9]!=14 {{exit(5);}}
+ var box=Box {{corners=[v,s],id=7}};
+ var f=box_flip(box);
+ if f.corners[0].x!=3.0 || f.corners[1].y!=-2.0 || f.id!=8 || box.id!=7 {{exit(6);}}
+ if spill(v,s,h.v,f.corners[0],scaled(v),h.m)!=-258.0 {{exit(7);}}
+ if scaled(h.v).y!=-4.0 {{exit(8);}}
+ }}"#
+        ),
+    )
+    .unwrap();
+    succeeds(&mut fern_cli(
+        &input,
+        &output,
+        &["--link".as_ref(), object.as_os_str()],
     ));
     let status = Command::new(output).status().unwrap();
     assert!(status.success(), "{status}");

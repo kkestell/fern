@@ -513,12 +513,14 @@ impl CheckedProgram<'_> {
                     .map(|p| &self.bindings[*p].ty)
                     .chain(result.iter())
                 {
-                    if !matches!(ty, crate::types::Type::Pointer { .. })
-                        && !ty.scalar().is_some_and(Scalar::is_numeric)
-                    {
+                    if !ty.crosses_external_interface(self) {
                         return Err(Diagnostic::new(
                             function_syntax.name_span.clone(),
-                            "external functions accept only numeric and pointer types",
+                            if matches!(ty, crate::types::Type::Struct(_)) {
+                                "a struct passed across the external interface cannot contain bool"
+                            } else {
+                                "external functions accept only numeric, pointer, and struct types"
+                            },
                         ));
                     }
                 }

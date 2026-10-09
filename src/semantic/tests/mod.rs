@@ -71,6 +71,9 @@ fn external_signatures_and_returns() {
         "extern fn foo(x:bool)->void;fn main()->void {}",
         "extern fn foo()->bool;fn main()->void {}",
         "extern fn foo()->[2]int;fn main()->void {}",
+        "type S struct {b:bool} extern fn foo(s:S)->void;fn main()->void {}",
+        "type S struct {a:[2]bool} extern fn foo()->S;fn main()->void {}",
+        "type I struct {b:bool} type S struct {i:I} extern fn foo(s:S)->void;fn main()->void {}",
         "extern fn main()->void;",
         "fn f()->int {for true {}} fn main()->void {}",
         "fn f()->int {for {break;}} fn main()->void {}",
@@ -85,6 +88,12 @@ fn external_signatures_and_returns() {
     check_root(&syntax).unwrap();
     let syntax = parser::parse(&SourceMap::from_text(
         "extern fn foo(x:f32,y:f64)->f64;fn main()->void {}",
+    ))
+    .unwrap();
+    check_root(&syntax).unwrap();
+    let syntax = parser::parse(&SourceMap::from_text(
+        "type N struct {x:f32} type S struct {x:f32,a:[3]u8,p:*S,n:[2]N}
+         extern fn foo(s:S)->S;fn main()->void {}",
     ))
     .unwrap();
     check_root(&syntax).unwrap();

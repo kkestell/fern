@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::layout::StructFields;
+
 /// A scalar type. Arithmetic, conversions, overflow, and shifts are defined
 /// only on these, so their widths and ranges are total here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +212,26 @@ impl Type {
     /// values refer to by address. Scalars and pointers are carried by value.
     pub(crate) fn is_aggregate(&self) -> bool {
         matches!(self, Self::Array { .. } | Self::Struct(_))
+    }
+
+    /// Whether a value of this type passes directly across the external
+    /// interface: a number, a pointer, or a struct that stores no `bool` in
+    /// any field or element. C cannot pass an array by value, so an array
+    /// crosses only as part of a struct.
+    pub(crate) fn crosses_external_interface(&self, table: &dyn StructFields) -> bool {
+        !matches!(self, Self::Array { .. }) && self.stores_no_bool(table)
+    }
+
+    /// Whether no scalar this type stores by value is a `bool`. A pointer's
+    /// target is not stored in the pointer.
+    fn stores_no_bool(&self, table: &dyn StructFields) -> bool {
+        match self {
+            Self::Scalar(scalar) => scalar.is_numeric(),
+            Self::Pointer { .. } => true,
+            Self::Array { element, .. } => element.stores_no_bool(table),
+            Self::Struct(declared) => (0..table.field_count(declared.id))
+                .all(|ordinal| table.field_type(declared.id, ordinal).stores_no_bool(table)),
+        }
     }
 }
 

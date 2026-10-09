@@ -46,6 +46,12 @@ fn rejects_invalid_control_flow_and_types() {
     let mut p = program("extern fn f()->i32;fn main()->void {}");
     p.functions[0].result = Some(Scalar::Bool.into());
     assert!(p.verify().is_err());
+    program("type S struct {x:i32} extern fn f(s:S)->S;fn main()->void {}")
+        .verify()
+        .unwrap();
+    let mut p = program("type S struct {x:i32} extern fn f(s:S)->S;fn main()->void {}");
+    p.structs[0].fields[0] = Scalar::Bool.into();
+    assert!(p.verify().is_err());
 }
 #[test]
 fn rejects_values_used_before_definition() {

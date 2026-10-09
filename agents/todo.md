@@ -89,7 +89,7 @@
   corresponding to C `float` and `double`, so programs can call libraries such
   as `libm`. Specify the rule in `docs/spec.md` before implementing it.
 
-- [ ] Pass structs by value across the external interface
+- [x] Pass structs by value across the external interface
 
   Allow struct parameters and results in external functions, following the
   host C ABI for a C struct with the same fields, so programs can call C APIs

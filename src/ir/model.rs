@@ -1,7 +1,10 @@
 //! Fern IR data model.
 
-use crate::types::{
-    BinaryOperator, ComparisonOperator, Float, Scalar, StringId, Type, UnaryOperator,
+use crate::{
+    layout::StructFields,
+    types::{
+        BinaryOperator, ComparisonOperator, Float, Scalar, StringId, StructId, Type, UnaryOperator,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,4 +265,14 @@ pub(crate) struct Program {
     // Each position defines the corresponding function ID.
     pub functions: Vec<Function>,
     pub main: FunctionId,
+}
+
+impl StructFields for Program {
+    fn field_count(&self, id: StructId) -> usize {
+        self.structs[id.0].fields.len()
+    }
+
+    fn field_type(&self, id: StructId, ordinal: usize) -> &Type {
+        &self.structs[id.0].fields[ordinal]
+    }
 }

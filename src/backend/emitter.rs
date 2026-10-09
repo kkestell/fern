@@ -9,7 +9,7 @@ use crate::{
         Place, Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
-    types::{Scalar, StringId, Type},
+    types::{Scalar, StringId, StructId, Type},
 };
 use std::fmt::Write;
 
@@ -196,7 +196,9 @@ pub(super) fn emit(verified: &VerifiedProgram) -> String {
         returned_in_place: Vec::new(),
         accesses: 0,
         comparisons: 0,
+        calls: 0,
     };
+    emit_external_types(&mut emitter);
     emit_entry(&mut emitter);
     for (id, global) in program.globals.iter().enumerate() {
         emit_data(&mut emitter, &format!(".fern.global{id}"), global);
@@ -252,6 +254,60 @@ pub(super) fn emit(verified: &VerifiedProgram) -> String {
         emitter.text.push_str("}\n");
     }
     emitter.data + &emitter.text
+}
+
+/// Defines the QBE aggregate type of every struct an external signature
+/// names, after the types of the structs it contains, since QBE resolves a
+/// type name where it is written.
+fn emit_external_types(emitter: &mut Emitter<'_>) {
+    let mut defined = Vec::new();
+    for function in emitter.functions.iter().filter(|f| f.external.is_some()) {
+        for ty in function.flow.locals.iter().chain(&function.result) {
+            emit_external_type(emitter, ty, &mut defined);
+        }
+    }
+}
+
+fn emit_external_type(emitter: &mut Emitter<'_>, ty: &Type, defined: &mut Vec<StructId>) {
+    let Type::Struct(declared) = ty else {
+        return;
+    };
+    if defined.contains(&declared.id) {
+        return;
+    }
+    defined.push(declared.id);
+    let mut items = Vec::new();
+    for ordinal in 0..emitter.layout.field_count(declared.id) {
+        let (_, field) = emitter.layout.field(declared.id, ordinal);
+        // An array repeats its innermost element, which may be a struct.
+        let mut element = field;
+        let mut count = 1;
+        while let Type::Array {
+            length,
+            element: inner,
+        } = element
+        {
+            count *= length;
+            element = inner;
+        }
+        emit_external_type(emitter, element, defined);
+        let item = match element {
+            Type::Struct(inner) => struct_type(inner.id),
+            _ => memory_class(element).to_string(),
+        };
+        items.push(if count == 1 {
+            item
+        } else {
+            format!("{item} {count}")
+        });
+    }
+    writeln!(
+        emitter.data,
+        "type {} = {{ {} }}",
+        struct_type(declared.id),
+        items.join(", ")
+    )
+    .unwrap();
 }
 
 /// The aggregate values the function's `return`s return that already sit in
@@ -402,9 +458,10 @@ fn emit_call(
             }),
     };
     // The callee's leading locals hold its parameters, so they give each
-    // argument its type.
+    // argument its type. A Fern callee takes its result storage first.
     let arguments = result_storage
         .as_ref()
+        .filter(|_| target.external.is_none())
         .map(|storage| format!("l {storage}"))
         .into_iter()
         .chain(arguments.iter().enumerate().map(|(index, argument)| {
@@ -424,6 +481,29 @@ fn emit_call(
         .external
         .clone()
         .unwrap_or_else(|| function_symbol(callee));
+    // QBE returns an external struct result in storage of its own, so the
+    // call copies it into the storage a Fern callee would have written.
+    if let (Some(external), Some(storage)) = (&target.external, &result_storage) {
+        let ty = target.result.as_ref().unwrap();
+        let call = emitter.calls;
+        emitter.calls += 1;
+        writeln!(
+            emitter.text,
+            "    %call{call} ={} call ${external}({arguments})",
+            abi_class(ty)
+        )
+        .unwrap();
+        emit_copy(
+            &mut emitter.text,
+            &format!("%call{call}"),
+            storage,
+            emitter.layout.size(ty),
+        );
+        if let Some(ValueId(id)) = result {
+            writeln!(emitter.text, "    %v{id} =l copy {storage}").unwrap();
+        }
+        return;
+    }
     match (result, &result_storage) {
         (Some(ValueId(id)), Some(storage)) => writeln!(
             emitter.text,

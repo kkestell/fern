@@ -3,7 +3,7 @@
 
 use crate::{
     ir::model::{Function, FunctionId, Global, Literal, Operand, ValueId},
-    types::{ComparisonOperator, Scalar, StringId, Type},
+    types::{ComparisonOperator, Scalar, StringId, StructId, Type},
 };
 
 use std::fmt::Write;
@@ -265,17 +265,28 @@ pub(super) struct Emitter<'a> {
     pub(super) accesses: usize,
     /// How many aggregate comparisons have been emitted in this function.
     pub(super) comparisons: usize,
+    /// How many external calls returning a struct have been emitted.
+    pub(super) calls: usize,
 }
 
-/// QBE's C ABI types preserve the extension requirements of sub-word integers.
+/// How an external signature or call names a type. QBE's C ABI types preserve
+/// the extension requirements of sub-word integers, and a struct passes as its
+/// QBE aggregate type.
 pub(super) fn abi_class(ty: &Type) -> String {
-    match ty.scalar() {
-        Some(Scalar::I8) => "sb".into(),
-        Some(Scalar::U8) => "ub".into(),
-        Some(Scalar::I16) => "sh".into(),
-        Some(Scalar::U16) => "uh".into(),
+    match ty {
+        Type::Scalar(Scalar::I8) => "sb".into(),
+        Type::Scalar(Scalar::U8) => "ub".into(),
+        Type::Scalar(Scalar::I16) => "sh".into(),
+        Type::Scalar(Scalar::U16) => "uh".into(),
+        Type::Struct(declared) => struct_type(declared.id),
         _ => value_class(ty).to_string(),
     }
+}
+
+/// Names the QBE aggregate type that passes struct `id` across the external
+/// interface with the C ABI.
+pub(super) fn struct_type(StructId(id): StructId) -> String {
+    format!(":fern.struct{id}")
 }
 
 pub(super) fn memory_class(ty: &Type) -> char {

@@ -638,34 +638,31 @@ const row_bytes = image_width * 3;
 // One worker's share of the image: every `workers`th row from `first`, each
 // written to `file` as soon as it is done.
 fn render_rows(first: int, file: i32) -> void {
-    var bytes = allocate(uint(row_bytes));
-    var light_cells = *int(allocate(uint(samples_per_pixel) * sizeof(int)));
-    var bounce_cells = *int(allocate(uint(samples_per_pixel) * sizeof(int)));
+    var bytes: [row_bytes]u8;
+    var light_cells: [samples_per_pixel]int;
+    var bounce_cells: [samples_per_pixel]int;
     var row = first;
     for row < image_height {
         var column = 0;
         for column < image_width {
-            var color = tone_map(pixel_radiance(row, column, light_cells, bounce_cells));
+            var color = tone_map(pixel_radiance(row, column, &light_cells[0], &bounce_cells[0]));
             bytes[column * 3] = to_byte(color.x);
             bytes[column * 3 + 1] = to_byte(color.y);
             bytes[column * 3 + 2] = to_byte(color.z);
             column += 1;
         }
-        write_bytes(file, bytes, row_bytes);
+        write_bytes(file, &bytes[0], row_bytes);
         row += workers;
     }
-    free(*u8(bounce_cells));
-    free(*u8(light_cells));
-    free(bytes);
 }
 
 fn main() -> void {
     // One pipe per worker. A worker keeps only its own pipe's write end, so if
     // it dies, reading its next row fails rather than waiting forever.
-    var readers = *i32(allocate(uint(workers) * sizeof(i32)));
+    var readers: [workers]i32;
     var worker = 0;
     for worker < workers {
-        var ends: [2]i32 = [0, 0];
+        var ends: [2]i32;
         if pipe(&ends[0]) != 0 {
             fail("cannot open a pipe");
         }
@@ -706,5 +703,4 @@ fn main() -> void {
     dprintf(1, "P6\n%d %d\n255\n", i32(image_width), i32(image_height));
     write_bytes(1, pixels, image_height * row_bytes);
     free(pixels);
-    free(*u8(readers));
 }

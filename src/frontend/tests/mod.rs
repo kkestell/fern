@@ -45,9 +45,28 @@ fn variadic_parameter_lists() {
     }
 }
 #[test]
+fn bindings_may_omit_initializers() {
+    let syntax =
+        parse("var g:[4]u8; fn main()->void {var x:int;var y;const z:int;var w:int=1;}").unwrap();
+    let initializers: Vec<bool> = syntax
+        .statements
+        .iter()
+        .filter_map(|(_, statement)| match &statement.kind {
+            StatementKind::Binding { initializer, .. } => Some(initializer.is_some()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(initializers, [false, false, false, false, true]);
+    for body in ["var x:int", "var x:int=;"] {
+        assert!(
+            parse(&format!("fn main()->void {{{body}}}")).is_err(),
+            "{body}"
+        );
+    }
+}
+#[test]
 fn removed_syntax_is_rejected() {
     for body in [
-        "var x:int;",
         "var x:[3]int=[1...];",
         "var x=1+%2;",
         "var x=i8.truncate(1);",

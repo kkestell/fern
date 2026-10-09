@@ -489,6 +489,10 @@ impl Program {
                 }
                 Ok(())
             }
+            Instruction::Zero { place } => {
+                self.destination_type(function, place, &operand_type)?;
+                Ok(())
+            }
             Instruction::Call {
                 result,
                 destination,
@@ -726,7 +730,7 @@ fn record_definition(
     let defined = match instruction {
         Instruction::Value(id) => Some((*id, false)),
         Instruction::Call { result, .. } => result.map(|id| (id, true)),
-        Instruction::Store { .. } => None,
+        Instruction::Store { .. } | Instruction::Zero { .. } => None,
     };
     let Some((ValueId(id), from_call)) = defined else {
         return Ok(());

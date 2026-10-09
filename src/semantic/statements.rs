@@ -102,9 +102,16 @@ impl CheckedProgram<'_> {
         name: Spur,
         mutable: bool,
         annotation: Option<Idx<TypeAnnotation>>,
-        initializer: Idx<Expression>,
+        initializer: Option<Idx<Expression>>,
         scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
+        let Some(initializer) = initializer else {
+            let annotation =
+                zero_binding_annotation(mutable, annotation, &self.syntax.statements[statement])?;
+            let ty = self.resolve_annotation(annotation, scopes)?;
+            self.record_binding(statement, name, mutable, ty, None, scopes);
+            return Ok(());
+        };
         let destination = annotation
             .map(|annotation| self.resolve_annotation(annotation, scopes))
             .transpose()?;
@@ -469,4 +476,26 @@ fn statement_stops(syntax: &Syntax, statement: Idx<Statement>) -> bool {
         }
         _ => statement_terminates(syntax, statement),
     }
+}
+
+/// The annotation that gives a binding without an initializer its type. Only a
+/// `var` may omit its initializer, and it then holds its annotated type's zero
+/// value.
+pub(super) fn zero_binding_annotation(
+    mutable: bool,
+    annotation: Option<Idx<TypeAnnotation>>,
+    statement: &Statement,
+) -> Result<Idx<TypeAnnotation>, Diagnostic> {
+    if !mutable {
+        return Err(Diagnostic::new(
+            statement.span.clone(),
+            "a `const` requires an initializer",
+        ));
+    }
+    annotation.ok_or_else(|| {
+        Diagnostic::new(
+            statement.span.clone(),
+            "a `var` without an initializer requires a type annotation",
+        )
+    })
 }

@@ -74,3 +74,25 @@ fn small_aggregates_copy_field_by_field() {
     assert!(function(".fern.fn1").contains("blit %param0, %local0, 16"));
     assert!(function(".fern.fn2").contains("call $memcpy(l %local0, l %param0, l 72)"));
 }
+#[test]
+fn zero_locals_are_stored_in_place() {
+    let qbe = emitted(
+        "type V struct {x:f64,y:f64,z:f64}
+         fn big()->void {var a:[100000]i32;} fn small()->void {var v:V;} fn bytes()->void {var b:[64]u8;}
+         fn main()->void {}",
+    );
+    let function = |name: &str| {
+        let start = qbe.find(&format!("${name}(")).unwrap();
+        &qbe[start..start + qbe[start..].find("\n}").unwrap()]
+    };
+    let big = function(".fern.fn0");
+    assert!(big.contains("call $memset(l %local0, w 0, l 400000)"));
+    assert!(!big.contains("store"));
+    let small = function(".fern.fn1");
+    assert_eq!(small.matches("stored d_0, %access").count(), 3);
+    assert!(!small.contains("memset"));
+    let bytes = function(".fern.fn2");
+    assert_eq!(bytes.matches("storel 0, %access").count(), 8);
+    assert!(!bytes.contains("memset"));
+    assert!(!qbe.contains("data $.fern.function"));
+}

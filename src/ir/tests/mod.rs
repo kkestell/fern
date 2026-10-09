@@ -97,3 +97,39 @@ fn equal_string_literals_share_one_entry() {
     );
     p.verify().unwrap();
 }
+#[test]
+fn zero_locals_need_no_data() {
+    let p = program("fn main()->void {var a:[100000]i32;var x:f64;}");
+    let main = &p.functions[0];
+    assert!(main.constants.is_empty());
+    let instructions: Vec<_> = main
+        .flow
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .collect();
+    assert_eq!(
+        instructions,
+        [
+            &Instruction::Zero {
+                place: Place::Local(LocalId(0))
+            },
+            &Instruction::Zero {
+                place: Place::Local(LocalId(1))
+            },
+        ]
+    );
+    p.verify().unwrap();
+    let p = program("var g:[100000]i32;fn main()->void {}");
+    assert_eq!(p.globals.len(), 1);
+    assert_eq!(p.globals[0].values, None);
+    p.verify().unwrap();
+    let mut p = program("fn f(a:[3]int)->void {} fn main()->void {f([1,2,3]);}");
+    assert!(!p.functions[1].constants.is_empty());
+    p.functions[1].flow.blocks[0]
+        .instructions
+        .push(Instruction::Zero {
+            place: Place::Constant(ConstantId(0)),
+        });
+    assert!(p.verify().is_err());
+}

@@ -58,13 +58,14 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
             unreachable!("module bindings are binding statements")
         };
         let ty = checked.bindings[binding].ty.clone();
-        let values = {
-            let constant = checked.expressions[*initializer]
+        // A `var` without an initializer holds its type's zero value.
+        let values = initializer.and_then(|initializer| {
+            let constant = checked.expressions[initializer]
                 .constant
                 .as_ref()
                 .expect("module-level initializers are constant expressions");
             static_values(&checked, constant, &ty)
-        };
+        });
         module_places.insert(binding, Place::Global(GlobalId(globals.len())));
         globals.push(Global { ty, values });
     }
@@ -432,6 +433,12 @@ impl FlowBuilder {
         self.store_in(self.current, place, operand);
     }
 
+    fn zero(&mut self, place: Place) {
+        self.blocks[self.current.0]
+            .instructions
+            .push(Instruction::Zero { place });
+    }
+
     /// The IR type of an operand this builder defined or a literal.
     fn operand_type(&self, operand: &Operand) -> Type {
         match operand {
@@ -528,24 +535,31 @@ fn lower_flow_binding(
         unreachable!("binding lowering requires a binding statement")
     };
     let binding = checked.declarations[statement];
+    let ty = checked.bindings[binding].ty.clone();
+    // A `var` without an initializer is zeroed each time it is declared.
+    let Some(initializer) = *initializer else {
+        let place = binding_place(binding, &ty, bindings, builder);
+        builder.zero(place.clone());
+        bindings.insert(binding, place);
+        return;
+    };
     if checked.bindings[binding].constant.is_some() {
-        lower_folded_effects(checked, *initializer, bindings, builder);
+        lower_folded_effects(checked, initializer, bindings, builder);
         return;
     }
-    let ty = checked.bindings[binding].ty.clone();
     // A binding is not in scope in its own initializer and no pointer reaches
     // an unaddressed one, so a call can write its result straight into the
     // binding's storage without any argument seeing the write.
     if ty.is_aggregate()
         && !bindings.addressed.contains(&binding)
-        && let Some(call) = unwrapped_call(checked, *initializer)
+        && let Some(call) = unwrapped_call(checked, initializer)
     {
         let place = binding_place(binding, &ty, bindings, builder);
         lower_call_into(checked, call, place.clone(), bindings, builder);
         bindings.insert(binding, place);
         return;
     }
-    let operand = lower_flow_operand(checked, *initializer, bindings, builder);
+    let operand = lower_flow_operand(checked, initializer, bindings, builder);
     let place = binding_place(binding, &ty, bindings, builder);
     builder.store(place.clone(), operand);
     bindings.insert(binding, place);

@@ -16,7 +16,10 @@ use la_arena::{Arena, ArenaMap, Idx};
 use lasso::Spur;
 use std::collections::{HashMap, HashSet};
 
-use super::{model::*, statements::body_terminates};
+use super::{
+    model::*,
+    statements::{body_terminates, zero_binding_annotation},
+};
 /// A module-level declaration, as another file or module sees it.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Declaration {
@@ -642,7 +645,9 @@ impl CheckedProgram<'_> {
             if let Some(annotation) = annotation {
                 self.collect_annotation_references(*annotation, &mut visited, &mut references);
             }
-            self.collect_references(*initializer, &mut visited, &mut references);
+            if let Some(initializer) = initializer {
+                self.collect_references(*initializer, &mut visited, &mut references);
+            }
             dependencies.insert(
                 statement,
                 references
@@ -683,6 +688,13 @@ impl CheckedProgram<'_> {
         let (mutable, annotation, initializer) = (*mutable, *annotation, *initializer);
         self.file = bindings.files[&statement];
         let scopes = ScopeStack::module(module_scope);
+        let binding = self.declarations[statement];
+        let Some(initializer) = initializer else {
+            let annotation =
+                zero_binding_annotation(mutable, annotation, &syntax.statements[statement])?;
+            self.bindings[binding].ty = self.resolve_annotation(annotation, &scopes)?;
+            return Ok(());
+        };
         // Signatures are resolved after this runs, so a call here has no
         // signature to check against. It is never constant, so report that.
         if let Some(call) = find_call(syntax, initializer) {
@@ -702,7 +714,6 @@ impl CheckedProgram<'_> {
                 "module-level initializer must be a constant expression",
             ));
         }
-        let binding = self.declarations[statement];
         self.bindings[binding].ty = destination.unwrap_or_else(|| expression.ty.clone());
         self.bindings[binding].constant = if mutable {
             None

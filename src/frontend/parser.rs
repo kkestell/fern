@@ -804,11 +804,12 @@ impl Parser<'_> {
         } else {
             None
         };
-        if self.current != Some(Token::Equals) {
-            return Err(self.error("every binding requires an initializer"));
-        }
-        self.expect(Token::Equals, "expected `=` and an initializer")?;
-        let initializer = self.expression()?;
+        let initializer = if self.current == Some(Token::Equals) {
+            self.advance()?;
+            Some(self.expression()?)
+        } else {
+            None
+        };
         Ok(StatementKind::Binding {
             mutable,
             name,

@@ -104,7 +104,7 @@
   which types extra arguments may have and how untyped literals and `f32`
   arguments are typed and promoted.
 
-- [ ] Zero-initialize a `var` without an initializer
+- [x] Zero-initialize a `var` without an initializer
 
   Implement the zero value specified in `docs/spec.md#declarations-and-scope`.
   `examples/raytrace.fern` spells `[2]i32 = [0, 0]` and allocates its scratch

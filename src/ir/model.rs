@@ -164,6 +164,11 @@ pub(crate) enum Instruction {
         place: Place,
         operand: Operand,
     },
+    /// Sets every scalar and pointer in `place` to zero, `+0.0`, `false`, or
+    /// `null`, without any value or static data holding the zero value.
+    Zero {
+        place: Place,
+    },
     /// Calls `function` with `arguments` in source order. `result` names the
     /// defined value when the callee returns one, unless `destination` names
     /// the place the callee writes its aggregate result into, in which case

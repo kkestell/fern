@@ -3,9 +3,12 @@ const step = 2;
 
 fn main() -> void {
     var value = total;
+    var steps: int;
     {
         var value = value + step;
         total = value;
+        steps += 1;
     }
     value += step;
+    steps += 1;
 }

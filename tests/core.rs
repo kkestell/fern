@@ -175,6 +175,34 @@ fn external_libc_allocation_and_io() {
     );
 }
 #[test]
+fn zero_values() {
+    run(r#"type S struct {a:u8,b:f64,c:i16,p:*int,d:[3]i32,e:bool}
+ var gi:int;var gu:u8;var gf:f32;var gd:f64;var gb:bool;var gp:*int;
+ var gs:S;var ga:[3][5]i16;var gl:[200]u8;var gw:[16]u8;
+ fn zero_struct(s:S)->bool {return s.a==0&&s.b==0.0&&s.c==0&&s.p==null&&s.d[0]==0&&s.d[2]==0&&!s.e;}
+ fn zero_box()->[3][5]i16 {var a:[3][5]i16;return a;}
+ fn main()->void {
+ var i:int;var u:u8;var f:f32;var d:f64;var b:bool;var p:*int;
+ var s:S;var a:[3][5]i16;var l:[200]u8;var w:[16]u8;
+ if i!=0||u!=0||b||p!=null {exit(1);}
+ if f!=0.0||1.0/f<=0.0||d!=0.0||1.0/d<=0.0 {exit(2);}
+ if !zero_struct(s)||a[0][0]!=0||a[2][4]!=0||l[0]!=0||l[199]!=0||w[0]!=0||w[15]!=0 {exit(3);}
+ if gi!=0||gu!=0||gb||gp!=null {exit(4);}
+ if gf!=0.0||1.0/gf<=0.0||gd!=0.0||1.0/gd<=0.0 {exit(5);}
+ if !zero_struct(gs)||ga[0][0]!=0||ga[2][4]!=0||gl[0]!=0||gl[199]!=0||gw[0]!=0||gw[15]!=0 {exit(6);}
+ var r=zero_box();if r[1][3]!=0 {exit(7);}
+ var k=0;
+ for k<3 {
+ var t:[100]int;var v:S;var x:[16]u8;var y:f64;
+ var j=0;for j<100 {if t[j]!=0 {exit(8);}j+=1;}
+ if !zero_struct(v)||x[7]!=0||y!=0.0 {exit(9);}
+ j=0;for j<100 {t[j]=j+1;j+=1;}
+ v.a=1;v.b=2.0;v.d[2]=3;v.e=true;v.p=&k;x[7]=4;y=5.0;
+ k+=1;
+ }
+ }"#);
+}
+#[test]
 fn invalid_programs_preserve_outputs() {
     for (source, expected) in [
         ("fn main()->void {const n=1/0;}", "undefined constant"),
@@ -188,7 +216,8 @@ fn invalid_programs_preserve_outputs() {
             "undefined constant",
         ),
         ("fn main()->void {var n:i8=128;}", "out of range"),
-        ("fn main()->void {var x:int;}", "initializer"),
+        ("fn main()->void {const x:int;}", "initializer"),
+        ("fn main()->void {var x;}", "type annotation"),
         (
             "fn main()->void {var x=1;const y=x;}",
             "constant expression",

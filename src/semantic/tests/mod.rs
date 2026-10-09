@@ -66,6 +66,37 @@ fn invalid_core_programs() {
     }
 }
 #[test]
+fn bindings_without_initializers() {
+    for (source, expected) in [
+        (
+            "fn main()->void {var x;}",
+            "a `var` without an initializer requires a type annotation",
+        ),
+        (
+            "fn main()->void {const x:int;}",
+            "a `const` requires an initializer",
+        ),
+        (
+            "var x; fn main()->void {}",
+            "a `var` without an initializer requires a type annotation",
+        ),
+        (
+            "const x:int; fn main()->void {}",
+            "a `const` requires an initializer",
+        ),
+    ] {
+        let syntax = parser::parse(&SourceMap::from_text(source)).unwrap();
+        let error = check_root(&syntax).unwrap_err();
+        assert_eq!(error.message, expected, "{source}");
+    }
+    let syntax = parser::parse(&SourceMap::from_text(
+        "var g:[4]u8; fn main()->void {var x:f64;var p:*int;}",
+    ))
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    assert!(checked.bindings.iter().all(|(_, b)| b.constant.is_none()));
+}
+#[test]
 fn external_signatures_and_returns() {
     for source in [
         "extern fn foo(x:bool)->void;fn main()->void {}",

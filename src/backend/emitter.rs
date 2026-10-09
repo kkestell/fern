@@ -2,7 +2,8 @@
 //!
 //! Aggregates travel through addresses. A small aggregate is copied field by
 //! field so QBE can keep its fields in registers; a larger one is copied with
-//! blit or memcpy.
+//! blit or memcpy. Zeroing an aggregate follows the same sizes, with stores or
+//! memset.
 //! Callees copy aggregate arguments into their local parameter storage.
 
 use crate::{
@@ -71,6 +72,59 @@ fn emit_copy(emitter: &mut Emitter<'_>, source: &str, destination: &str, ty: &Ty
         )
     }
     .unwrap();
+}
+
+/// The zero value of a scalar or pointer of type `ty` as a QBE operand.
+fn zero_operand(ty: &Type) -> String {
+    match ty.scalar() {
+        Some(scalar @ (Scalar::F32 | Scalar::F64)) => format!("{}_0", qbe_type(scalar)),
+        _ => "0".to_owned(),
+    }
+}
+
+/// Sets every value of type `ty` at `address` to its zero value. A larger
+/// aggregate is tested before its slots are listed, so zeroing a large array
+/// takes no compile time or memory proportional to its length. A type with at
+/// most `MAX_FIELD_COPY_SLOTS` slots is never larger than
+/// `MAX_INLINE_COPY_BYTES`, since each slot and the padding after it fit in
+/// eight bytes.
+fn emit_zero(emitter: &mut Emitter<'_>, address: &str, ty: &Type) {
+    if !ty.is_aggregate() {
+        emit_store(emitter, &zero_operand(ty), address, ty);
+        return;
+    }
+    let size = emitter.layout.size(ty);
+    if size > MAX_INLINE_COPY_BYTES {
+        writeln!(emitter.text, "    call $memset(l {address}, w 0, l {size})").unwrap();
+        return;
+    }
+    let slots = emitter.layout.value_slots(ty);
+    let stores: Vec<(u64, char, String)> = if slots.len() <= MAX_FIELD_COPY_SLOTS {
+        slots
+            .iter()
+            .map(|(offset, slot)| (*offset, memory_class(slot), zero_operand(slot)))
+            .collect()
+    } else {
+        let mut stores = Vec::new();
+        let mut offset = 0;
+        for (width, class) in [(8, 'l'), (4, 'w'), (2, 'h'), (1, 'b')] {
+            while size - offset >= width {
+                stores.push((offset, class, "0".to_owned()));
+                offset += width;
+            }
+        }
+        stores
+    };
+    for (offset, class, zero) in stores {
+        let access = emitter.accesses;
+        emitter.accesses += 1;
+        writeln!(
+            emitter.text,
+            "    %access{access}_to =l add {address}, {offset}\n    \
+             store{class} {zero}, %access{access}_to"
+        )
+        .unwrap();
+    }
 }
 
 /// Mach-O arm64 relocations hold a signed 24-bit addend, and QBE folds a
@@ -434,6 +488,10 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             let (address, ty) = place_address(emitter, function, destination);
             let source = operand(source.clone());
             emit_store(emitter, &source, &address, &ty);
+        }
+        Instruction::Zero { place } => {
+            let (address, ty) = place_address(emitter, function, place);
+            emit_zero(emitter, &address, &ty);
         }
         Instruction::Call {
             result,

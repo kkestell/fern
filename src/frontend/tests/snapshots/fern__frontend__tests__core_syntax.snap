@@ -1,0 +1,150 @@
+---
+source: src/frontend/tests/mod.rs
+expression: "(syntax.statements,syntax.expressions,syntax.annotations)"
+---
+(
+    Arena {
+        len: 3,
+        data: [
+            Statement {
+                kind: Binding {
+                    mutable: true,
+                    name: Spur(3),
+                    name_span: 83..84,
+                    annotation: None,
+                    initializer: Idx::<Expression>(0),
+                },
+                span: 79..87,
+            },
+            Statement {
+                kind: Binding {
+                    mutable: true,
+                    name: Spur(5),
+                    name_span: 91..92,
+                    annotation: None,
+                    initializer: Idx::<Expression>(2),
+                },
+                span: 87..96,
+            },
+            Statement {
+                kind: Assignment {
+                    target: Idx::<Expression>(4),
+                    value: Idx::<Expression>(6),
+                },
+                span: 96..107,
+            },
+        ],
+    },
+    Arena {
+        len: 7,
+        data: [
+            Expression {
+                kind: Integer(
+                    "1",
+                ),
+                span: 85..86,
+                depth: 0,
+            },
+            Expression {
+                kind: Reference(
+                    QualifiedName {
+                        qualifier: None,
+                        name: Spur(3),
+                        name_span: 94..95,
+                        span: 94..95,
+                    },
+                ),
+                span: 94..95,
+                depth: 0,
+            },
+            Expression {
+                kind: AddressOf {
+                    operator_span: 93..94,
+                    operand: Idx::<Expression>(1),
+                },
+                span: 93..95,
+                depth: 1,
+            },
+            Expression {
+                kind: Reference(
+                    QualifiedName {
+                        qualifier: None,
+                        name: Spur(5),
+                        name_span: 97..98,
+                        span: 97..98,
+                    },
+                ),
+                span: 97..98,
+                depth: 0,
+            },
+            Expression {
+                kind: Dereference {
+                    operator_span: 96..97,
+                    operand: Idx::<Expression>(3),
+                },
+                span: 96..98,
+                depth: 1,
+            },
+            Expression {
+                kind: Reference(
+                    QualifiedName {
+                        qualifier: None,
+                        name: Spur(5),
+                        name_span: 104..105,
+                        span: 104..105,
+                    },
+                ),
+                span: 104..105,
+                depth: 0,
+            },
+            Expression {
+                kind: Call(
+                    Call {
+                        target: QualifiedName {
+                            qualifier: None,
+                            name: Spur(4),
+                            name_span: 99..103,
+                            span: 99..103,
+                        },
+                        left_paren_span: 103..104,
+                        right_paren_span: 105..106,
+                        arguments: [
+                            Idx::<Expression>(5),
+                        ],
+                    },
+                ),
+                span: 99..106,
+                depth: 1,
+            },
+        ],
+    },
+    Arena {
+        len: 4,
+        data: [
+            TypeAnnotation {
+                kind: Scalar(
+                    Int,
+                ),
+                span: 27..30,
+            },
+            TypeAnnotation {
+                kind: Scalar(
+                    Int,
+                ),
+                span: 51..54,
+            },
+            TypeAnnotation {
+                kind: Pointer {
+                    target: Idx::<TypeAnnotation>(1),
+                },
+                span: 50..54,
+            },
+            TypeAnnotation {
+                kind: Scalar(
+                    Int,
+                ),
+                span: 57..60,
+            },
+        ],
+    },
+)

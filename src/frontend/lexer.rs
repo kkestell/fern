@@ -5,6 +5,10 @@ use logos::Logos;
 #[derive(Logos, Debug, Clone, Copy, PartialEq)]
 #[logos(skip r"[ \t\n\r\x0B\x0C]+")]
 pub(super) enum Token {
+    #[token("extern")]
+    Extern,
+    #[token("sizeof")]
+    Sizeof,
     #[token("fn")]
     Fn,
     #[token("void")]
@@ -17,8 +21,6 @@ pub(super) enum Token {
     Type,
     #[token("struct")]
     Struct,
-    #[token("exit")]
-    Exit,
     #[token("if")]
     If,
     #[token("else")]
@@ -31,8 +33,6 @@ pub(super) enum Token {
     Continue,
     #[token("return")]
     Return,
-    #[token("in")]
-    In,
     #[token("len")]
     Len,
     #[token("true")]
@@ -41,15 +41,6 @@ pub(super) enum Token {
     False,
     #[token("null")]
     Null,
-    #[token("new")]
-    New,
-    #[token("free")]
-    Free,
-    #[token("nullable")]
-    Nullable,
-    /// An integer or floating-point literal candidate, matched loosely so a
-    /// malformed spelling stays one token. `is_floating` says which literal
-    /// a candidate spells and `valid_number` says whether it is one.
     #[regex("[0-9][a-zA-Z0-9_]*", number)]
     #[regex(r"\.[0-9][a-zA-Z0-9_]*", number)]
     Number,
@@ -81,24 +72,12 @@ pub(super) enum Token {
     Comma,
     #[token(".")]
     Dot,
-    #[token("+%")]
-    WrappingPlus,
     #[token("+=")]
     PlusEquals,
-    #[token("+%=")]
-    WrappingPlusEquals,
-    #[token("-%")]
-    WrappingMinus,
     #[token("-=")]
     MinusEquals,
-    #[token("-%=")]
-    WrappingMinusEquals,
-    #[token("*%")]
-    WrappingStar,
     #[token("*=")]
     StarEquals,
-    #[token("*%=")]
-    WrappingStarEquals,
     #[token("<<")]
     ShiftLeft,
     #[token("<<=")]
@@ -155,23 +134,15 @@ pub(super) enum Token {
     LeftBracket,
     #[token("]")]
     RightBracket,
-    #[token("...")]
-    Ellipsis,
     #[regex(r"//[^\r\n]*", logos::skip, allow_greedy = true)]
     LineComment,
     #[token("/*", block_comment)]
     BlockComment,
 }
 
-/// Extends a numeric candidate over the decimal point and exponent sign its
-/// regex cannot reach: a point separates two runs of word characters and a
-/// sign may only follow the `e` or `E` a run ended on.
-///
-/// A point that begins an `...` fill marker is left alone, so `[0...]` lexes
-/// as an integer and an ellipsis rather than as `0.` and two dots.
 fn number(lexer: &mut logos::Lexer<'_, Token>) {
     let remainder = lexer.remainder();
-    if remainder.starts_with('.') && !remainder[1..].starts_with('.') {
+    if remainder.starts_with('.') {
         lexer.bump(1);
         bump_word(lexer);
     }
@@ -247,8 +218,6 @@ pub(super) fn is_floating(spelling: &str) -> bool {
     spelling.contains('.') || (base == 10 && suffix.starts_with(['e', 'E']))
 }
 
-/// Rejects a malformed candidate before parsing reads it, so a loose literal
-/// regex cannot admit a spelling the language forbids.
 pub(super) fn valid_number(spelling: &str) -> Result<(), String> {
     if is_floating(spelling) {
         valid_floating(spelling)

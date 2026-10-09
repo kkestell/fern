@@ -1,16 +1,11 @@
-var result = initial;
-const initial: int = 40;
-const increment = 2;
+var total = 10;
+const step = 2;
 
 fn main() -> void {
-    const saved = result;
-    result = result + increment;
-
+    var value = total;
     {
-        // The initializer reads the enclosing binding before shadowing it.
-        var result = result;
-        result = saved;
+        var value = value + step;
+        total = value;
     }
-
-    exit(result);
+    value += step;
 }

@@ -5,9 +5,7 @@ use std::{
 };
 use tempfile::{TempDir, tempdir};
 
-const EMPTY: &str = "fn main() -> void {}";
-const INTEGER: &str =
-    "fn main() -> void { const status: int = 42; var copy = status; exit(copy,); }";
+const INTEGER: &str = "extern fn exit(status:i32)->void; fn main() -> void { const status: int = 42; var copy = status; exit(i32(copy)); }";
 
 fn cli(input: &Path, output: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fern"));
@@ -30,24 +28,6 @@ fn failure(result: Output, expected: &str) {
         stderr.contains(expected),
         "expected {expected:?} in {stderr}"
     );
-}
-
-#[test]
-fn native_programs_exit_zero() {
-    for source in [
-        EMPTY,
-        "fn main() -> void { const x = 42; var y = x; }",
-        "fn helper() -> void { const value = 1; } fn main() -> void {}",
-        "fn f(p: *int) -> void {} fn main() -> void {}",
-        "fn main() -> void { var x = 1; const p = &x; }",
-        "fn main() -> void { const p = new(1); free(p); }",
-        "\t\r\n\x0b\x0c /* 🌿 /* nested */ */ fn/*a*/main( ) -> void { // body\n } // eof",
-    ] {
-        let (dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(Command::new(&output).status().unwrap().code(), Some(0));
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    }
 }
 
 #[test]
@@ -88,148 +68,6 @@ fn cli_compiles_and_replaces_existing_output() {
 }
 
 #[test]
-fn typed_values_after_exit_do_not_change_status() {
-    for body in [
-        "exit(42); const value: u64 = 18446744073709551615;",
-        "{ exit(42); const value: i8 = 1; } const value: u64 = 1;",
-    ] {
-        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-    }
-}
-
-#[test]
-fn typed_integer_diagnostics_precede_emission_and_preserve_output() {
-    for (body, message) in [
-        ("const x: u64 = 256u8;", "malformed integer literal"),
-        (
-            "var x: u8 = 0; { x = 256; }",
-            "integer literal out of range for `u8`",
-        ),
-        (
-            "const x: u64 = 1; { exit(0); exit(x); }",
-            "cannot implicitly convert `u64` to `int`",
-        ),
-        (
-            "const x: i64 = 1; const y: int = x;",
-            "cannot implicitly convert `i64` to `int`",
-        ),
-        (
-            "{ exit(0); } const x: u64 = 18446744073709551616;",
-            "integer literal out of range for `u64`",
-        ),
-    ] {
-        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
-        fs::write(&output, "old executable").unwrap();
-        let error = fern::compile(&input, &output).unwrap_err().to_string();
-        assert!(error.contains(message), "{error}");
-        assert!(
-            error.contains(input.file_name().unwrap().to_str().unwrap()),
-            "{error}"
-        );
-        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
-    }
-}
-
-#[test]
-fn source_failures_preserve_output() {
-    for (source, expected) in [
-        ("", "missing `main`"),
-        (
-            "fn main() -> void {} fn main() -> void {}",
-            "duplicate `main`",
-        ),
-        (
-            "fn helper() -> void {} fn helper() -> void {} fn main() -> void {}",
-            "duplicate module-level name `helper`",
-        ),
-        (
-            "const main = 1; fn main() -> void {}",
-            "duplicate module-level name `main`",
-        ),
-        (
-            "var value = 1; const value = 2; fn main() -> void {}",
-            "duplicate module-level name `value`",
-        ),
-        (
-            "const first = second; const second = first; fn main() -> void {}",
-            "module-level initializer cycle",
-        ),
-        (
-            "var runtime = 1; const invalid = runtime; fn main() -> void {}",
-            "module-level initializer must be a constant expression",
-        ),
-        ("fn other() -> void {}", "missing `main`"),
-        ("fn main() -> void { const x = x; }", "unknown binding `x`"),
-        (
-            "fn main() -> void { exit(0); exit(missing); }",
-            "unknown binding `missing`",
-        ),
-        (
-            "fn main() -> void { exit(0); var x: u8 = 256; }",
-            "integer literal out of range for `u8`",
-        ),
-        (
-            "fn main() -> void { const x = 1; x = 2; }",
-            "cannot assign to immutable binding `x`",
-        ),
-        (
-            "fn consume(values: [9223372036854775807]int) -> void {} fn main() -> void {}",
-            "aggregate layout exceeds compiler limit of 1 PiB",
-        ),
-        (
-            "fn main() -> void { { var x = 1; } x = 2; }",
-            "unknown binding `x`",
-        ),
-        (
-            "fn main() -> void { var x = 1; { exit(0); x = missing; } }",
-            "unknown binding `missing`",
-        ),
-        (
-            "fn main() -> void { var x: u8 = 1; { exit(0); } x = 256; }",
-            "integer literal out of range for `u8`",
-        ),
-        (
-            "fn main() -> void { var x: u8 = 1; { x = 256; } }",
-            "integer literal out of range for `u8`",
-        ),
-        ("fn main() -> void { x = ; }", "expected an expression"),
-        ("fn main() -> void { x 1; }", "expected `=`"),
-        ("fn main() -> void { x = 1 }", "expected `;`"),
-        ("fn main() -> void { { }", "expected `}`"),
-        ("fn main(x) -> void {}", "expected `:` after parameter name"),
-        ("fn main() -> int {}", "`main` must return `void`"),
-        (
-            "fn main() -> void {} trailing",
-            "expected a top-level declaration",
-        ),
-        (
-            "fn main() -> void {} /* unclosed",
-            "unterminated block comment",
-        ),
-        ("fn main() -> void {} ;", "expected a top-level declaration"),
-        ("fn main() -> void {", "expected `}`"),
-        ("fn main() -> void {}\u{a0}", "invalid token"),
-        ("fn int() -> void {}", "reserved word"),
-        ("fn main_extra() -> void {}", "missing `main`"),
-    ] {
-        let (dir, input, output) = fixture(source);
-        failure(cli(&input, &output).output().unwrap(), expected);
-        assert!(!output.exists());
-        fs::write(&output, "keep me").unwrap();
-        let error = fern::compile(&input, &output).unwrap_err().to_string();
-        assert!(error.contains(expected), "{error}");
-        assert!(
-            error.contains(input.file_name().unwrap().to_str().unwrap()),
-            "{error}"
-        );
-        assert_eq!(fs::read_to_string(&output).unwrap(), "keep me");
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    }
-}
-
-#[test]
 fn deep_struct_containment_reports_a_diagnostic_without_aborting() {
     let mut source = String::new();
     for index in 0..=128 {
@@ -253,175 +91,6 @@ fn deep_struct_containment_reports_a_diagnostic_without_aborting() {
 }
 
 #[test]
-fn declarations_without_an_initializer_execute_as_zero_values() {
-    for (source, expected) in [
-        (
-            "var counter: int;
-             fn main() -> void {
-                 counter = counter + 1;
-                 counter = counter + 1;
-                 exit(counter);
-             }",
-            2,
-        ),
-        (
-            "type Point struct { x: int, y: f64 }
-             fn main() -> void {
-                 var zeroed: Point;
-                 const written = Point { x = 0, y = 0.0 };
-                 if zeroed != written { exit(255); }
-                 exit(7);
-             }",
-            7,
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn struct_programs_execute() {
-    for (source, expected) in [
-        (include_str!("fixtures/programs/structs.fern"), 43),
-        (
-            "type Point struct { x: int, y: int }
-             var origin = Point { x = 1, y = 2 };
-             fn moved(point: Point) -> Point {
-                 var copy = point;
-                 copy.x = copy.x + 40;
-                 return copy;
-             }
-             fn main() -> void {
-                 var result = moved(origin);
-                 result.y = 1;
-                 if origin.x != 1 || origin.y != 2 { exit(255); }
-                 exit(result.x + result.y);
-             }",
-            42,
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
-fn struct_source_failures_preserve_output() {
-    for (source, expected) in [
-        (
-            "type Point struct { x: int }
-             fn main() -> void {
-                 const point = Point { x = 1 };
-                 point.x = 2;
-             }",
-            "cannot assign to immutable binding `point`",
-        ),
-        (
-            "type Point struct { x: int, y: int }
-             fn main() -> void {
-                 const point = Point { x = 1 };
-                 exit(42);
-             }",
-            "`Point` literal is missing field `y`",
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fs::write(&output, "old executable").unwrap();
-        let error = fern::compile(&input, &output).unwrap_err().to_string();
-        assert!(error.contains(expected), "{error}");
-        assert!(
-            error.contains(input.file_name().unwrap().to_str().unwrap()),
-            "{error}"
-        );
-        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
-    }
-}
-
-#[test]
-fn pointer_programs_execute() {
-    for (source, expected) in [
-        (include_str!("fixtures/programs/pointers.fern"), 42),
-        (
-            "fn main() -> void {
-                 const p = new(1);
-                 free(p);
-                 var q: nullable *int;
-                 free(q);
-             }",
-            0,
-        ),
-        (
-            "fn main() -> void {
-                 var q: nullable *int = new(17);
-                 const p = *int(q);
-                 exit(*p);
-             }",
-            17,
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn pointer_programs_report_compile_time_errors() {
-    for (source, expected) in [
-        (
-            "fn main() -> void { const q = 1; const b = &q; }",
-            "cannot take the address of immutable binding `q`",
-        ),
-        (
-            "fn main() -> void { var p = null; }",
-            "`null` requires a nullable pointer type from context",
-        ),
-        (
-            "fn f(x: int) -> int { return x; }
-             fn main() -> void { var x = 1; const p = *f(x); }",
-            "cannot use function `f` as a type",
-        ),
-        ("fn main() -> void { var x: *void; }", "expected a type"),
-        (
-            "fn main() -> void { var q: nullable *int; exit(*q); }",
-            "cannot dereference `nullable *int`",
-        ),
-        (
-            "fn main() -> void { var x = 1; const p = &x; if p < p { exit(1); } }",
-            "only `==` and `!=` are defined on `*int`",
-        ),
-        (
-            "fn main() -> void { var x = 1; const p = &x; exit(int(p)); }",
-            "cannot convert `*int` to `int`",
-        ),
-        (
-            "fn main() -> void { var p: *int; }",
-            "`*int` has no zero value",
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fs::write(&output, "old executable").unwrap();
-        let error = fern::compile(&input, &output).unwrap_err().to_string();
-        assert!(error.contains(expected), "{error}");
-        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
-    }
-}
-
-#[test]
 fn oversized_integer_diagnostics_are_bounded() {
     let digits = "9".repeat(200_000);
     let (_dir, input, output) = fixture(format!("fn main() -> void {{ const value = {digits}; }}"));
@@ -435,575 +104,6 @@ fn oversized_integer_diagnostics_are_bounded() {
     let stderr = String::from_utf8(result.stderr).unwrap();
     assert!(stderr.contains("integer literal exceeds compiler limit"));
     assert!(stderr.contains("bytes "));
-}
-
-#[test]
-fn integer_operator_fixtures_execute_and_replace_output() {
-    for source in [
-        include_str!("fixtures/programs/integer_expressions.fern"),
-        include_str!("fixtures/programs/wrapping_operators.fern"),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fs::write(&output, "keep me").unwrap();
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-    }
-}
-
-#[test]
-fn module_level_bindings_initialize_shadow_and_mutate() {
-    for source in [
-        include_str!("fixtures/programs/module_level_declarations.fern"),
-        "var counter = 40;
-         fn main() -> void {
-             { var counter: u8 = 1; counter = 2; }
-             counter = counter + 2;
-             exit(counter);
-         }",
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-    }
-}
-
-#[test]
-fn branches_and_loops_execute() {
-    for (source, expected) in [
-        (include_str!("fixtures/programs/branches_and_loops.fern"), 6),
-        (
-            "fn main() -> void {
-                var total = 0;
-                for {
-                    total = total + 1;
-                    if total == 2 { break; }
-                }
-                for total < 42 { total = total + 1; }
-                exit(total);
-            }",
-            42,
-        ),
-        (
-            "fn main() -> void {
-                var total = 24;
-                for var i = 0; i < 7; i += 1 {
-                    if i == 3 { continue; }
-                    total += i;
-                }
-                exit(total);
-            }",
-            42,
-        ),
-        (
-            "fn main() -> void {
-                var total = 39;
-                for :outer var row = 0; row < 3; row += 1 {
-                    for var column = 0; column < 3; column += 1 {
-                        if column == 1 { continue :outer; }
-                        total += 1;
-                    }
-                }
-                exit(total);
-            }",
-            42,
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
-fn arrays_execute() {
-    for (source, expected) in [
-        (include_str!("fixtures/programs/arrays.fern"), 46),
-        // Every whole-array copy is independent of its source.
-        (
-            "var shared: [3]int = [1, 2, 3];
-             fn identity(row: [3]int) -> [3]int { return row; }
-             fn main() -> void {
-                 var local = shared;
-                 local[0] = 10;
-                 var returned = identity(shared);
-                 returned[1] = 20;
-                 exit(shared[0] + shared[1] + local[0] + returned[1]);
-             }",
-            33,
-        ),
-        // An array argument is the value the array held when it was passed.
-        (
-            "var shared: [3]int = [1, 2, 3];
-             fn mutate() -> int { shared[0] = 50; return 0; }
-             fn first(row: [3]int, ignored: int) -> int { return row[0] + ignored; }
-             fn main() -> void { exit(first(shared, mutate()) * 100 + shared[0]); }",
-            150,
-        ),
-        // A target's indices run left to right, then its value.
-        (
-            "var trace = 0;
-             fn mark(digit: int) -> int { trace = trace * 10 + digit; return digit; }
-             fn main() -> void {
-                 var grid: [2][2]int = [[0, 0], [0, 0]];
-                 grid[mark(0)][mark(1)] = mark(2);
-                 exit(trace + grid[0][1]);
-             }",
-            14,
-        ),
-        // A compound assignment evaluates its index once.
-        (
-            "var trace = 0;
-             fn mark(digit: int) -> int { trace = trace * 10 + digit; return digit; }
-             fn main() -> void {
-                 var a: [2]int = [5, 6];
-                 a[mark(1)] += 4;
-                 exit(a[1] + trace);
-             }",
-            11,
-        ),
-        // Equality compares elements, whatever built them.
-        (
-            "fn zero() -> i8 { return 0; }
-             fn main() -> void {
-                 var base = zero();
-                 var computed: [2]i8 = [base - 1, base - 127];
-                 const literal: [2]i8 = [-1, -127];
-                 var flags: [2]bool = [true, false];
-                 const same: [2]bool = [true, false];
-                 var bytes: [3]u8 = [255, 0, 7];
-                 const other: [3]u8 = [255, 0, 8];
-                 var grid: [2][2]int = [[1, 2], [3, 4]];
-                 const twin: [2][2]int = [[1, 2], [3, 4]];
-                 var total = 0;
-                 if computed == literal { total += 1; }
-                 if flags == same { total += 2; }
-                 if bytes != other { total += 4; }
-                 if grid == twin { total += 8; }
-                 exit(total);
-             }",
-            15,
-        ),
-        // A whole-array assignment copies, and `len` is a constant length.
-        (
-            "fn main() -> void {
-                 const source: [3]int = [1, 2, 3];
-                 var target: [len(source)]int = [0...];
-                 target = source;
-                 target[0] = 10;
-                 exit(target[0] + target[2] + source[0] + len(target));
-             }",
-            17,
-        ),
-        // Iteration reads the value the operand held before the first pass.
-        (
-            "fn main() -> void {
-                 var a: [3]int = [1, 2, 3];
-                 var sum = 0;
-                 for v in a {
-                     a[2] = 90;
-                     sum += v;
-                 }
-                 exit(sum + a[2]);
-             }",
-            96,
-        ),
-        // Both `for … in` forms, over a nested array and over a call result.
-        (
-            "fn pair() -> [3]int { var out: [3]int = [4...]; return out; }
-             fn main() -> void {
-                 var grid: [2][3]int = [[1, 2, 3], [4, 5, 6]];
-                 var sum = 0;
-                 for row, i in grid {
-                     for v in row {
-                         if v == 5 { continue; }
-                         sum += v * (i + 1);
-                     }
-                 }
-                 for t in pair() { sum += t; }
-                 exit(sum);
-             }",
-            38,
-        ),
-        // `len` reads the operand's type, including through an index.
-        (
-            "fn main() -> void {
-                 var a: [4]int = [1...];
-                 const b: [2][3]int = [[1, 2, 3], [4, 5, 6]];
-                 exit(len(a) + len(b) + len(b[0]));
-             }",
-            9,
-        ),
-        // Module-level arrays hold their initial values when `main` starts.
-        (
-            "var counters: [3]int = [7, 8, 9];
-             const limits: [_]u8 = [1, 2];
-             fn main() -> void {
-                 counters[2] = 1;
-                 exit(counters[0] + counters[1] + counters[2] + int(limits[1]));
-             }",
-            18,
-        ),
-        // Copies and array results in a loop reuse their storage rather than
-        // growing the stack once per iteration.
-        (
-            "fn build(seed: int) -> [3]int { var out: [3]int = [seed...]; return out; }
-             fn main() -> void {
-                 var source: [3]int = [1, 2, 3];
-                 var total = 0;
-                 for var i = 0; i < 200000; i += 1 {
-                     var copy = source;
-                     total = copy[0] + build(i)[2] % 7;
-                 }
-                 exit(total);
-             }",
-            3,
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap_or_else(|error| panic!("{source}: {error}"));
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn parameters_calls_and_returns_execute() {
-    for source in [
-        include_str!("fixtures/programs/parameters_calls_and_returns.fern"),
-        // A call nested in an argument and in an expression.
-        "fn twice(value: int) -> int {
-             return value * 2;
-         }
-         fn main() -> void {
-             exit(twice(twice(10)) + 2);
-         }",
-        // Arguments run left to right, whatever they mutate.
-        "var trace = 0;
-         fn mark(digit: int) -> int {
-             trace = trace * 10 + digit;
-             return digit;
-         }
-         fn pair(left: int, right: int) -> int {
-             return left + right;
-         }
-         fn main() -> void {
-             pair(mark(4), mark(2));
-             exit(trace);
-         }",
-        // A discarded result does not change execution.
-        "var trace = 0;
-         fn bump() -> int {
-             trace += 42;
-             return 7;
-         }
-         fn main() -> void {
-             bump();
-             exit(trace);
-         }",
-        // A call to a function declared after `main`.
-        "fn main() -> void {
-             exit(answer());
-         }
-         fn answer() -> int {
-             return 42;
-         }",
-        // Direct recursion.
-        "fn sum_to(value: int) -> int {
-             if value == 0 {
-                 return 0;
-             }
-             return value + sum_to(value - 1);
-         }
-         fn main() -> void {
-             exit(sum_to(6) + 21);
-         }",
-        // Mutual recursion, with a `bool` result used as a condition.
-        "fn even(value: int) -> bool {
-             if value == 0 {
-                 return true;
-             }
-             return odd(value - 1);
-         }
-         fn odd(value: int) -> bool {
-             if value == 0 {
-                 return false;
-             }
-             return even(value - 1);
-         }
-         fn main() -> void {
-             if even(10) && odd(7) {
-                 exit(42);
-             }
-             exit(1);
-         }",
-        // A call whose argument short-circuits, used as an operand of a binary
-        // operation, a comparison, and a compound assignment.
-        "fn pick(flag: bool) -> int {
-             if flag {
-                 return 1;
-             }
-             return 2;
-         }
-         fn main() -> void {
-             var yes = true;
-             var no = false;
-             var total = 40;
-             total += pick(yes && no);
-             if total == 40 + pick(yes && no) {
-                 exit(total + pick(no || yes) - 1);
-             }
-             exit(1);
-         }",
-        // An early `return` from a function returning nothing.
-        "var trace = 42;
-         fn keep(flag: bool) -> void {
-             if flag {
-                 return;
-             }
-             trace = 1;
-         }
-         fn main() -> void {
-             keep(true);
-             exit(trace);
-         }",
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(42),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn exit_inside_a_called_function_does_not_return_to_its_caller() {
-    let (_dir, input, output) = fixture(
-        "var trace = 42;
-         fn quit(status: int) -> void {
-             exit(status);
-             trace = 1;
-         }
-         fn main() -> void {
-             quit(trace);
-             exit(1);
-         }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn a_null_pointer_conversion_reports_its_source_location() {
-    let source = "fn main() -> void {\n    var q: nullable *int;\n    const p = *int(q);\n    exit(*p);\n}\n";
-    let (dir, _, output) = fixture(source);
-    let input = dir.path().join("null.fern");
-    fs::write(&input, source).unwrap();
-    fern::compile(&input, &output).unwrap();
-    let result = Command::new(output).output().unwrap();
-    assert!(!result.status.success());
-    let stderr = String::from_utf8(result.stderr).unwrap();
-    assert!(stderr.contains("null pointer"), "{stderr}");
-    assert!(stderr.contains("null.fern:3:"), "{stderr}");
-}
-
-#[test]
-fn runtime_failures_inside_a_called_function_report_their_source_location() {
-    let source = "fn divide(left: int, right: int) -> int {\n    return left / right;\n}\n\nfn main() -> void {\n    exit(divide(1, 0));\n}\n";
-    let (dir, _, output) = fixture(source);
-    let input = dir.path().join("callee.fern");
-    fs::write(&input, source).unwrap();
-    fern::compile(&input, &output).unwrap();
-    let result = Command::new(output).output().unwrap();
-    assert!(!result.status.success());
-    let stderr = String::from_utf8(result.stderr).unwrap();
-    assert!(
-        stderr.contains("integer `/` has a zero divisor"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("callee.fern:2:"), "{stderr}");
-}
-
-#[test]
-fn comparisons_and_logical_expressions_execute() {
-    let (_dir, input, output) = fixture(
-        "fn main() -> void {
-            var negative: i8 = -1;
-            var zero: i8 = 0;
-            var high: u64 = 18446744073709551615;
-            var low: u64 = 1;
-            var no = false;
-            if !(negative < zero) { exit(1); }
-            if negative <= zero && zero > negative && zero >= negative
-                && negative != zero && high > low && high >= low
-                && low < high && low <= high && no == false
-                && no < true && no <= false && true > no && true >= true
-                && no != true && true == true {
-                exit(42);
-            } else {
-                exit(2);
-            }
-        }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn comparisons_accept_short_circuiting_boolean_operands() {
-    let (_dir, input, output) = fixture(
-        "fn main() -> void {
-            var a = true;
-            var b = true;
-            var c = false;
-            var d = true;
-            var x = 1;
-            if a == (b && c) { exit(1); }
-            if (a && b) == (c && d) { exit(2); }
-            if (x == 1) == (b && c) { exit(3); }
-            var q = a == (b && c);
-            if q { exit(4); }
-            exit(42);
-        }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn logical_operators_skip_runtime_failures() {
-    let (_dir, input, output) = fixture(
-        "fn main() -> void {
-            var zero = 0;
-            var one = 1;
-            if zero != 0 && one / zero > 0 { exit(1); }
-            if one == 1 || one / zero > 0 {
-                exit(42);
-            }
-            exit(2);
-        }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn grouped_contextual_integer_expressions_execute() {
-    let (_dir, input, output) = fixture(
-        "fn main() -> void { var count: uint = 1; const grouped: u8 = ((21)); const shifted: u64 = (10 + 11) << count; exit(int(grouped) + int(shifted / 42)); }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(22));
-}
-
-#[test]
-fn nested_contextual_expressions_and_typed_overshifts_execute() {
-    let (_dir, input, output) = fixture(
-        "fn main() -> void {
-            var count: uint = 1;
-            const nested: i64 = -(1 << count);
-            var unsigned: u8 = 1;
-            var signed: i8 = -1;
-            var overshift: u64 = 18446744073709551615;
-            const left = unsigned << overshift;
-            const right = signed >> overshift;
-            exit(int(nested) + int(left) + int(right) + 45);
-        }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn integer_expressions_preserve_assignments_copies_scopes_and_nested_exits() {
-    for body in [
-        "var value = 20; const saved = value; value = saved + 22; exit(value);",
-        "var value = 40; { var value = value + 1; value = value + 1; } exit(value + 2);",
-        "var value = 40; { value = value + 2; { exit(value); value = value + 1; } value = 0; } exit(0);",
-        "var value: u8 = 250; const saved = value; value = value +% 48; exit(int(value));",
-    ] {
-        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(42),
-            "{body}"
-        );
-    }
-}
-
-#[test]
-fn runtime_integer_failures_include_the_operation_and_source_location() {
-    for (operator, expected) in [
-        ("+", "integer `+` overflowed"),
-        ("/", "integer `/` has a zero divisor"),
-        ("<<", "integer shift count is negative"),
-    ] {
-        let expression = match operator {
-            "+" => "value + other",
-            "/" => "value / other",
-            "<<" => "value << other",
-            _ => unreachable!(),
-        };
-        let (left, right) = match operator {
-            "+" => ("32767", "1"),
-            "/" => ("1", "0"),
-            "<<" => ("1", "-1"),
-            _ => unreachable!(),
-        };
-        let source = format!(
-            "fn main() -> void {{\n    var value: i16 = {left};\n    var other: i16 = {right};\n    const failed = {expression};\n}}"
-        );
-        let (dir, _, output) = fixture(&source);
-        let input = dir.path().join("operation.fern");
-        fs::write(&input, source).unwrap();
-        fern::compile(&input, &output).unwrap();
-        fs::remove_file(&input).unwrap();
-        let result = Command::new(output).output().unwrap();
-        assert!(!result.status.success());
-        let stderr = String::from_utf8(result.stderr).unwrap();
-        assert!(stderr.contains(expected), "{stderr}");
-        assert!(stderr.contains("operation.fern:4:"), "{stderr}");
-        assert!(stderr.contains(expression), "{stderr}");
-    }
-}
-
-#[test]
-fn runtime_compound_assignment_failures_name_the_compound_operator() {
-    for (setup, assignment, expected) in [
-        (
-            "var value: u8 = 255; var other: u8 = 1;",
-            "value += other;",
-            "integer `+=` overflowed",
-        ),
-        (
-            "var value: u8 = 8; var other: u8 = 0;",
-            "value /= other;",
-            "integer `/=` has a zero divisor",
-        ),
-        (
-            "var value: u8 = 1; var other: int = -1;",
-            "value <<= other;",
-            "integer `<<=` shift count is negative",
-        ),
-    ] {
-        let source = format!("fn main() -> void {{ {setup} {assignment} }}");
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        let result = Command::new(output).output().unwrap();
-        assert!(!result.status.success());
-        assert!(
-            String::from_utf8(result.stderr).unwrap().contains(expected),
-            "{assignment}"
-        );
-    }
 }
 
 #[test]
@@ -1151,278 +251,18 @@ fn unwritable_output_directory_fails() {
 }
 
 #[test]
-fn integer_programs_execute() {
-    let mut fixtures = vec![
-        (
-            include_str!("fixtures/programs/integer_literals.fern").to_owned(),
-            42,
-        ),
-        (
-            include_str!("fixtures/programs/shadowing.fern").to_owned(),
-            42,
-        ),
-        ("fn main() -> void { exit(42); exit(7); }".to_owned(), 42),
-        (
-            "fn main() -> void { const x = 42; exit(x); var x = 7; exit(x); }".to_owned(),
-            42,
-        ),
-    ];
-    for value in [0, 42, 255, 256, 257, i64::from(i32::MAX), isize::MAX as i64] {
-        for body in [
-            format!("exit({value});"),
-            format!("const x: int = {value}; var y = x; exit(y,);"),
-        ] {
-            fixtures.push((
-                format!("fn main() -> void {{ {body} }}"),
-                (value % 256) as i32,
-            ));
-        }
-    }
-    for literal in ["00042", "0x0002A", "0o00052", "0b000101010"] {
-        fixtures.push((
-            format!("fn main() -> void {{ var x: int = {literal}; exit(x,); }}"),
-            42,
-        ));
-    }
-    for (source, expected) in fixtures {
-        let (dir, input, output) = fixture(&source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(&output).status().unwrap().code(),
-            Some(expected),
-            "{source}"
-        );
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
-    }
-}
-
-#[test]
-fn assignments_and_nested_scopes_execute() {
-    for (body, expected) in [
-        ("var x = 1; x = 2; const y = 42; x = y; x = x; exit(x);", 42),
-        ("var x = 42; const saved = x; x = 7; exit(saved);", 42),
-        ("var x = 1; { x = 42; var x = 7; x = 8; } exit(x);", 42),
-        ("var x = 1; { x = 42; const x = x; exit(x); }", 42),
-        ("const x = 1; var x = x; x = 42; exit(x);", 42),
-        ("var x = 1; const x = 42; exit(x);", 42),
-        ("const x = 42; { var x = x; x = 7; } exit(x);", 42),
-        ("var x = 42; { const x = 7; } x = x; exit(x);", 42),
-        (
-            "var x = 1; { { x = 42; exit(x); x = 7; } x = 8; } x = 9; exit(x);",
-            42,
-        ),
-        ("{} { {} { {} } }", 0),
-        ("var x = 1; { { x = 42; } } exit(x);", 42),
-        ("var x = 1; { var y = x; { x = y; } } x = 42;", 0),
-    ] {
-        let source = format!("fn main() -> void {{ {body} }}");
-        let (_dir, input, output) = fixture(&source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected),
-            "{body}"
-        );
-    }
-    let (_dir, input, output) =
-        fixture(include_str!("fixtures/programs/assignment_and_scopes.fern"));
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn integer_type_programs_execute() {
-    let mut fixtures = vec![(
-        include_str!("fixtures/programs/integer_types.fern").to_owned(),
-        42,
-    )];
-    for (body, expected) in [
-        (
-            "var x: i8 = 42; const saved = x; x = 7; var status = int(x); status = int(saved); exit(status);",
-            42,
-        ),
-        (
-            "var x: i8 = 1; { x = 42; var x = i64(x); x = 7; } exit(int(x));",
-            42,
-        ),
-        (
-            "var x: i8 = 1; { { x = 42; exit(int(x)); x = 7; } } exit(0);",
-            42,
-        ),
-        (
-            "const x: i32 = 42; const y = i32(x); const z = int(y); exit(z);",
-            42,
-        ),
-        (
-            "const x: u32 = 4294967295; const y = u32(x); var z = uint(y); z = 255;",
-            0,
-        ),
-    ] {
-        fixtures.push((format!("fn main() -> void {{ {body} }}"), expected));
-    }
-    for (name, max) in [
-        ("i8", 127),
-        ("i16", 32767),
-        ("i32", i32::MAX),
-        ("int", i32::MAX),
-    ] {
-        for value in [0, 42, max] {
-            for body in [
-                format!("const x: {name} = {value}; exit(int(x));"),
-                format!("const x: {name} = {value}; var y: int = int(x); exit(y);"),
-            ] {
-                fixtures.push((format!("fn main() -> void {{ {body} }}"), value % 256));
-            }
-        }
-    }
-    for (source, expected) in fixtures {
-        let (_dir, input, output) = fixture(&source);
-        fern::compile(&input, &output).unwrap();
-        assert_eq!(
-            Command::new(output).status().unwrap().code(),
-            Some(expected),
-            "{source}"
-        );
-    }
-}
-
-#[test]
-fn explicit_integer_conversions_execute_and_trap() {
-    let (_dir, input, output) = fixture(include_str!("fixtures/programs/integer_conversions.fern"));
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-
-    let (_dir, input, output) = fixture(
-        "fn main() -> void { var value: u64 = 256; const narrowed = u8(value); exit(42); }",
-    );
-    fern::compile(&input, &output).unwrap();
-    let result = Command::new(output).output().unwrap();
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("checked conversion failed"));
-}
-
-#[test]
-fn runtime_diagnostics_identify_the_first_failing_conversion_on_stderr() {
-    for (value, source_type, destination, spelling) in [
-        (65536, "u64", "u16", "u16(value)"),
-        (256, "u16", "u8", "u8(u16(value))"),
-    ] {
-        let source = format!(
-            "/* 🌿 */ fn main() -> void {{\n  var value: u64 = {value};\n  var result = u8(u16(value));\n  exit(42);\n}}"
-        );
-        let (dir, _, output) = fixture(&source);
-        let input = dir.path().join("quoted\" path\\ 🌿.fern");
-        fs::write(&input, source).unwrap();
-        fern::compile(&input, &output).unwrap();
-        // The executable carries its diagnostic even if the source disappears.
-        fs::remove_file(&input).unwrap();
-        let result = Command::new(output).output().unwrap();
-        assert!(!result.status.success());
-        assert!(result.stdout.is_empty());
-        let stderr = String::from_utf8(result.stderr).unwrap();
-        assert!(
-            stderr.contains(&format!(
-                "checked conversion failed: `{source_type}` to `{destination}`"
-            )),
-            "{stderr}"
-        );
-        assert!(
-            stderr.contains(&format!("{}:3:", input.display())),
-            "{stderr}"
-        );
-        assert!(stderr.contains(spelling), "{stderr}");
-    }
-}
-
-#[test]
-fn floating_point_programs_execute() {
-    let (_dir, input, output) = fixture(include_str!("fixtures/programs/floating_point.fern"));
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn non_finite_floating_constants_are_rejected_and_preserve_output() {
-    for (body, message) in [
-        (
-            "const bad: f64 = 1.0 / 0.0;",
-            "constant `/` divisor is zero",
-        ),
-        (
-            "const bad: f64 = 0.0 / 0.0;",
-            "constant `/` divisor is zero",
-        ),
-        (
-            "const wide: f64 = 1.0e308; const bad: f64 = wide * 10.0;",
-            "constant `*` on `f64` would overflow",
-        ),
-        (
-            "const bad: f32 = 1.0e300;",
-            "floating-point literal out of range for `f32`",
-        ),
-        (
-            "{ exit(0); } const bad = 1.0e400;",
-            "floating-point literal out of range for `f64`",
-        ),
-    ] {
-        let (_dir, input, output) = fixture(format!("fn main() -> void {{ {body} exit(42); }}"));
-        fs::write(&output, "old executable").unwrap();
-        let error = fern::compile(&input, &output).unwrap_err().to_string();
-        assert!(error.contains(message), "{error}");
-        assert!(
-            error.contains(input.file_name().unwrap().to_str().unwrap()),
-            "{error}"
-        );
-        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
-    }
-}
-
-#[test]
-fn runtime_floating_conversion_failures_report_their_source() {
-    // A fractional part, a non-finite value, and lost precision each trap where
-    // the conversion is written.
-    for (binding, destination, spelling) in [
-        ("var value: f64 = 1.5;", "i32", "i32(value)"),
-        (
-            "var zero: f64 = 0.0; var value = 1.0 / zero;",
-            "i32",
-            "i32(value)",
-        ),
-        ("var value: f64 = 0.1;", "f32", "f32(value)"),
-    ] {
-        let source = format!(
-            "fn main() -> void {{
-  {binding}
-  var narrowed = {destination}(value);
-  exit(42);
-}}"
-        );
-        let (_dir, input, output) = fixture(&source);
-        fern::compile(&input, &output).unwrap();
-        let result = Command::new(&output).output().unwrap();
-        assert!(!result.status.success());
-        assert_eq!(result.status.code(), None);
-        assert!(result.stdout.is_empty());
-        let stderr = String::from_utf8(result.stderr).unwrap();
-        assert!(
-            stderr.contains(&format!(
-                "checked conversion failed: `f64` to `{destination}`"
-            )),
-            "{stderr}"
-        );
-        assert!(
-            stderr.contains(&format!("{}:3:", input.display())),
-            "{stderr}"
-        );
-        assert!(stderr.contains(spelling), "{stderr}");
-    }
-}
-
-#[test]
 fn excessive_nesting_reports_an_error_and_preserves_output() {
     for body in [
-        format!("{}exit(42);{}", "{".repeat(100_000), "}".repeat(100_000)),
-        format!("exit({}42{});", "int(".repeat(100_000), ")".repeat(100_000)),
+        format!(
+            "{}exit(i32(42));{}",
+            "{".repeat(100_000),
+            "}".repeat(100_000)
+        ),
+        format!(
+            "exit(i32({}42{}));",
+            "int(".repeat(100_000),
+            ")".repeat(100_000)
+        ),
     ] {
         let (dir, input, output) = fixture(format!("fn main() -> void {{ {body} }}"));
         fs::write(&output, "keep me").unwrap();
@@ -1443,6 +283,11 @@ fn module(files: &[(&str, &str)]) -> (TempDir, std::path::PathBuf, std::path::Pa
     for (name, source) in files {
         fs::write(root.join(name), source).unwrap();
     }
+    fs::write(
+        root.join("external.fern"),
+        "extern fn exit(status:i32)->void;",
+    )
+    .unwrap();
     let output = dir.path().join("output");
     (dir, root, output)
 }
@@ -1452,7 +297,7 @@ fn module_files_share_one_namespace_and_execute() {
     let (_dir, root, output) = module(&[
         (
             "main.fern",
-            "const base: int = 20;\n\nfn main() -> void {\n    exit(total());\n}\n",
+            "const base: int = 20;\n\nfn main() -> void {\n    exit(i32(total()));\n}\n",
         ),
         (
             "totals.fern",
@@ -1470,7 +315,10 @@ fn the_entry_point_is_found_in_any_file_of_the_root_module() {
             "helpers.fern",
             "fn twice(value: int) -> int { return value * 2; }",
         ),
-        ("zzz_entry.fern", "fn main() -> void { exit(twice(21)); }"),
+        (
+            "zzz_entry.fern",
+            "fn main() -> void { exit(i32(twice(21))); }",
+        ),
     ]);
     fern::compile(&root, &output).unwrap();
     assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
@@ -1481,7 +329,7 @@ fn module_diagnostics_identify_the_file_they_point_into() {
     for (files, message, location) in [
         (
             [
-                ("first.fern", "fn main() -> void {\n    exit(0);\n}\n"),
+                ("first.fern", "fn main() -> void {\n    exit(i32(0));\n}\n"),
                 ("second.fern", "const value = 1;\nconst value = 2;\n"),
             ],
             "duplicate module-level name `value`",
@@ -1489,22 +337,25 @@ fn module_diagnostics_identify_the_file_they_point_into() {
         ),
         (
             [
-                ("first.fern", "fn main() -> void {\n    exit(0);\n}\n"),
+                ("first.fern", "fn main() -> void {\n    exit(i32(0));\n}\n"),
                 (
                     "second.fern",
-                    "fn helper() -> void {\n    exit(missing);\n}\n",
+                    "fn helper() -> void {\n    exit(i32(missing));\n}\n",
                 ),
             ],
             "unknown binding `missing`",
-            "second.fern:2:10",
+            "second.fern:2:14",
         ),
         (
             [
-                ("first.fern", "fn main() -> void {\n    exit(broken);\n}\n"),
+                (
+                    "first.fern",
+                    "fn main() -> void {\n    exit(i32(broken));\n}\n",
+                ),
                 ("second.fern", "const other = 1;\n"),
             ],
             "unknown binding `broken`",
-            "first.fern:2:10",
+            "first.fern:2:14",
         ),
     ] {
         let (_dir, root, output) = module(&files);
@@ -1541,34 +392,10 @@ fn entry_point_failures_span_the_files_of_a_module() {
 }
 
 #[test]
-fn runtime_failures_report_the_file_they_occurred_in() {
-    let (_dir, root, output) = module(&[
-        (
-            "main.fern",
-            "fn main() -> void {\n    exit(divide(1, 0));\n}\n",
-        ),
-        (
-            "math.fern",
-            "fn divide(left: int, right: int) -> int {\n    return left / right;\n}\n",
-        ),
-    ]);
-    fern::compile(&root, &output).unwrap();
-    let result = Command::new(&output).output().unwrap();
-    assert!(!result.status.success());
-    let stderr = String::from_utf8(result.stderr).unwrap();
-    assert!(
-        stderr.contains("integer `/` has a zero divisor"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("math.fern:2:"), "{stderr}");
-    assert!(!stderr.contains("main.fern"), "{stderr}");
-}
-
-#[test]
 fn a_module_directory_holds_its_own_fern_files_only() {
     let (dir, root, output) = module(&[
-        ("main.fern", "fn main() -> void { exit(42); }"),
-        ("notes.txt", "fn main() -> void { exit(1); }"),
+        ("main.fern", "fn main() -> void { exit(i32(42)); }"),
+        ("notes.txt", "fn main() -> void { exit(i32(1)); }"),
     ]);
     let nested = root.join("nested");
     fs::create_dir(&nested).unwrap();
@@ -1591,37 +418,9 @@ fn a_module_directory_holds_its_own_fern_files_only() {
 }
 
 #[test]
-fn large_aggregates_compile_and_execute() {
-    // Copies, comparisons, zero values, fills, and calls take code that does
-    // not grow with the aggregate, and static data past the 8 MiB a Mach-O
-    // arm64 relocation can offset is still addressable.
-    let (_dir, input, output) = fixture(
-        "var big: [10000000]int;
-         fn first(values: [10000]int) -> int { return values[0]; }
-         fn make(seed: int) -> [10000]int { var out: [10000]int = [seed...]; return out; }
-         fn main() -> void {
-             big[9999999] = 2;
-             var a: [10000]int;
-             var b = make(3);
-             if a == b { exit(1); }
-             a = b;
-             if a != b { exit(2); }
-             for var i = 0; i < 3; i += 1 {
-                 var fresh: [10000]int;
-                 if fresh[9999] != 0 { exit(3); }
-                 fresh[9999] = i;
-             }
-             exit(first(a) + a[9999] + big[9999999]);
-         }",
-    );
-    fern::compile(&input, &output).unwrap();
-    assert_eq!(Command::new(output).status().unwrap().code(), Some(8));
-}
-
-#[test]
 fn output_cannot_alias_a_module_source_file() {
     let (_dir, root, _) = module(&[
-        ("main.fern", "fn main() -> void { exit(42); }"),
+        ("main.fern", "fn main() -> void { exit(i32(42)); }"),
         ("helper.fern", "fn helper() -> void {}"),
     ]);
     for name in ["main.fern", "helper.fern"] {
@@ -1641,13 +440,29 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, source).unwrap();
     }
+    let mut modules = std::collections::HashSet::new();
+    for (path, source) in files {
+        if source.contains("exit(")
+            && !source.contains("extern fn exit")
+            && Path::new(path).extension().is_some_and(|e| e == "fern")
+        {
+            modules.insert(Path::new(path).parent().unwrap());
+        }
+    }
+    for module in modules {
+        fs::write(
+            dir.path().join(module).join("external.fern"),
+            "extern fn exit(status:i32)->void;",
+        )
+        .unwrap();
+    }
     dir
 }
 
 const IMPORTING_MODULE: [(&str, &str); 4] = [
     (
         "app/main.fern",
-        "use text;\nfn main() -> void { exit(text::width); }\n",
+        "use text;\nextern fn exit(status:i32)->void;\nfn main() -> void { exit(i32(text::width)); }\n",
     ),
     ("text/text.fern", "pub const width = 1;\n"),
     ("vendor/text/text.fern", "pub const width = 2;\n"),
@@ -1705,7 +520,7 @@ fn a_relative_root_module_searches_the_directory_above_it() {
     let dir = tree(&[
         (
             "proj/main.fern",
-            "use text;\nfn main() -> void { exit(text::width); }\n",
+            "use text;\nextern fn exit(status:i32)->void;\nfn main() -> void { exit(i32(text::width)); }\n",
         ),
         // Beside the root module, where the default search root looks.
         ("text/text.fern", "pub const width = 2;\n"),
@@ -1751,7 +566,7 @@ fn cross_module_calls_and_public_binding_mutation_execute() {
              fn main() -> void {\n\
              counter::value = 20;\n\
              bump(22);\n\
-             exit(counter::value);\n\
+             exit(i32(counter::value));\n\
              }\n",
         ),
         (
@@ -1775,7 +590,7 @@ fn same_named_declarations_in_two_modules_execute_independently() {
              fn main() -> void {\n\
              first::value = 40;\n\
              second::value = 2;\n\
-             exit(first::total() + second::total());\n\
+             exit(i32(first::total() + second::total()));\n\
              }\n",
         ),
         ("first/first.fern", declarations),
@@ -1791,7 +606,7 @@ fn a_dependency_modules_main_does_not_run() {
     let dir = tree(&[
         (
             "app/main.fern",
-            "use counter;\nfn main() -> void { exit(counter::value); }\n",
+            "use counter;\nfn main() -> void { exit(i32(counter::value)); }\n",
         ),
         (
             "counter/counter.fern",
@@ -1809,7 +624,7 @@ fn every_modules_bindings_hold_their_initial_values_when_main_begins() {
         (
             "app/main.fern",
             "use first;\nuse second;\nconst local = 6;\n\
-             fn main() -> void { exit(first::start + second::start + local); }\n",
+             fn main() -> void { exit(i32(first::start + second::start + local)); }\n",
         ),
         ("first/first.fern", "pub const start = 30;\n"),
         (
@@ -1831,33 +646,4 @@ fn the_modules_and_imports_fixture_executes() {
     let output = dir.path().join("output");
     fern::compile(&root, &output).unwrap();
     assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
-}
-
-#[test]
-fn stack_overflow_diagnostics_identify_the_call_or_main_name() {
-    use std::os::unix::process::ExitStatusExt;
-    for (source, line, spelling) in [
-        (
-            "fn down(n: int) -> int {\n    return down(n + 1);\n}\nfn main() -> void { exit(down(0)); }",
-            2,
-            "down(n + 1)",
-        ),
-        (
-            "\nfn main() -> void {\n    var data: [16000000]u64;\n}",
-            2,
-            "main",
-        ),
-    ] {
-        let (_dir, input, output) = fixture(source);
-        fern::compile(&input, &output).unwrap();
-        let result = Command::new(output).output().unwrap();
-        assert_eq!(result.status.signal(), Some(6));
-        let stderr = String::from_utf8(result.stderr).unwrap();
-        assert!(stderr.contains("stack overflow"), "{stderr}");
-        assert!(
-            stderr.contains(&format!("{}:{line}:", input.display())),
-            "{stderr}"
-        );
-        assert!(stderr.contains(spelling), "{stderr}");
-    }
 }

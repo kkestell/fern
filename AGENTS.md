@@ -2,8 +2,8 @@
 
 THIS FILE MUST BE KEPT UP TO DATE AT ALL TIMES
 
-Fern is a low-level programming language in the spirit of C, without C's legacy
-baggage, undefined behavior, or unsafe default semantics.
+Fern is a small, low-level programming language with ordinary machine operations,
+raw pointers, and value semantics. Its native backend is QBE.
 
 ## Project Documents
 
@@ -47,8 +47,8 @@ owning skill when the fix changes what the project intends.
 - `src/module.rs` — module discovery, import resolution, and the dependency
   graph.
 - `src/ir/`, `src/backend/` — Fern IR and native compilation implementations.
-- `src/frontend/tests/snapshots/`, `src/ir/tests/snapshots/` — checked-in
-  frontend and IR snapshot fixtures.
+- `src/frontend/tests/snapshots/`, `src/backend/tests/snapshots/` — checked-in
+  syntax and QBE snapshot fixtures.
 - `src/lib.rs`, `src/main.rs` — compiler library and command-line driver.
 - `tests/` — compiler and CLI integration tests; reusable program fixtures live
   under `tests/fixtures/programs/`.

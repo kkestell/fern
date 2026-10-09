@@ -3,35 +3,20 @@
 Fern is a low-level programming language. The
 [language specification](docs/spec.md) defines its behavior.
 
-The examples form a tour of the currently supported language, grouped by topic:
+The [examples](examples/) form a topic-based tour:
 
-- [Literals](examples/literals.fern) covers the supported integer literal forms.
-- [Bindings and scopes](examples/bindings_and_scopes.fern) covers module and
-  local bindings, assignment, nested scopes, and shadowing.
+- [Literals](examples/literals.fern)
+- [Bindings and scopes](examples/bindings_and_scopes.fern)
 - [Integer types and conversions](examples/integer_types_and_conversions.fern)
-  covers fixed-width and native integer types, checked conversions, and
-  truncation.
-- [Integer operations](examples/integer_operations.fern) covers arithmetic,
-  wrapping arithmetic, bitwise operations, and shifts.
-- [Control flow](examples/control_flow.fern) covers booleans, conditionals, the
-  three `for` forms, and loop control.
-- [Functions](examples/functions.fern) covers parameters, nested and recursive
-  calls, and value and `void` returns.
-- [Arrays](examples/arrays.fern) covers array types, literals and fills,
-  indexing, `len`, array comparison, whole-array copies, and both `for … in`
-  forms.
-- [Structs](examples/structs.fern) covers declarations, literals and fill,
-  field selection and assignment, copying, and equality.
-- [Pointers](examples/pointers.fern) covers heap allocation with `new` and
-  `free`, addresses, access through pointers, nullable pointers and `*T(p)`,
-  and pointer comparison.
-- [Modules and imports](examples/modules_and_imports/) covers module
-  directories, `pub` declarations, whole-module, nested-path, and selective
-  imports, and qualified references. Its root module is
+- [Integer operations](examples/integer_operations.fern)
+- [Control flow](examples/control_flow.fern)
+- [Functions](examples/functions.fern)
+- [Arrays](examples/arrays.fern)
+- [Structs](examples/structs.fern)
+- [Pointers](examples/pointers.fern)
+- [Floating-point numbers](examples/floating_point.fern)
+- [Modules and imports](examples/modules_and_imports/), whose root module is
   `examples/modules_and_imports/app`.
-- [Floating-point numbers](examples/floating_point.fern) covers floating-point
-  literal forms, `f32` and `f64` bindings, arithmetic, comparison, and
-  conversions between floating-point and integer types.
 
 ## Build and run
 
@@ -73,25 +58,13 @@ temporary intermediates beside the requested output and publishes the executable
 only after QBE and the C toolchain succeed. A failed compilation preserves an
 existing output, and an output aliasing a source file is rejected.
 
-The compiler accepts recursive source nesting up to 128 levels, counting the
-function body, blocks, each `else if` in a chain, array type dimensions, calls,
-conversions, `len`, parenthesized groups, array and struct literals, unary
-operators, binary expression-tree depth, and each index or field selection in a
-chain. Deeper nesting produces a source diagnostic before recursive compiler
-phases can exhaust the stack. Inline struct containment uses the same 128-level
-limit. Untyped constant left-shift counts above 1,000,000 produce a compiler
-resource-limit diagnostic. Integer literals are limited to 4,096 digits. A
-floating-point literal's digits, read as one integer, may be scaled by a power
-of ten from −500,000 through 500,000, even when its value is zero. Untyped
-constant-folding results are limited to 2,000,000 significant bits. Diagnostics excerpt source lines longer than
-240 bytes. Aggregate layouts are limited to 1 PiB. One initializer's repeated
-array fills and struct-literal zero fills expand to at most 1,000,000 scalar
-values in total, and so does the zero value of a `const` declared without an
-initializer.
+The compiler uses QBE to emit host assembly, then links it with `cc` and the
+host's default C libraries. There is no language runtime or additional library
+selection interface.
 
-A compiled program runs on the main thread's stack. Calls check the available
-stack against their storage requirements with a 64 KiB reserve and trap with
-`stack overflow` when there is insufficient room.
+Compilation limits are 128 levels of recursive source nesting, 128 levels of
+inline struct containment, 4,096 digits in an integer literal, and 1 PiB per
+aggregate layout. Diagnostics excerpt source lines longer than 240 bytes.
 
 ## Development
 

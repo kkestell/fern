@@ -1,24 +1,20 @@
-fn add(left: int, right: int) -> int {
-    return left + right;
+extern fn exit(status: i32) -> void;
+
+fn factorial(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
 }
 
-fn sum_to(value: int) -> int {
-    if value == 0 {
-        return 0;
-    }
-    return value + sum_to(value - 1);
-}
-
-fn check_zero(value: int) -> void {
-    if value == 0 {
-        return;
-    }
-    exit(255);
+fn increment(value: int) -> int {
+    value += 1;
+    return value;
 }
 
 fn main() -> void {
-    const nested = add(add(5, 5), 11);
-    const recursive = sum_to(6);
-    check_zero(0);
-    exit(add(nested, recursive));
+    var value = 5;
+    if increment(value) != 6 || value != 5 || factorial(value) != 120 {
+        exit(1);
+    }
 }

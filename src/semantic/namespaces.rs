@@ -169,7 +169,6 @@ pub(crate) fn check<'a>(
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
         addresses: ArenaMap::default(),
-        iterations: ArenaMap::default(),
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
         structs: Vec::new(),
@@ -186,6 +185,30 @@ pub(crate) fn check<'a>(
     // built and its bindings are ordered before any module that imports it.
     for (index, module) in modules.iter().enumerate() {
         checked.check_module(ModuleId(index), module, files)?;
+    }
+    let mut externals = HashMap::new();
+    for (id, function) in syntax
+        .functions
+        .iter()
+        .filter(|(_, function)| function.external)
+    {
+        let signature = &checked.functions[id];
+        let types = (
+            signature
+                .parameters
+                .iter()
+                .map(|p| checked.bindings[*p].ty.clone())
+                .collect::<Vec<_>>(),
+            signature.result.clone(),
+        );
+        if let Some(previous) = externals.insert(function.name, types.clone())
+            && previous != types
+        {
+            return Err(Diagnostic::new(
+                function.name_span.clone(),
+                "inconsistent declarations of external symbol",
+            ));
+        }
     }
     Ok(checked)
 }
@@ -333,7 +356,6 @@ impl CheckedProgram<'_> {
                         fields: Vec::new(),
                         ordinals: HashMap::new(),
                         state: FieldState::Unresolved,
-                        has_zero_value: false,
                     });
                     self.struct_names.insert(declared.name, id);
                 }
@@ -342,8 +364,6 @@ impl CheckedProgram<'_> {
         Ok(bindings)
     }
 
-    /// Allocates a binding for each module-level binding. The type stands in
-    /// until the initializer is checked, which is what fills it in.
     fn declare_module_bindings(
         &mut self,
         items: &[(FileId, TopLevelItem)],
@@ -466,19 +486,41 @@ impl CheckedProgram<'_> {
             let function_syntax = &syntax.functions[function];
             let mut parameters = Vec::new();
             for parameter in &function_syntax.parameters {
-                let ty = self.resolve_annotation(parameter.annotation, &scopes, None)?;
+                let ty = self.resolve_annotation(parameter.annotation, &scopes)?;
                 parameters.push(self.bindings.alloc(Binding {
                     ty,
-                    mutable: false,
+                    mutable: true,
                     constant: None,
                 }));
             }
             let result = match syntax.functions[function].result {
                 FunctionResult::Void => None,
                 FunctionResult::Value(annotation) => {
-                    Some(self.resolve_annotation(annotation, &scopes, None)?)
+                    Some(self.resolve_annotation(annotation, &scopes)?)
                 }
             };
+            if function_syntax.external {
+                if syntax.names.resolve(&function_syntax.name) == "main" {
+                    return Err(Diagnostic::new(
+                        function_syntax.name_span.clone(),
+                        "external symbol main is reserved",
+                    ));
+                }
+                for ty in parameters
+                    .iter()
+                    .map(|p| &self.bindings[*p].ty)
+                    .chain(result.iter())
+                {
+                    if !matches!(ty, crate::types::Type::Pointer { .. })
+                        && !ty.scalar().is_some_and(Scalar::is_integer)
+                    {
+                        return Err(Diagnostic::new(
+                            function_syntax.name_span.clone(),
+                            "external functions accept only integers and pointers",
+                        ));
+                    }
+                }
+            }
             self.functions
                 .insert(function, FunctionSignature { parameters, result });
         }
@@ -552,8 +594,6 @@ impl CheckedProgram<'_> {
         Ok(())
     }
 
-    /// Checks module-level initializers in dependency order, so a binding's
-    /// value is known before the bindings that reference it are checked.
     fn check_module_initializers(
         &mut self,
         bindings: &ModuleBindings,
@@ -591,9 +631,7 @@ impl CheckedProgram<'_> {
             if let Some(annotation) = annotation {
                 self.collect_annotation_references(*annotation, &mut visited, &mut references);
             }
-            if let Some(initializer) = initializer {
-                self.collect_references(*initializer, &mut visited, &mut references);
-            }
+            self.collect_references(*initializer, &mut visited, &mut references);
             dependencies.insert(
                 statement,
                 references
@@ -634,22 +672,6 @@ impl CheckedProgram<'_> {
         let (mutable, annotation, initializer) = (*mutable, *annotation, *initializer);
         self.file = bindings.files[&statement];
         let scopes = ScopeStack::module(module_scope);
-        // A declaration without an initializer takes its type's zero value,
-        // which the parser guarantees an annotation names.
-        let Some(initializer) = initializer else {
-            let annotation = annotation.expect("a declaration without an initializer is annotated");
-            let ty = self.resolve_annotation(annotation, &scopes, None)?;
-            let binding = self.declarations[statement];
-            let span = syntax.statements[statement].span.clone();
-            self.require_zero_value(&ty, &span)?;
-            // Only a `const` folds its zero value into every use; a `var` is
-            // zeroed static data.
-            if !mutable {
-                self.bindings[binding].constant = Some(self.zero_value(&ty, &span)?);
-            }
-            self.bindings[binding].ty = ty;
-            return Ok(());
-        };
         // Signatures are resolved after this runs, so a call here has no
         // signature to check against. It is never constant, so report that.
         if let Some(call) = find_call(syntax, initializer) {
@@ -659,9 +681,7 @@ impl CheckedProgram<'_> {
             ));
         }
         let destination = match annotation {
-            Some(annotation) => {
-                Some(self.resolve_annotation(annotation, &scopes, Some(initializer))?)
-            }
+            Some(annotation) => Some(self.resolve_annotation(annotation, &scopes)?),
             None => None,
         };
         let expression = self.check_expression(initializer, &scopes, destination.clone())?;
@@ -702,6 +722,9 @@ impl CheckedProgram<'_> {
                 .collect();
             let mut scopes = ScopeStack::function(module_scope, parameter_scope);
             let result = self.functions[function].result.clone();
+            if syntax.functions[function].external {
+                continue;
+            }
             let body = &syntax.functions[function].body;
             self.check_body(body, result.as_ref(), &mut scopes, &mut Vec::new())?;
             if result.is_some() && !body_terminates(syntax, body) {
@@ -823,9 +846,7 @@ impl CheckedProgram<'_> {
             AnnotationKind::Named(name) => self.collect_type_references(name, visited, references),
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
-                if let Some(length) = length {
-                    self.collect_references(length, visited, references);
-                }
+                self.collect_references(length, visited, references);
                 self.collect_annotation_references(element, visited, references);
             }
             AnnotationKind::Pointer { target, .. } => {
@@ -876,7 +897,10 @@ impl CheckedProgram<'_> {
                     references.push((name.name, expression.span.clone()));
                 }
                 ExpressionKind::StructLiteral { name, .. } => literals.push(name),
-                ExpressionKind::PointerConversion { destination, .. } => {
+                ExpressionKind::PointerConversion { destination, .. }
+                | ExpressionKind::Sizeof {
+                    annotation: destination,
+                } => {
                     destinations.push(*destination);
                 }
                 _ => {}

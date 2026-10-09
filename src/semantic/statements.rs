@@ -3,8 +3,7 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{
-        Call, Expression, ForHeader, Function, Label, Statement, StatementKind, Syntax,
-        TypeAnnotation,
+        Call, Expression, ForHeader, Function, Statement, StatementKind, Syntax, TypeAnnotation,
     },
     types::{BinaryOperator, Scalar, Type},
 };
@@ -20,7 +19,7 @@ impl CheckedProgram<'_> {
         body: &[Idx<Statement>],
         result: Option<&Type>,
         scopes: &mut ScopeStack<'_>,
-        loops: &mut Vec<Option<Spur>>,
+        loops: &mut Vec<()>,
     ) -> Result<(), Diagnostic> {
         scopes.push(HashMap::new());
         for &statement in body {
@@ -35,7 +34,7 @@ impl CheckedProgram<'_> {
         statement: Idx<Statement>,
         result: Option<&Type>,
         scopes: &mut ScopeStack<'_>,
-        loops: &mut Vec<Option<Spur>>,
+        loops: &mut Vec<()>,
     ) -> Result<(), Diagnostic> {
         match &self.syntax.statements[statement].kind {
             StatementKind::Binding {
@@ -73,12 +72,6 @@ impl CheckedProgram<'_> {
                 scopes,
             ),
             StatementKind::Block { body } => self.check_body(body, result, scopes, loops),
-            StatementKind::Exit { argument } => {
-                let expression =
-                    self.check_expression(*argument, scopes, Some(Scalar::Int.into()))?;
-                self.expressions.insert(*argument, expression);
-                Ok(())
-            }
             StatementKind::If {
                 condition,
                 then_body,
@@ -92,29 +85,14 @@ impl CheckedProgram<'_> {
                 Ok(())
             }
             StatementKind::For { .. } => self.check_for(statement, result, scopes, loops),
-            StatementKind::Break { label } => {
-                self.check_loop_jump(statement, "break", label.as_ref(), loops)
-            }
-            StatementKind::Continue { label } => {
-                self.check_loop_jump(statement, "continue", label.as_ref(), loops)
-            }
+            StatementKind::Break { .. } => self.check_loop_jump(statement, "break", loops),
+            StatementKind::Continue { .. } => self.check_loop_jump(statement, "continue", loops),
             StatementKind::Call { call } => {
                 let (function, _) = self.check_call(call, scopes, false)?;
                 self.calls.insert(statement, function);
                 Ok(())
             }
             StatementKind::Return { value } => self.check_return(statement, result, *value, scopes),
-            StatementKind::Free { operand } => {
-                let checked = self.infer_expression(*operand, scopes)?;
-                if !matches!(checked.ty, Type::Pointer { .. }) {
-                    return Err(Diagnostic::new(
-                        self.syntax.expressions[*operand].span.clone(),
-                        format!("`free` requires a pointer operand, found `{}`", checked.ty),
-                    ));
-                }
-                self.expressions.insert(*operand, checked);
-                Ok(())
-            }
         }
     }
 
@@ -124,45 +102,26 @@ impl CheckedProgram<'_> {
         name: Spur,
         mutable: bool,
         annotation: Option<Idx<TypeAnnotation>>,
-        initializer: Option<Idx<Expression>>,
+        initializer: Idx<Expression>,
         scopes: &mut ScopeStack<'_>,
     ) -> Result<(), Diagnostic> {
-        let (ty, constant) = match initializer {
-            Some(initializer) => {
-                let destination = match annotation {
-                    Some(annotation) => {
-                        Some(self.resolve_annotation(annotation, scopes, Some(initializer))?)
-                    }
-                    None => None,
-                };
-                let expression = self.check_expression(initializer, scopes, destination.clone())?;
-                let ty = destination.unwrap_or_else(|| expression.ty.clone());
-                let constant = if mutable {
-                    None
-                } else {
-                    expression.constant.clone()
-                };
-                self.expressions.insert(initializer, expression);
-                (ty, constant)
-            }
-            // A declaration without an initializer takes its type's zero
-            // value, which the parser guarantees an annotation names.
-            None => {
-                let annotation =
-                    annotation.expect("a declaration without an initializer is annotated");
-                let ty = self.resolve_annotation(annotation, scopes, None)?;
-                let span = self.syntax.statements[statement].span.clone();
-                self.require_zero_value(&ty, &span)?;
-                // Only a `const` folds its zero value into every use; lowering
-                // zeroes a `var`'s storage without one.
-                let zero = if mutable {
-                    None
-                } else {
-                    Some(self.zero_value(&ty, &span)?)
-                };
-                (ty, zero)
-            }
+        let destination = annotation
+            .map(|annotation| self.resolve_annotation(annotation, scopes))
+            .transpose()?;
+        let expression = self.check_expression(initializer, scopes, destination)?;
+        if !mutable && expression.constant.is_none() {
+            return Err(Diagnostic::new(
+                self.syntax.statements[statement].span.clone(),
+                "const initializer must be a constant expression",
+            ));
+        }
+        let ty = expression.ty.clone();
+        let constant = if mutable {
+            None
+        } else {
+            expression.constant.clone()
         };
+        self.expressions.insert(initializer, expression);
         self.record_binding(statement, name, mutable, ty, constant, scopes);
         Ok(())
     }
@@ -205,7 +164,15 @@ impl CheckedProgram<'_> {
             value: ExpressionValue::CompoundAssignmentTarget,
             constant: None,
         };
-        let right = self.infer_expression(value, scopes)?;
+        let right = self.check_expression(
+            value,
+            scopes,
+            if operator.is_shift() {
+                None
+            } else {
+                Some(target.ty.clone())
+            },
+        )?;
         let (_, right, _, _, _) = self.check_numeric_binary(
             operator,
             operator_span,
@@ -229,145 +196,30 @@ impl CheckedProgram<'_> {
         statement: Idx<Statement>,
         result: Option<&Type>,
         scopes: &mut ScopeStack<'_>,
-        loops: &mut Vec<Option<Spur>>,
+        loops: &mut Vec<()>,
     ) -> Result<(), Diagnostic> {
-        let StatementKind::For {
-            label,
-            header,
-            body,
-        } = &self.syntax.statements[statement].kind
-        else {
-            unreachable!("a `for` statement is checked from its own syntax")
+        let StatementKind::For { header, body } = &self.syntax.statements[statement].kind else {
+            unreachable!()
         };
-        if let Some(label) = label
-            && loops.iter().flatten().any(|name| *name == label.name)
-        {
-            return Err(Diagnostic::new(
-                label.name_span.clone(),
-                format!(
-                    "duplicate enclosing loop label `{}`",
-                    self.syntax.names.resolve(&label.name)
-                ),
-            ));
+        if let ForHeader::Condition(condition) = header {
+            self.check_condition(*condition, scopes)?;
         }
-        let has_header_scope = self.check_for_header(statement, header, result, scopes, loops)?;
-        loops.push(label.as_ref().map(|label| label.name));
+        loops.push(());
         self.check_body(body, result, scopes, loops)?;
         loops.pop();
-        if has_header_scope {
-            scopes.pop();
-        }
         Ok(())
     }
-
-    /// Checks a `for` header, reporting whether it opened a scope for the
-    /// bindings its initializer declares.
-    fn check_for_header(
-        &mut self,
-        statement: Idx<Statement>,
-        header: &ForHeader,
-        result: Option<&Type>,
-        scopes: &mut ScopeStack<'_>,
-        loops: &mut Vec<Option<Spur>>,
-    ) -> Result<bool, Diagnostic> {
-        match header {
-            ForHeader::Infinite => Ok(false),
-            ForHeader::Condition(condition) => {
-                self.check_condition(*condition, scopes)?;
-                Ok(false)
-            }
-            ForHeader::ThreeClause {
-                initializer,
-                condition,
-                post,
-            } => {
-                scopes.push(HashMap::new());
-                self.check_statement(*initializer, result, scopes, loops)?;
-                self.check_condition(*condition, scopes)?;
-                self.check_statement(*post, result, scopes, loops)?;
-                Ok(true)
-            }
-            ForHeader::Iteration {
-                value,
-                index,
-                operand,
-                ..
-            } => {
-                self.check_iteration_header(statement, *value, index.as_ref(), *operand, scopes)?;
-                Ok(true)
-            }
-        }
-    }
-
-    /// Checks `for v in a` and `for v, i in a`, opening the scope that holds
-    /// the loop's bindings. They are immutable and live only inside the loop.
-    fn check_iteration_header(
-        &mut self,
-        statement: Idx<Statement>,
-        value: Spur,
-        index: Option<&(Spur, std::ops::Range<usize>)>,
-        operand: Idx<Expression>,
-        scopes: &mut ScopeStack<'_>,
-    ) -> Result<(), Diagnostic> {
-        let checked = self.infer_expression(operand, scopes)?;
-        let Type::Array { element, .. } = &checked.ty else {
-            return Err(Diagnostic::new(
-                self.syntax.expressions[operand].span.clone(),
-                format!("`for … in` requires an array, found `{}`", checked.ty),
-            ));
-        };
-        let element = (**element).clone();
-        if let Some((name, span)) = index
-            && *name == value
-        {
-            return Err(Diagnostic::new(
-                span.clone(),
-                "a `for` loop's value and index bindings must have different names",
-            ));
-        }
-        self.expressions.insert(operand, checked);
-        let mut loop_scope = HashMap::new();
-        let mut bind = |program: &mut Self, name: Spur, ty: Type| {
-            let binding = program.bindings.alloc(Binding {
-                ty,
-                mutable: false,
-                constant: None,
-            });
-            loop_scope.insert(name, binding);
-            binding
-        };
-        let value = bind(self, value, element);
-        let index = index.map(|(name, _)| bind(self, *name, Scalar::Int.into()));
-        self.iterations
-            .insert(statement, IterationBindings { value, index });
-        scopes.push(loop_scope);
-        Ok(())
-    }
-
-    /// Checks that a `break` or `continue` names a loop it is inside.
     fn check_loop_jump(
         &self,
         statement: Idx<Statement>,
         keyword: &str,
-        label: Option<&Label>,
-        loops: &[Option<Spur>],
+        loops: &[()],
     ) -> Result<(), Diagnostic> {
         if loops.is_empty() {
             let start = self.syntax.statements[statement].span.start;
             return Err(Diagnostic::new(
                 start..start + keyword.len(),
                 format!("`{keyword}` is not inside a loop"),
-            ));
-        }
-        if let Some(label) = label
-            && !loops.iter().flatten().any(|name| *name == label.name)
-        {
-            return Err(Diagnostic::new(
-                label.name_span.clone(),
-                format!(
-                    "unknown enclosing loop label `{}`",
-                    self.syntax.names.resolve(&label.name)
-                ),
             ));
         }
         Ok(())
@@ -540,7 +392,7 @@ pub(super) fn body_terminates(syntax: &Syntax, body: &[Idx<Statement>]) -> bool 
 
 fn statement_terminates(syntax: &Syntax, statement: Idx<Statement>) -> bool {
     match &syntax.statements[statement].kind {
-        StatementKind::Return { .. } | StatementKind::Exit { .. } => true,
+        StatementKind::Return { .. } => true,
         StatementKind::Block { body } => body_terminates(syntax, body),
         StatementKind::If {
             then_body,
@@ -550,60 +402,53 @@ fn statement_terminates(syntax: &Syntax, statement: Idx<Statement>) -> bool {
             else_branch.is_some_and(|else_branch| statement_terminates(syntax, else_branch))
                 && body_terminates(syntax, then_body)
         }
-        StatementKind::For {
-            label,
-            header,
-            body,
-        } => {
-            matches!(header, ForHeader::Infinite)
-                && !body_breaks(syntax, body, label.as_ref().map(|label| label.name), false)
+        StatementKind::For { header, body } => {
+            matches!(header, ForHeader::Infinite) && !body_breaks(syntax, body)
         }
         _ => false,
     }
 }
 
-/// Reports whether a reachable `break` in `body` targets the loop identified by
-/// `label`. `nested` marks a body that lies inside a loop enclosed by that one,
-/// where an unlabeled `break` targets the inner loop instead.
-fn body_breaks(
-    syntax: &Syntax,
-    body: &[Idx<Statement>],
-    label: Option<Spur>,
-    nested: bool,
-) -> bool {
+/// Whether the body can break out of its immediately enclosing loop.
+fn body_breaks(syntax: &Syntax, body: &[Idx<Statement>]) -> bool {
     for &statement in body {
-        if statement_breaks(syntax, statement, label, nested) {
+        if statement_breaks(syntax, statement) {
             return true;
         }
-        if statement_terminates(syntax, statement) {
+        if statement_stops(syntax, statement) {
             return false;
         }
     }
     false
 }
-
-fn statement_breaks(
-    syntax: &Syntax,
-    statement: Idx<Statement>,
-    label: Option<Spur>,
-    nested: bool,
-) -> bool {
+fn statement_breaks(syntax: &Syntax, statement: Idx<Statement>) -> bool {
     match &syntax.statements[statement].kind {
-        StatementKind::Break { label: target } => match target {
-            Some(target) => label == Some(target.name),
-            None => !nested,
-        },
-        StatementKind::Block { body } => body_breaks(syntax, body, label, nested),
+        StatementKind::Break { .. } => true,
+        StatementKind::Block { body } => body_breaks(syntax, body),
         StatementKind::If {
             then_body,
             else_branch,
             ..
         } => {
-            body_breaks(syntax, then_body, label, nested)
-                || else_branch
-                    .is_some_and(|else_branch| statement_breaks(syntax, else_branch, label, nested))
+            body_breaks(syntax, then_body)
+                || else_branch.is_some_and(|branch| statement_breaks(syntax, branch))
         }
-        StatementKind::For { body, .. } => body_breaks(syntax, body, label, true),
         _ => false,
+    }
+}
+
+fn statement_stops(syntax: &Syntax, statement: Idx<Statement>) -> bool {
+    match &syntax.statements[statement].kind {
+        StatementKind::Break { .. } | StatementKind::Continue { .. } => true,
+        StatementKind::Block { body } => body.iter().any(|&s| statement_stops(syntax, s)),
+        StatementKind::If {
+            then_body,
+            else_branch,
+            ..
+        } => {
+            then_body.iter().any(|&s| statement_stops(syntax, s))
+                && else_branch.is_some_and(|s| statement_stops(syntax, s))
+        }
+        _ => statement_terminates(syntax, statement),
     }
 }

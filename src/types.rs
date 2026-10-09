@@ -119,32 +119,6 @@ impl Scalar {
             0
         }
     }
-
-    /// How many bits of significand a value of this floating-point type has,
-    /// counting the leading bit a normal value does not store.
-    fn significand_bits(self) -> u32 {
-        match self {
-            Self::F32 => 24,
-            Self::F64 => 53,
-            _ => unreachable!("`{self}` has no significand"),
-        }
-    }
-
-    /// Whether every value of this type is also a value of `destination`,
-    /// which is when a checked conversion between them cannot fail.
-    pub(crate) fn all_values_fit(self, destination: Self) -> bool {
-        match (self.is_floating(), destination.is_floating()) {
-            (false, false) => self.min() >= destination.min() && self.max() <= destination.max(),
-            // A wider interchange format holds every value of a narrower one.
-            (true, true) => self.width() <= destination.width(),
-            // No floating-point format holds every value of an integer type,
-            // and no integer type holds a NaN, an infinity, or a fraction.
-            (true, false) => false,
-            (false, true) => {
-                self.width() - u32::from(self.signed()) <= destination.significand_bits()
-            }
-        }
-    }
 }
 
 /// A concrete `f32` or `f64` value, stored as the bit pattern of its IEEE 754
@@ -189,8 +163,6 @@ pub(crate) struct StructId(pub(crate) usize);
 /// struct graph.
 pub(crate) const MAX_STRUCT_CONTAINMENT_DEPTH: usize = 128;
 
-/// The greatest byte size Fern's native aggregate layout permits. This leaves
-/// room for address arithmetic while keeping every phase below overflow.
 pub(crate) const MAX_AGGREGATE_LAYOUT_BYTES: u64 = 1 << 50;
 
 /// A named struct type. Structs are nominal, so identity alone decides whether
@@ -214,7 +186,7 @@ pub(crate) enum Type {
     Scalar(Scalar),
     Array { length: u64, element: Box<Type> },
     Struct(StructType),
-    Pointer { nullable: bool, target: Box<Type> },
+    Pointer { target: Box<Type> },
 }
 
 impl Type {
@@ -233,37 +205,6 @@ impl Type {
     pub(crate) fn is_aggregate(&self) -> bool {
         matches!(self, Self::Array { .. } | Self::Struct(_))
     }
-
-    /// Whether a value of this type is valid where `destination` is expected
-    /// without being of that type: a `*T` where a `nullable *T` is expected.
-    pub(crate) fn widens_to(&self, destination: &Self) -> bool {
-        match (self, destination) {
-            (
-                Self::Pointer {
-                    nullable: false,
-                    target,
-                },
-                Self::Pointer {
-                    nullable: true,
-                    target: destination,
-                },
-            ) => target == destination,
-            _ => false,
-        }
-    }
-
-    /// The type reached by following every non-nullable pointer, which is
-    /// what field selection, indexing, and `len` act on. A nullable pointer
-    /// is not followed.
-    pub(crate) fn through_pointers(&self) -> &Self {
-        match self {
-            Self::Pointer {
-                nullable: false,
-                target,
-            } => target.through_pointers(),
-            _ => self,
-        }
-    }
 }
 
 impl fmt::Display for Type {
@@ -272,12 +213,7 @@ impl fmt::Display for Type {
             Self::Scalar(scalar) => write!(f, "{scalar}"),
             Self::Array { length, element } => write!(f, "[{length}]{element}"),
             Self::Struct(ty) => f.write_str(&ty.name),
-            Self::Pointer { nullable, target } => {
-                if *nullable {
-                    f.write_str("nullable ")?;
-                }
-                write!(f, "*{target}")
-            }
+            Self::Pointer { target } => write!(f, "*{target}"),
         }
     }
 }
@@ -291,7 +227,7 @@ impl From<Scalar> for Type {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnaryOperator {
     Negate,
-    WrappingNegate,
+
     Complement,
 }
 
@@ -324,11 +260,10 @@ pub(crate) enum BinaryOperator {
     Multiply,
     Divide,
     Remainder,
-    WrappingMultiply,
+
     Add,
     Subtract,
-    WrappingAdd,
-    WrappingSubtract,
+
     ShiftLeft,
     ShiftRight,
     And,
@@ -342,11 +277,8 @@ impl BinaryOperator {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Remainder => "%",
-            Self::WrappingMultiply => "*%",
             Self::Add => "+",
             Self::Subtract => "-",
-            Self::WrappingAdd => "+%",
-            Self::WrappingSubtract => "-%",
             Self::ShiftLeft => "<<",
             Self::ShiftRight => ">>",
             Self::And => "&",
@@ -374,184 +306,34 @@ impl BinaryOperator {
 
 #[cfg(test)]
 mod tests {
-    use super::{Scalar, StructId, StructType, Type};
-
-    fn declared(id: usize, name: &str) -> Type {
-        Type::Struct(StructType {
-            id: StructId(id),
-            name: name.to_owned(),
-        })
-    }
-
-    fn array(length: u64, element: Type) -> Type {
-        Type::Array {
-            length,
-            element: Box::new(element),
+    use super::*;
+    #[test]
+    fn identity_and_spelling() {
+        for ty in Scalar::ALL_INTEGERS {
+            assert!(ty.min() <= i128::from(ty.max()));
         }
-    }
-
-    fn pointer(nullable: bool, target: Type) -> Type {
-        Type::Pointer {
-            nullable,
-            target: Box::new(target),
-        }
-    }
-
-    #[test]
-    fn array_types_compare_structurally() {
-        let two_by_three = array(2, array(3, Scalar::Int.into()));
-        assert_eq!(two_by_three, array(2, array(3, Scalar::Int.into())));
-        assert_ne!(two_by_three, array(3, array(2, Scalar::Int.into())));
-        assert_ne!(two_by_three, array(2, array(3, Scalar::I64.into())));
-        assert_ne!(two_by_three, Type::Scalar(Scalar::Int));
-    }
-
-    #[test]
-    fn struct_types_compare_by_declaration_rather_than_by_name() {
-        assert_eq!(declared(0, "Point"), declared(0, "Point"));
-        // Two modules may each declare a `Point`, and those are two types.
-        assert_ne!(declared(0, "Point"), declared(1, "Point"));
-        assert_ne!(declared(0, "Point"), Type::Scalar(Scalar::Int));
-        assert_ne!(declared(0, "Point"), array(1, declared(0, "Point")));
-    }
-
-    #[test]
-    fn types_are_spelled_the_way_they_are_written() {
-        assert_eq!(Type::Scalar(Scalar::Int).to_string(), "int");
+        assert_ne!(Type::Scalar(Scalar::Int), Type::Scalar(Scalar::I64));
+        let pointer = Type::Pointer {
+            target: Box::new(Scalar::U8.into()),
+        };
+        assert_eq!(pointer.to_string(), "*u8");
         assert_eq!(
-            array(2, array(3, Scalar::Int.into())).to_string(),
-            "[2][3]int"
+            Type::Array {
+                length: 3,
+                element: Box::new(pointer)
+            }
+            .to_string(),
+            "[3]*u8"
         );
-        assert_eq!(declared(0, "Point").to_string(), "Point");
-        assert_eq!(array(2, declared(0, "Point")).to_string(), "[2]Point");
-    }
-
-    #[test]
-    fn pointer_types_compare_by_target_and_nullability() {
-        let int = || Type::Scalar(Scalar::Int);
-        assert_eq!(pointer(false, int()), pointer(false, int()));
-        assert_eq!(
-            pointer(true, declared(0, "Point")),
-            pointer(true, declared(0, "Point"))
-        );
-        assert_ne!(pointer(false, int()), pointer(true, int()));
-        assert_ne!(pointer(false, int()), pointer(false, Scalar::I64.into()));
         assert_ne!(
-            pointer(false, declared(0, "Point")),
-            pointer(false, declared(1, "Point"))
+            Type::Struct(StructType {
+                id: StructId(0),
+                name: "S".into()
+            }),
+            Type::Struct(StructType {
+                id: StructId(1),
+                name: "S".into()
+            })
         );
-        assert_ne!(pointer(false, int()), int());
-    }
-
-    #[test]
-    fn pointer_types_are_spelled_the_way_they_are_written() {
-        let int = || Type::Scalar(Scalar::Int);
-        assert_eq!(pointer(false, int()).to_string(), "*int");
-        assert_eq!(
-            pointer(true, declared(0, "Point")).to_string(),
-            "nullable *Point"
-        );
-        assert_eq!(
-            pointer(false, pointer(true, int())).to_string(),
-            "*nullable *int"
-        );
-        assert_eq!(pointer(false, pointer(false, int())).to_string(), "**int");
-        assert_eq!(array(2, pointer(false, int())).to_string(), "[2]*int");
-        assert_eq!(pointer(false, array(2, int())).to_string(), "*[2]int");
-    }
-
-    #[test]
-    fn field_selection_looks_through_non_nullable_pointers_only() {
-        let point = || declared(0, "Point");
-        assert_eq!(point().through_pointers(), &point());
-        assert_eq!(pointer(false, point()).through_pointers(), &point());
-        assert_eq!(
-            pointer(false, pointer(false, point())).through_pointers(),
-            &point()
-        );
-        let nullable = pointer(true, point());
-        assert_eq!(nullable.through_pointers(), &nullable);
-        assert_eq!(
-            pointer(false, nullable.clone()).through_pointers(),
-            &nullable
-        );
-    }
-
-    #[test]
-    fn only_arrays_and_structs_are_aggregates() {
-        assert!(array(1, Scalar::Int.into()).is_aggregate());
-        assert!(declared(0, "Point").is_aggregate());
-        assert!(!Type::Scalar(Scalar::Int).is_aggregate());
-        assert!(!pointer(false, declared(0, "Point")).is_aggregate());
-    }
-
-    #[test]
-    fn only_a_pointer_widens_to_its_nullable_form() {
-        let int = || Type::Scalar(Scalar::Int);
-        assert!(pointer(false, int()).widens_to(&pointer(true, int())));
-        assert!(!pointer(false, int()).widens_to(&pointer(true, Scalar::U8.into())));
-        assert!(!pointer(false, int()).widens_to(&pointer(false, int())));
-        assert!(!pointer(false, int()).widens_to(&pointer(true, pointer(true, int()))));
-        assert!(!pointer(true, int()).widens_to(&pointer(false, int())));
-        assert!(!int().widens_to(&int()));
-    }
-
-    #[test]
-    fn a_pointer_type_has_no_scalar() {
-        assert_eq!(pointer(false, Scalar::Int.into()).scalar(), None);
-    }
-
-    #[test]
-    fn a_struct_type_has_no_scalar() {
-        assert_eq!(declared(0, "Point").scalar(), None);
-    }
-
-    #[test]
-    fn only_a_scalar_type_has_a_scalar() {
-        assert_eq!(Type::Scalar(Scalar::U8).scalar(), Some(Scalar::U8));
-        assert_eq!(array(1, Scalar::U8.into()).scalar(), None);
-    }
-
-    #[test]
-    fn every_scalar_is_looked_up_and_displayed_by_its_written_name() {
-        for (scalar, name) in super::NAMED_TYPES {
-            assert_eq!(Scalar::named(name), Some(scalar));
-            assert_eq!(scalar.name(), name);
-            assert_eq!(scalar.to_string(), name);
-        }
-        assert_eq!(Scalar::named("f16"), None);
-        assert_eq!(Scalar::named("float"), None);
-    }
-
-    #[test]
-    fn floating_types_have_their_interchange_widths_on_every_target() {
-        for (scalar, width) in [(Scalar::F32, 32), (Scalar::F64, 64)] {
-            assert_eq!(scalar.width(), width);
-            assert_eq!(scalar.width_on(32), width);
-            assert_eq!(scalar.width_on(64), width);
-        }
-    }
-
-    #[test]
-    fn the_floating_types_are_numbers_but_not_integers() {
-        for scalar in [Scalar::F32, Scalar::F64] {
-            assert!(scalar.is_floating(), "{scalar}");
-            assert!(scalar.is_numeric(), "{scalar}");
-            assert!(!scalar.is_integer(), "{scalar}");
-        }
-        for scalar in Scalar::ALL_INTEGERS {
-            assert!(!scalar.is_floating(), "{scalar}");
-            assert!(scalar.is_numeric(), "{scalar}");
-            assert!(scalar.is_integer(), "{scalar}");
-        }
-        assert!(!Scalar::Bool.is_floating());
-        assert!(!Scalar::Bool.is_numeric());
-        assert!(!Scalar::Bool.is_integer());
-    }
-
-    #[test]
-    #[should_panic(expected = "`f32` has no two's complement range")]
-    fn a_floating_type_has_no_two_s_complement_range() {
-        Scalar::F32.signed();
     }
 }

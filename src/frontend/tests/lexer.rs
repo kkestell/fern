@@ -4,7 +4,7 @@ use crate::types::BinaryOperator;
 
 #[test]
 fn comments_may_touch_integer_operators() {
-    let source = "fn main() -> void { const x = ^/*a*/1/*b*/+%/*c*/2<<// d\n3; }";
+    let source = "fn main() -> void { const x = ^/*a*/1/*b*/+/*c*/2<<// d\n3; }";
     let syntax = parse(source).unwrap();
     assert_eq!(syntax.expressions.len(), 6);
 }
@@ -117,33 +117,6 @@ fn malformed_floating_literals_cover_the_whole_candidate() {
 }
 
 #[test]
-fn a_fill_marker_keeps_its_element_an_integer() {
-    // `0.` is a floating-point literal, so the fill marker's first `.` must
-    // not join the element before it.
-    // A `.` before another `.` is never a decimal point, so a trailing-dot
-    // element needs a space before the marker.
-    for (element, expected) in [("0", "0"), ("0.0", "0.0"), ("2. ", "2.")] {
-        let source = format!("fn main() -> void {{ var a: [3]int = [{element}...]; }}");
-        let syntax = parse(&source).unwrap();
-        let (elements, fill) = syntax
-            .expressions
-            .iter()
-            .find_map(|(_, expression)| match &expression.kind {
-                ExpressionKind::ArrayLiteral { elements, fill } => Some((elements, fill)),
-                _ => None,
-            })
-            .expect("the initializer is an array literal");
-        assert!(fill.is_some(), "{element}");
-        let spelling = match &syntax.expressions[elements[0]].kind {
-            ExpressionKind::Integer(spelling) | ExpressionKind::Floating(spelling) => spelling,
-            other => panic!("expected a numeric literal for {element}, got {other:?}"),
-        };
-        assert_eq!(spelling, expected, "{element}");
-    }
-    parse("fn main() -> void { var a: [3][2]int = [[0...]...]; }").unwrap();
-}
-
-#[test]
 fn integer_literal_digit_limit_is_checked_before_semantic_parsing() {
     let accepted = "9".repeat(MAX_INTEGER_LITERAL_DIGITS);
     parse(&format!(
@@ -216,10 +189,9 @@ fn malformed_integers_cover_the_whole_candidate() {
 #[test]
 fn reserved_names_agree_in_all_name_positions() {
     for name in [
-        "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
-        "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break",
-        "continue", "return", "in", "len", "pub", "use", "type", "struct", "null", "new", "free",
-        "nullable",
+        "const", "var", "true", "false", "fn", "void", "extern", "sizeof", "i8", "i16", "i32",
+        "i64", "u8", "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for",
+        "break", "continue", "return", "len", "pub", "use", "type", "struct", "null",
     ] {
         for (prefix, suffix) in [
             ("fn ", "() -> void {}"),
@@ -233,9 +205,9 @@ fn reserved_names_agree_in_all_name_positions() {
     }
 
     for name in [
-        "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-        "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break", "continue", "return",
-        "in", "len", "pub", "use", "type", "struct", "new", "free", "nullable",
+        "const", "var", "fn", "void", "extern", "i8", "i16", "i32", "i64", "u8", "u16", "u32",
+        "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break", "continue",
+        "return", "len", "pub", "use", "type", "struct",
     ] {
         for (prefix, suffix) in [
             ("fn main() -> void { const x = ", "; }"),

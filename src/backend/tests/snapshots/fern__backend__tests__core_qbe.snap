@@ -1,0 +1,24 @@
+---
+source: src/backend/tests/mod.rs
+expression: "emitted(\"extern fn putchar(c:i32)->i32;fn main()->void {var x:u8=255;x+=1;putchar(i32(x));}\")"
+---
+export function w $main() {
+@start
+    call $.fern.fn1()
+    ret 0
+}
+function $.fern.fn1() {
+@start
+    %local0 =l alloc4 1
+    jmp @block0
+@block0
+    storeb 255, %local0
+    %v0 =w loadub %local0
+    %operation1_raw =w add %v0, 1
+    %v1 =w extub %operation1_raw
+    storeb %v1, %local0
+    %v2 =w loadub %local0
+    %v3 =w copy %v2
+    %v4 =w call $putchar(w %v3)
+    ret
+}

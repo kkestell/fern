@@ -1,231 +1,60 @@
 use crate::{
     frontend::parser,
-    ir::{lower::lower, model::*, verify::VerifiedProgram},
+    ir::{lower::lower, model::*},
     semantic::namespaces,
-    types::{BinaryOperator, ComparisonOperator, Float, Scalar, StructId, StructType, Type},
+    source::SourceMap,
+    types::Scalar,
 };
-
-pub(super) fn integer(value: i128, ty: Scalar) -> Operand {
-    Operand::Literal(Literal::Integer { value, ty })
-}
-
-pub(super) fn floating(value: Float) -> Operand {
-    Operand::Literal(Literal::Floating(value))
-}
-
-/// The integer literals a global of leaf type `ty` holds, in memory order.
-pub(super) fn integers(values: impl IntoIterator<Item = i128>, ty: Scalar) -> Vec<Literal> {
-    values
-        .into_iter()
-        .map(|value| Literal::Integer { value, ty })
-        .collect()
-}
-
-/// The floating-point literals a global of leaf type `f64` holds.
-pub(super) fn doubles(values: impl IntoIterator<Item = f64>) -> Vec<Literal> {
-    values
-        .into_iter()
-        .map(|value| Literal::Floating(Float::Binary64(value.to_bits())))
-        .collect()
-}
-
-pub(super) fn convert(operand: Operand, ty: Scalar) -> Value {
-    Value {
-        span: None,
-        ty: ty.into(),
-        kind: ValueKind::Convert {
-            operand,
-            truncating: false,
-        },
-    }
-}
-
-/// A whole-program wrapper around a single `main` whose block runs `values`
-/// in order and then exits.
-pub(super) fn program(values: Vec<Value>, exit: Operand) -> Program {
-    let blocks = vec![Block {
-        instructions: (0..values.len())
-            .map(|id| Instruction::Value(ValueId(id)))
-            .collect(),
-        terminator: Terminator::Exit { status: exit },
-    }];
-    one_function(main_function(values, vec![], blocks))
-}
-
-pub(super) fn main_function(values: Vec<Value>, locals: Vec<Type>, blocks: Vec<Block>) -> Function {
-    Function {
-        parameters: 0,
-        result: None,
-        values,
-        constants: vec![],
-        flow: ControlFlow {
-            entry: BlockId(0),
-            locals,
-            blocks,
-        },
-    }
-}
-
-pub(super) fn one_function(main: Function) -> Program {
-    with_structs(vec![], main)
-}
-
-/// A whole program of one `main` over a struct table.
-pub(super) fn with_structs(structs: Vec<Struct>, main: Function) -> Program {
-    Program {
-        structs,
-        globals: vec![],
-        functions: vec![main],
-        main: FunctionId(0),
-        main_span: 0..0,
-    }
-}
-
-pub(super) fn lowered(source: &str) -> VerifiedProgram {
-    let syntax = parser::parse(&crate::source::SourceMap::from_text(source)).unwrap();
+fn program(source: &str) -> Program {
+    let syntax = parser::parse(&SourceMap::from_text(source)).unwrap();
     lower(namespaces::check_root(&syntax).unwrap())
-        .verify()
-        .unwrap()
 }
-
-/// Loads, checks, lowers, and verifies a tree of `(relative path, source)`
-/// files whose root module is `app`, so multi-module lowering runs through
-/// real import resolution.
-pub(super) fn lowered_tree<'a>(
-    files: impl IntoIterator<Item = (&'a str, &'a str)>,
-) -> VerifiedProgram {
-    let dir = crate::module::tree(files);
-    let program = crate::module::load(&dir.path().join("app"), &[dir.path().to_owned()])
-        .unwrap_or_else(|error| panic!("{}", error.into_compile_error()));
-    lower(
-        namespaces::check(&program.syntax, &program.modules, &program.files)
-            .unwrap_or_else(|error| panic!("{}", error.render(&program.sources))),
-    )
-    .verify()
-    .unwrap()
+#[test]
+fn raw_pointers_and_external_calls_verify() {
+    let p = program(
+        "extern fn putchar(c:i32)->i32;fn main()->void {var a=[1,2];var p=&a[0];p[1]=3;var n=(p+2)-p;putchar(i32(n));}",
+    );
+    assert!(
+        p.functions
+            .iter()
+            .flat_map(|f| &f.values)
+            .any(|v| matches!(v.kind, ValueKind::PointerDifference { .. }))
+    );
+    p.verify().unwrap();
 }
-
-pub(super) fn main_of(program: &VerifiedProgram) -> &Function {
-    main_of_program(program.program())
+#[test]
+fn rejects_invalid_control_flow_and_types() {
+    let mut p = program("fn main()->void {var x=1;}");
+    p.functions[0].flow.blocks[0].terminator = Terminator::Jump {
+        target: BlockId(999),
+    };
+    assert!(p.verify().is_err());
+    let mut p = program("fn main()->void {var x=1;}");
+    p.functions[0].flow.blocks[0]
+        .instructions
+        .push(Instruction::Store {
+            place: Place::Local(LocalId(0)),
+            operand: Operand::Literal(Literal::Integer {
+                value: 1,
+                ty: Scalar::U8,
+            }),
+        });
+    assert!(p.verify().is_err());
+    let mut p = program("extern fn f()->i32;fn main()->void {f();}");
+    p.functions[0].result = Some(Scalar::F64.into());
+    assert!(p.verify().is_err());
 }
-
-pub(super) fn main_of_program(program: &Program) -> &Function {
-    &program.functions[program.main.0]
+#[test]
+fn rejects_values_used_before_definition() {
+    let mut p = program("fn main()->void {var x=1;var y=x+2;}");
+    let f = &mut p.functions[0];
+    let id = ValueId(f.values.len() - 1);
+    f.flow.blocks[0].instructions.insert(
+        0,
+        Instruction::Store {
+            place: Place::Local(LocalId(0)),
+            operand: Operand::Value(id),
+        },
+    );
+    assert!(p.verify().is_err());
 }
-
-pub(super) fn instructions(function: &Function) -> impl Iterator<Item = &Instruction> {
-    function
-        .flow
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-}
-
-/// Every function `function` calls, in instruction order.
-pub(super) fn call_targets(function: &Function) -> Vec<FunctionId> {
-    instructions(function)
-        .filter_map(|instruction| match instruction {
-            Instruction::Call { function, .. } => Some(*function),
-            _ => None,
-        })
-        .collect()
-}
-
-pub(super) fn array(length: u64, element: Type) -> Type {
-    Type::Array {
-        length,
-        element: Box::new(element),
-    }
-}
-
-/// The type of struct `id`, spelled `name` the way diagnostics show it.
-pub(super) fn declared(id: usize, name: &str) -> Type {
-    Type::Struct(StructType {
-        id: StructId(id),
-        name: name.to_owned(),
-    })
-}
-
-pub(super) fn element(base: Place, index: Operand) -> Place {
-    Place::Element {
-        base: Box::new(base),
-        index,
-        span: 0..1,
-    }
-}
-
-pub(super) fn field(base: Place, ordinal: usize) -> Place {
-    Place::Field {
-        base: Box::new(base),
-        ordinal,
-    }
-}
-
-/// Spells an integer, `null`, or value operand the way a test reads it:
-/// `3`, `null`, `v2`.
-pub(super) fn describe_operand(operand: &Operand) -> String {
-    match operand {
-        Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
-        Operand::Literal(Literal::Null(_)) => "null".to_owned(),
-        Operand::Literal(Literal::Floating(_)) => {
-            unreachable!("tests describe integer, null, and value operands")
-        }
-        Operand::Value(ValueId(id)) => format!("v{id}"),
-    }
-}
-
-/// Spells a place the way a test reads it: `local0[1].2`, `global2`, and
-/// `*(v3).1` for a field of the target of value 3.
-pub(super) fn describe(place: &Place) -> String {
-    match place {
-        Place::Local(LocalId(id)) => format!("local{id}"),
-        Place::Global(GlobalId(id)) => format!("global{id}"),
-        Place::Constant(ConstantId(id)) => format!("constant{id}"),
-        Place::Element { base, index, .. } => {
-            format!("{}[{}]", describe(base), describe_operand(index))
-        }
-        Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
-        Place::Indirect { pointer } => format!("*({})", describe_operand(pointer)),
-        Place::Result => "result".to_owned(),
-    }
-}
-
-/// Spells every place an instruction writes, in order: a store names its
-/// place, a zero reads `zero local0`, a fill from index 2 reads
-/// `local0[2..]`, and a free of value 3 reads `free v3`.
-pub(super) fn stored_places(function: &Function) -> Vec<String> {
-    instructions(function)
-        .filter_map(|instruction| match instruction {
-            Instruction::Store { place, .. } => Some(describe(place)),
-            Instruction::Zero { place } => Some(format!("zero {}", describe(place))),
-            Instruction::Fill { place, start, .. } => {
-                Some(format!("{}[{start}..]", describe(place)))
-            }
-            Instruction::Free { operand } => Some(format!("free {}", describe_operand(operand))),
-            _ => None,
-        })
-        .collect()
-}
-
-pub(super) fn stores(function: &Function) -> Vec<(Place, Operand)> {
-    instructions(function)
-        .filter_map(|instruction| match instruction {
-            Instruction::Store { place, operand } => Some((place.clone(), operand.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
-pub(super) fn loads(function: &Function) -> Vec<Place> {
-    function
-        .values
-        .iter()
-        .filter_map(|value| match &value.kind {
-            ValueKind::Load(place) => Some(place.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-mod lower;
-mod verify;

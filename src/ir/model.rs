@@ -28,21 +28,15 @@ pub(crate) enum Place {
     Local(LocalId),
     Global(GlobalId),
     Constant(ConstantId),
-    /// `base[index]`. The span is the one the bounds-check trap reports, so
-    /// every access through this place checks its index.
     Element {
         base: Box<Place>,
         index: Operand,
-        span: std::ops::Range<usize>,
     },
     /// `base.field`, naming the field by its position in its declaration.
-    /// Checking already resolved the field and selecting one cannot fail, so
-    /// this carries no span.
     Field {
         base: Box<Place>,
         ordinal: usize,
     },
-    /// The target of a non-nullable pointer value.
     Indirect {
         pointer: Operand,
     },
@@ -79,7 +73,6 @@ pub(crate) enum Literal {
     /// A floating-point value, which keeps the bits of its interchange format
     /// rather than the integer they spell.
     Floating(Float),
-    /// `null` of a nullable pointer type.
     Null(Type),
 }
 
@@ -101,6 +94,15 @@ pub(crate) enum Operand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueKind {
+    PointerOffset {
+        pointer: Operand,
+        offset: Operand,
+        subtract: bool,
+    },
+    PointerDifference {
+        left: Operand,
+        right: Operand,
+    },
     Load(Place),
     /// An aggregate read from its place's storage rather than from a copy of
     /// it. Lowering defines one only as a call argument whose place is rooted
@@ -111,20 +113,14 @@ pub(crate) enum ValueKind {
     Borrow(Place),
     /// The address of a place, a `*T` for the place's type `T`.
     Address(Place),
-    /// A pointer to new heap storage for the target of the value's type. The
-    /// span is the one the `out of memory` trap reports.
-    Allocate,
-    /// The `*T` a `nullable *T` operand holds. The span is the one the
-    /// `null pointer` trap reports.
-    CheckNull {
+    PointerCast {
         operand: Operand,
     },
     /// The result of the `Instruction::Call` that defines it. The call carries
-    /// the arguments and the source span.
+    /// the arguments.
     CallResult,
     Convert {
         operand: Operand,
-        truncating: bool,
     },
     Unary {
         operator: UnaryOperator,
@@ -132,7 +128,6 @@ pub(crate) enum ValueKind {
     },
     Binary {
         operator: BinaryOperator,
-        form: BinaryForm,
         left: Operand,
         right: Operand,
     },
@@ -146,15 +141,8 @@ pub(crate) enum ValueKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BinaryForm {
-    Infix,
-    CompoundAssignment,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Value {
-    pub span: Option<std::ops::Range<usize>>,
     pub ty: Type,
     pub kind: ValueKind,
 }
@@ -166,23 +154,6 @@ pub(crate) enum Instruction {
         place: Place,
         operand: Operand,
     },
-    /// Sets every byte of an aggregate place to zero, which is the zero value
-    /// of every Fern type.
-    Zero {
-        place: Place,
-    },
-    /// Stores `operand` into each element of an array place from index
-    /// `start` through its last element.
-    Fill {
-        place: Place,
-        start: u64,
-        operand: Operand,
-    },
-    /// Ends the life of the heap target a pointer of either nullability
-    /// refers to. Freeing `null` does nothing.
-    Free {
-        operand: Operand,
-    },
     /// Calls `function` with `arguments` in source order. `result` names the
     /// defined value when the callee returns one, unless `destination` names
     /// the place the callee writes its aggregate result into, in which case
@@ -192,7 +163,6 @@ pub(crate) enum Instruction {
         destination: Option<Place>,
         function: FunctionId,
         arguments: Vec<Operand>,
-        span: std::ops::Range<usize>,
     },
 }
 
@@ -206,9 +176,7 @@ pub(crate) enum Terminator {
         then_target: BlockId,
         else_target: BlockId,
     },
-    Exit {
-        status: Operand,
-    },
+
     Return {
         value: Option<Operand>,
     },
@@ -224,7 +192,7 @@ impl Terminator {
                 else_target,
                 ..
             } => vec![*then_target, *else_target],
-            Self::Exit { .. } | Self::Return { .. } | Self::Unreachable => Vec::new(),
+            Self::Return { .. } | Self::Unreachable => Vec::new(),
         }
     }
 }
@@ -255,6 +223,8 @@ pub(crate) struct Global {
 
 #[derive(Debug)]
 pub(crate) struct Function {
+    /// A C ABI symbol with no Fern body.
+    pub external: Option<String>,
     /// The first `parameters` entries of `flow.locals` are the parameters, in
     /// source order, and hold their arguments on entry.
     pub parameters: usize,
@@ -282,6 +252,4 @@ pub(crate) struct Program {
     // Each position defines the corresponding function ID.
     pub functions: Vec<Function>,
     pub main: FunctionId,
-    /// The source span of the entry function's name.
-    pub main_span: std::ops::Range<usize>,
 }

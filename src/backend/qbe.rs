@@ -1,9 +1,8 @@
 //! The shared QBE output state, the spellings of operands and types, aggregate
-//! equality, and trap emission.
+//! equality, and scalar memory operations.
 
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticRenderer},
-    ir::model::{Function, FunctionId, Global, Literal, Operand, Value, ValueId},
+    ir::model::{Function, FunctionId, Global, Literal, Operand, ValueId},
     types::{ComparisonOperator, Scalar, Type},
 };
 
@@ -29,7 +28,7 @@ pub(super) fn operand(operand: Operand) -> String {
 /// change them.
 pub(super) fn data_item(literal: Literal) -> String {
     match literal {
-        Literal::Integer { value, ty } => format!("{} {value}", qbe_type(ty)),
+        Literal::Integer { value, ty } => format!("{} {value}", memory_class(&ty.into())),
         Literal::Floating(value) => format!(
             "{} {}",
             if value.ty() == Scalar::F32 { 'w' } else { 'l' },
@@ -46,9 +45,6 @@ pub(super) fn scalar(ty: &Type) -> Scalar {
         .expect("arithmetic and conversion emission runs on scalars")
 }
 
-/// The QBE class of a value carried by value: a scalar's own class, or the
-/// word a pointer occupies. A pointer has the width of `uint`, which is the
-/// platform's pointer width.
 pub(super) fn value_class(ty: &Type) -> char {
     match ty {
         Type::Scalar(scalar) => qbe_type(*scalar),
@@ -91,10 +87,6 @@ pub(super) fn emit_aggregate_comparison(
     .unwrap();
 }
 
-/// Emits an equality test without flattening an aggregate into one instruction
-/// sequence per leaf. Arrays are walked at run time, while structs visit
-/// their fields in declaration order. Scalar leaves retain QBE's IEEE 754
-/// comparison instructions for floating-point fields.
 fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: &Type) -> String {
     let comparison = emitter.comparisons;
     emitter.comparisons += 1;
@@ -103,12 +95,14 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             let class = value_class(ty);
             writeln!(
                 emitter.text,
-                "    %aggregate{comparison}_leftvalue ={class} load{class} {left}"
+                "    %aggregate{comparison}_leftvalue ={class} {} {left}",
+                load_operation(ty)
             )
             .unwrap();
             writeln!(
                 emitter.text,
-                "    %aggregate{comparison}_rightvalue ={class} load{class} {right}"
+                "    %aggregate{comparison}_rightvalue ={class} {} {right}",
+                load_operation(ty)
             )
             .unwrap();
             writeln!(
@@ -245,86 +239,6 @@ pub(super) fn operand_scalar(function: &Function, operand: Operand) -> Scalar {
     scalar(&operand_type(function, operand))
 }
 
-pub(super) fn operation_message(
-    span: Option<&std::ops::Range<usize>>,
-    diagnostic_renderer: Option<&DiagnosticRenderer<'_>>,
-    message: &str,
-) -> String {
-    match (span, diagnostic_renderer) {
-        (Some(span), Some(renderer)) => renderer.render(&Diagnostic::new(span.clone(), message)),
-        _ => format!("{message}\n"),
-    }
-}
-
-/// The message every failing checked conversion reports, whichever numeric
-/// types it crosses between.
-pub(super) fn conversion_message(
-    emitter: &Emitter<'_>,
-    value: &Value,
-    source: Scalar,
-    destination: Scalar,
-) -> String {
-    operation_message(
-        value.span.as_ref(),
-        emitter.diagnostics.as_ref(),
-        &format!("checked conversion failed: `{source}` to `{destination}`"),
-    )
-}
-
-pub(super) fn emit_conditional_trap(
-    text: &mut String,
-    data: &mut String,
-    function: usize,
-    id: usize,
-    cause: &str,
-    condition: &str,
-    message: String,
-) {
-    let failed = format!("operation{id}_{cause}_failed");
-    let ready = format!("operation{id}_{cause}_ready");
-    // Value IDs are function-local, so the module-global message symbol needs
-    // the function to stay unique.
-    let symbol = format!("fern_function{function}_operation{id}_{cause}_message");
-    writeln!(text, "    jnz {condition}, @{failed}, @{ready}").unwrap();
-    writeln!(text, "@{failed}").unwrap();
-    emit_message_data(data, &symbol, &message);
-    writeln!(
-        text,
-        "    call $write(w 2, l ${symbol}, l {})",
-        message.len(),
-    )
-    .unwrap();
-    text.push_str("    call $abort()\n    hlt\n");
-    writeln!(text, "@{ready}").unwrap();
-}
-
-pub(super) fn emit_message_data(data: &mut String, symbol: &str, message: &str) {
-    write!(data, "data ${symbol} = {{ ").unwrap();
-    let bytes = message.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b' '..=b'~') && !matches!(bytes[index], b'"' | b'\\') {
-            let start = index;
-            while index < bytes.len()
-                && matches!(bytes[index], b' '..=b'~')
-                && !matches!(bytes[index], b'"' | b'\\')
-            {
-                index += 1;
-            }
-            write!(
-                data,
-                "b \"{}\", ",
-                std::str::from_utf8(&bytes[start..index]).expect("printable ASCII is UTF-8")
-            )
-            .unwrap();
-        } else {
-            write!(data, "b {}, ", bytes[index]).unwrap();
-            index += 1;
-        }
-    }
-    data.push_str("b 0 }\n");
-}
-
 pub(super) struct Emitter<'a> {
     pub(super) text: String,
     pub(super) data: String,
@@ -334,12 +248,6 @@ pub(super) struct Emitter<'a> {
     pub(super) globals: &'a [Global],
     pub(super) functions: &'a [Function],
     pub(super) main: FunctionId,
-    /// Allocation bytes for each function, rounded to QBE stack slots.
-    pub(super) storage_bytes: Vec<u64>,
-    /// Unique IDs for stack checks and their trap messages.
-    pub(super) stack_checks: usize,
-    /// The index of the function being emitted, which distinguishes its
-    /// module-global trap message symbols from every other function's.
     pub(super) function: usize,
     /// The return type of the signature being emitted, absent for a function
     /// that returns nothing.
@@ -347,13 +255,35 @@ pub(super) struct Emitter<'a> {
     /// The aggregate values a `return` of the function being emitted returns
     /// that already sit in `%result`.
     pub(super) returned_in_place: Vec<ValueId>,
-    /// How many element and field places the program has materialized, which
-    /// names their address temporaries and their bounds-check symbols.
     pub(super) accesses: usize,
     /// How many aggregate comparisons have been emitted in this function.
     pub(super) comparisons: usize,
-    /// How many array fills have been emitted, which names their loop
-    /// temporaries and blocks.
-    pub(super) fills: usize,
-    pub(super) diagnostics: Option<DiagnosticRenderer<'a>>,
+}
+
+/// QBE's C ABI types preserve the extension requirements of sub-word integers.
+pub(super) fn abi_class(ty: &Type) -> String {
+    match ty.scalar() {
+        Some(Scalar::I8) => "sb".into(),
+        Some(Scalar::U8) => "ub".into(),
+        Some(Scalar::I16) => "sh".into(),
+        Some(Scalar::U16) => "uh".into(),
+        _ => value_class(ty).to_string(),
+    }
+}
+
+pub(super) fn memory_class(ty: &Type) -> char {
+    match ty.scalar() {
+        Some(Scalar::Bool | Scalar::I8 | Scalar::U8) => 'b',
+        Some(Scalar::I16 | Scalar::U16) => 'h',
+        _ => value_class(ty),
+    }
+}
+pub(super) fn load_operation(ty: &Type) -> String {
+    match ty.scalar() {
+        Some(Scalar::Bool | Scalar::U8) => "loadub".into(),
+        Some(Scalar::I8) => "loadsb".into(),
+        Some(Scalar::U16) => "loaduh".into(),
+        Some(Scalar::I16) => "loadsh".into(),
+        _ => format!("load{}", value_class(ty)),
+    }
 }

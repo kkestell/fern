@@ -26,7 +26,8 @@ fn reserved(name: &str) -> bool {
             | "false"
             | "fn"
             | "void"
-            | "exit"
+            | "extern"
+            | "sizeof"
             | "bool"
             | "if"
             | "else"
@@ -34,16 +35,12 @@ fn reserved(name: &str) -> bool {
             | "break"
             | "continue"
             | "return"
-            | "in"
             | "len"
             | "pub"
             | "use"
             | "type"
             | "struct"
             | "null"
-            | "new"
-            | "free"
-            | "nullable"
     ) || Scalar::named(name).is_some()
 }
 
@@ -121,10 +118,6 @@ pub(crate) fn parse(sources: &SourceMap) -> Result<Syntax, Diagnostic> {
     Ok(syntax)
 }
 
-/// Whether a named struct literal may be recognized where an expression
-/// starts. An `if` condition, a `for` condition, a `for` iteration operand, and
-/// a `for` post assignment are each followed by the body's `{`, so a literal
-/// brace there is ambiguous and the literal must be parenthesized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StructLiterals {
     Permitted,
@@ -161,7 +154,7 @@ impl Parser<'_> {
             }
             let public = public_span.is_some();
             items.push(match self.current {
-                Some(Token::Fn) => TopLevelItem::Function {
+                Some(Token::Fn | Token::Extern) => TopLevelItem::Function {
                     function: self.function()?,
                     public,
                 },
@@ -333,6 +326,10 @@ impl Parser<'_> {
     }
 
     fn function(&mut self) -> Result<Idx<Function>, Diagnostic> {
+        let external = self.current == Some(Token::Extern);
+        if external {
+            self.advance()?;
+        }
         let start = self.expect(Token::Fn, "expected `fn`")?.start;
         let (name, name_span) = self.name("expected a function name")?;
         let parameters = self.parameters()?;
@@ -343,12 +340,21 @@ impl Parser<'_> {
         } else {
             FunctionResult::Value(self.type_annotation()?)
         };
-        let (body, end) = self.body()?;
+        let (body, end) = if external {
+            (
+                Vec::new(),
+                self.expect(Token::Semicolon, "expected `;` after external declaration")?
+                    .end,
+            )
+        } else {
+            self.body()?
+        };
         Ok(self.syntax.functions.alloc(Function {
             name,
             name_span,
             parameters,
             result,
+            external,
             span: start..end,
             body,
         }))
@@ -465,27 +471,13 @@ impl Parser<'_> {
             Some(Token::Name | Token::Star | Token::LeftParen) => {
                 self.assignment(StructLiterals::Permitted)?
             }
-            Some(Token::Exit) => {
-                self.advance()?;
-                let (argument, _) = self.single_argument("exit")?;
-                StatementKind::Exit { argument }
-            }
-            Some(Token::Free) => {
-                self.advance()?;
-                let (operand, _) = self.single_argument("free")?;
-                StatementKind::Free { operand }
-            }
             Some(Token::Break) => {
                 self.advance()?;
-                StatementKind::Break {
-                    label: self.optional_label("expected a label after `:`")?,
-                }
+                StatementKind::Break {}
             }
             Some(Token::Continue) => {
                 self.advance()?;
-                StatementKind::Continue {
-                    label: self.optional_label("expected a label after `:`")?,
-                }
+                StatementKind::Continue {}
             }
             Some(Token::Return) => {
                 self.advance()?;
@@ -566,23 +558,11 @@ impl Parser<'_> {
             Some(Token::CaretEquals) => Some(BinaryOperator::Xor),
             Some(Token::ShiftLeftEquals) => Some(BinaryOperator::ShiftLeft),
             Some(Token::ShiftRightEquals) => Some(BinaryOperator::ShiftRight),
-            Some(Token::WrappingPlusEquals) => Some(BinaryOperator::WrappingAdd),
-            Some(Token::WrappingMinusEquals) => Some(BinaryOperator::WrappingSubtract),
-            Some(Token::WrappingStarEquals) => Some(BinaryOperator::WrappingMultiply),
             _ => return Err(self.error("expected `=`")),
         };
         let span = self.span.clone();
         self.advance()?;
         Ok((operator, span))
-    }
-
-    fn optional_label(&mut self, expected: &str) -> Result<Option<Label>, Diagnostic> {
-        if self.current != Some(Token::Colon) {
-            return Ok(None);
-        }
-        self.advance()?;
-        let (name, name_span) = self.name(expected)?;
-        Ok(Some(Label { name, name_span }))
     }
 
     fn if_statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
@@ -621,15 +601,10 @@ impl Parser<'_> {
 
     fn for_statement(&mut self) -> Result<Idx<Statement>, Diagnostic> {
         let start = self.expect(Token::For, "expected `for`")?.start;
-        let label = self.optional_label("expected a loop label after `:`")?;
         let header = self.for_header()?;
         let (body, end) = self.body()?;
         Ok(self.syntax.statements.alloc(Statement {
-            kind: StatementKind::For {
-                label,
-                header,
-                body,
-            },
+            kind: StatementKind::For { header, body },
             span: start..end,
         }))
     }
@@ -638,85 +613,7 @@ impl Parser<'_> {
         if self.current == Some(Token::LeftBrace) {
             return Ok(ForHeader::Infinite);
         }
-        if self.starts_iteration() {
-            return self.iteration_header();
-        }
-        if matches!(self.current, Some(Token::Const | Token::Var)) || self.starts_assignment() {
-            return self.three_clause_header();
-        }
         Ok(ForHeader::Condition(self.header_expression()?))
-    }
-
-    fn three_clause_header(&mut self) -> Result<ForHeader, Diagnostic> {
-        let initializer_start = self.span.start;
-        let initializer_kind = if matches!(self.current, Some(Token::Const | Token::Var)) {
-            self.binding()?
-        } else {
-            self.assignment(StructLiterals::Permitted)?
-        };
-        if let StatementKind::CompoundAssignment { operator_span, .. } = &initializer_kind {
-            return Err(Diagnostic::new(
-                operator_span.clone(),
-                "for initializer does not permit compound assignment",
-            ));
-        }
-        let initializer_end = self
-            .expect(Token::Semicolon, "expected `;` after for initializer")?
-            .end;
-        let initializer = self.syntax.statements.alloc(Statement {
-            kind: initializer_kind,
-            span: initializer_start..initializer_end,
-        });
-        let condition = self.expression()?;
-        self.expect(Token::Semicolon, "expected `;` after for condition")?;
-        if !self.starts_assignment() {
-            return Err(self.error("expected an assignment after second `;`"));
-        }
-        let post_start = self.span.start;
-        let post_kind = self.assignment(StructLiterals::Restricted)?;
-        let post_end = match &post_kind {
-            StatementKind::Assignment { value, .. }
-            | StatementKind::CompoundAssignment { value, .. } => {
-                self.syntax.expressions[*value].span.end
-            }
-            _ => unreachable!(),
-        };
-        let post = self.syntax.statements.alloc(Statement {
-            kind: post_kind,
-            span: post_start..post_end,
-        });
-        Ok(ForHeader::ThreeClause {
-            initializer,
-            condition,
-            post,
-        })
-    }
-
-    fn iteration_header(&mut self) -> Result<ForHeader, Diagnostic> {
-        let (value, _) = self.name("expected a loop variable")?;
-        let index = (self.current == Some(Token::Comma))
-            .then(|| {
-                self.advance()?;
-                self.name("expected an index variable after `,`")
-            })
-            .transpose()?;
-        self.expect(Token::In, "expected `in`")?;
-        let operand = self.header_expression()?;
-        Ok(ForHeader::Iteration {
-            value,
-            index,
-            operand,
-        })
-    }
-
-    /// Reports whether a `for` header starts the `v in a` or `v, i in a` form.
-    /// No condition can hold `in` or `,` at that position.
-    fn starts_iteration(&self) -> bool {
-        if self.current != Some(Token::Name) || reserved(self.lexer.slice()) {
-            return false;
-        }
-        let mut lexer = self.lexer.clone();
-        matches!(lexer.next(), Some(Ok(Token::In | Token::Comma)))
     }
 
     /// Returns the token that follows an assignment target starting at the
@@ -736,11 +633,6 @@ impl Parser<'_> {
         let mut following = if matches!(current, Token::LeftParen | Token::LeftBracket) {
             stepped = true;
             token_after_group(&mut lexer, current)?
-        } else if current == Token::New && stepped {
-            if lookahead(&mut lexer)? != Token::LeftParen {
-                return None;
-            }
-            token_after_group(&mut lexer, Token::LeftParen)?
         } else {
             if current != Token::Name || reserved(slice) {
                 return None;
@@ -789,10 +681,7 @@ impl Parser<'_> {
                     | Token::PipeEquals
                     | Token::CaretEquals
                     | Token::ShiftLeftEquals
-                    | Token::ShiftRightEquals
-                    | Token::WrappingPlusEquals
-                    | Token::WrappingMinusEquals
-                    | Token::WrappingStarEquals,
+                    | Token::ShiftRightEquals,
                 _
             ))
         )
@@ -861,18 +750,11 @@ impl Parser<'_> {
         } else {
             None
         };
-        let initializer = if self.current == Some(Token::Equals) {
-            self.advance()?;
-            Some(self.expression()?)
-        } else {
-            if annotation.is_none() {
-                return Err(Diagnostic::new(
-                    name_span,
-                    "a declaration without an initializer requires a type annotation",
-                ));
-            }
-            None
-        };
+        if self.current != Some(Token::Equals) {
+            return Err(self.error("every binding requires an initializer"));
+        }
+        self.expect(Token::Equals, "expected `=` and an initializer")?;
+        let initializer = self.expression()?;
         Ok(StatementKind::Binding {
             mutable,
             name,
@@ -894,27 +776,18 @@ impl Parser<'_> {
         Ok((ty, span))
     }
 
-    /// Parses a type annotation, which is a built-in scalar name, a declared
-    /// type name, one or more `[ … ]` lengths in front of an element
-    /// annotation, or `*` or `nullable *` in front of a target annotation.
     fn type_annotation(&mut self) -> Result<Idx<TypeAnnotation>, Diagnostic> {
         let start = self.span.start;
-        if matches!(self.current, Some(Token::Star | Token::Nullable)) {
-            self.enter_nesting()?;
-            let nullable = self.current == Some(Token::Nullable);
-            if nullable {
-                self.advance()?;
-                if self.current != Some(Token::Star) {
-                    return Err(self.error("expected `*` after `nullable`"));
-                }
-            }
+        if self.current == Some(Token::Star) {
+            let start = self.span.start;
             self.advance()?;
+            self.enter_nesting()?;
             let target = self.type_annotation()?;
             self.nesting -= 1;
-            let span = start..self.syntax.annotations[target].span.end;
+            let end = self.syntax.annotations[target].span.end;
             return Ok(self.syntax.annotations.alloc(TypeAnnotation {
-                kind: AnnotationKind::Pointer { nullable, target },
-                span,
+                kind: AnnotationKind::Pointer { target },
+                span: start..end,
             }));
         }
         if self.current != Some(Token::LeftBracket) {
@@ -933,12 +806,7 @@ impl Parser<'_> {
         }
         self.enter_nesting()?;
         self.advance()?;
-        let length = if self.current == Some(Token::Name) && self.lexer.slice() == "_" {
-            self.advance()?;
-            None
-        } else {
-            Some(self.expression()?)
-        };
+        let length = self.expression()?;
         self.expect(Token::RightBracket, "expected `]` after array length")?;
         let element = self.type_annotation()?;
         self.nesting -= 1;
@@ -1019,14 +887,11 @@ impl Parser<'_> {
             Token::Star => (InfixOperator::Integer(BinaryOperator::Multiply), 5),
             Token::Slash => (InfixOperator::Integer(BinaryOperator::Divide), 5),
             Token::Percent => (InfixOperator::Integer(BinaryOperator::Remainder), 5),
-            Token::WrappingStar => (InfixOperator::Integer(BinaryOperator::WrappingMultiply), 5),
             Token::ShiftLeft => (InfixOperator::Integer(BinaryOperator::ShiftLeft), 5),
             Token::ShiftRight => (InfixOperator::Integer(BinaryOperator::ShiftRight), 5),
             Token::Ampersand => (InfixOperator::Integer(BinaryOperator::And), 5),
             Token::Plus => (InfixOperator::Integer(BinaryOperator::Add), 4),
             Token::Minus => (InfixOperator::Integer(BinaryOperator::Subtract), 4),
-            Token::WrappingPlus => (InfixOperator::Integer(BinaryOperator::WrappingAdd), 4),
-            Token::WrappingMinus => (InfixOperator::Integer(BinaryOperator::WrappingSubtract), 4),
             Token::Caret => (InfixOperator::Integer(BinaryOperator::Xor), 4),
             Token::Pipe => (InfixOperator::Integer(BinaryOperator::Or), 4),
             Token::EqualsEquals => (InfixOperator::Comparison(ComparisonOperator::Equal), 3),
@@ -1056,7 +921,6 @@ impl Parser<'_> {
             Some(Token::Ampersand) => PrefixOperator::AddressOf,
             Some(Token::Star) => PrefixOperator::Dereference,
             Some(Token::Minus) => PrefixOperator::Value(UnaryOperator::Negate),
-            Some(Token::WrappingMinus) => PrefixOperator::Value(UnaryOperator::WrappingNegate),
             Some(Token::Caret) => PrefixOperator::Value(UnaryOperator::Complement),
             _ => return self.postfix_expression(literals),
         };
@@ -1177,8 +1041,20 @@ impl Parser<'_> {
             return self.array_literal(span);
         } else if self.current == Some(Token::Len) {
             return self.length_expression(span);
-        } else if self.current == Some(Token::New) {
-            return self.new_expression(span);
+        } else if self.current == Some(Token::Sizeof) {
+            self.enter_nesting()?;
+            self.advance()?;
+            self.expect(Token::LeftParen, "expected `(` after sizeof")?;
+            let annotation = self.type_annotation()?;
+            let end = self
+                .expect(Token::RightParen, "expected `)` after sizeof type")?
+                .end;
+            self.nesting -= 1;
+            return Ok(self.syntax.expressions.alloc(Expression {
+                kind: ExpressionKind::Sizeof { annotation },
+                span: span.start..end,
+                depth: 1,
+            }));
         } else {
             return self.name_expression(span, literals);
         };
@@ -1189,8 +1065,7 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parses `[e1, e2]`, with an optional trailing comma, or `[e1, last...]`,
-    /// whose `...` repeats the last element across the remaining elements.
+    /// Parses a nonempty array literal with an optional trailing comma.
     fn array_literal(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
         self.enter_nesting()?;
         self.advance()?;
@@ -1198,14 +1073,9 @@ impl Parser<'_> {
             return Err(self.error("expected an array element"));
         }
         let mut elements = Vec::new();
-        let mut fill = None;
         loop {
             elements.push(self.expression()?);
-            if self.current == Some(Token::Ellipsis) {
-                fill = Some(self.span.clone());
-                self.advance()?;
-                break;
-            }
+
             match self.current {
                 Some(Token::Comma) => {
                     self.advance()?;
@@ -1229,12 +1099,11 @@ impl Parser<'_> {
                 .expect("an array literal has at least one element")
                 + 1,
             span: span.start..end,
-            kind: ExpressionKind::ArrayLiteral { elements, fill },
+            kind: ExpressionKind::ArrayLiteral { elements },
         }))
     }
 
-    /// Parses `Name { field = e, ... }`. It carries at least one field
-    /// initializer or a `...`, which may stand alone and otherwise comes last.
+    /// Parses a struct literal containing every field initializer.
     fn struct_literal(&mut self, name: QualifiedName) -> Result<Idx<Expression>, Diagnostic> {
         self.enter_nesting()?;
         let start = name.span.start;
@@ -1243,13 +1112,7 @@ impl Parser<'_> {
             return Err(self.error("expected a field initializer"));
         }
         let mut fields = Vec::new();
-        let mut fill = None;
         loop {
-            if self.current == Some(Token::Ellipsis) {
-                fill = Some(self.span.clone());
-                self.advance()?;
-                break;
-            }
             let (field, name_span) = self.name("expected a field name")?;
             self.expect(Token::Equals, "expected `=` after field name")?;
             fields.push(FieldInitializer {
@@ -1280,7 +1143,7 @@ impl Parser<'_> {
                 .unwrap_or(0)
                 + 1,
             span: start..end,
-            kind: ExpressionKind::StructLiteral { name, fields, fill },
+            kind: ExpressionKind::StructLiteral { name, fields },
         }))
     }
 
@@ -1303,27 +1166,7 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parses `new(e)`, which uses call syntax without being a call.
-    fn new_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
-        self.advance()?;
-        if self.current != Some(Token::LeftParen) {
-            return Err(Diagnostic::new(
-                span,
-                "reserved word cannot be used as an identifier",
-            ));
-        }
-        self.enter_nesting()?;
-        let (operand, right_paren_span) = self.single_argument("new")?;
-        self.nesting -= 1;
-        Ok(self.syntax.expressions.alloc(Expression {
-            depth: self.syntax.expressions[operand].depth + 1,
-            span: span.start..right_paren_span.end,
-            kind: ExpressionKind::New { operand },
-        }))
-    }
-
-    /// Reports whether the current `*` begins a `*T(p)` conversion: a run of
-    /// `*`, `nullable *`, and `[ … ]` prefixes, a type name, and then `(`.
+    /// Distinguishes a pointer conversion from a dereference.
     fn starts_pointer_conversion(&self) -> bool {
         if self.current != Some(Token::Star) {
             return false;
@@ -1333,11 +1176,6 @@ impl Parser<'_> {
         loop {
             match token {
                 Some(Token::Star) => {}
-                Some(Token::Nullable) => {
-                    if lookahead(&mut lexer) != Some(Token::Star) {
-                        return false;
-                    }
-                }
                 Some(Token::LeftBracket) => {
                     let mut depth = 1usize;
                     while depth > 0 {
@@ -1370,8 +1208,6 @@ impl Parser<'_> {
         token == Some(Token::LeftParen)
     }
 
-    /// Parses the checked conversion `*T(p)`, whose head is a whole pointer
-    /// annotation.
     fn pointer_conversion_expression(
         &mut self,
         span: Range<usize>,
@@ -1392,21 +1228,12 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parses a conversion, `T(x)` or `T.truncate(x)`, whose head is the name
-    /// of a numeric type. Only an integer destination has the truncating form.
     fn conversion_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
         self.enter_nesting()?;
-        let (destination, destination_span) = self.named_type()?;
-        let truncating = self.truncate_marker()?;
-        if truncating && destination.is_floating() {
+        let (destination, _) = self.named_type()?;
+        if self.current != Some(Token::LeftParen) {
             return Err(Diagnostic::new(
-                destination_span,
-                format!("`{destination}` has no truncating conversion"),
-            ));
-        }
-        if !truncating && self.current != Some(Token::LeftParen) {
-            return Err(Diagnostic::new(
-                destination_span,
+                span,
                 "reserved word cannot be used as an identifier",
             ));
         }
@@ -1417,24 +1244,11 @@ impl Parser<'_> {
         Ok(self.syntax.expressions.alloc(Expression {
             kind: ExpressionKind::Conversion {
                 destination,
-                truncating,
                 operand,
             },
             span: span.start..end,
             depth: self.syntax.expressions[operand].depth + 1,
         }))
-    }
-
-    fn truncate_marker(&mut self) -> Result<bool, Diagnostic> {
-        if self.current != Some(Token::Dot) {
-            return Ok(false);
-        }
-        self.advance()?;
-        if self.current != Some(Token::Name) || self.lexer.slice() != "truncate" {
-            return Err(self.error("expected `truncate`"));
-        }
-        self.advance()?;
-        Ok(true)
     }
 
     fn grouping_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {

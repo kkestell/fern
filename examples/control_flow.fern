@@ -1,34 +1,20 @@
+extern fn exit(status: i32) -> void;
+
 fn main() -> void {
+    var n = 0;
     var total = 0;
-
-    if true && !false {
-        total += 1;
-    } else {
-        exit(255);
-    }
-
-    for var i = 0; i < 4; i += 1 {
-        if i == 1 {
+    for n < 5 {
+        n += 1;
+        if n == 3 {
             continue;
         }
-        total += 1;
+        total += n;
     }
-
-    for total < 5 {
-        total += 1;
-    }
-
-    for :done {
-        for var i = 0; i < 2; i += 1 {
-            if i == 1 {
-                break :done;
-            }
-            total += 1;
+    for {
+        if total == 12 {
+            break;
+        } else {
+            exit(1);
         }
     }
-
-    if total == 6 {
-        exit(total);
-    }
-    exit(255);
 }

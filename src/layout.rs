@@ -14,14 +14,15 @@ use crate::types::{Scalar, StructId, Type};
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-/// The bytes a scalar occupies. Scalar storage is one QBE word, so a 64-bit
-/// scalar takes eight bytes and every narrower one takes four.
+/// Scalar storage uses its byte width independently of the QBE register class.
 pub(crate) fn scalar_bytes(scalar: Scalar) -> u64 {
-    if scalar.width() == 64 { 8 } else { 4 }
+    if scalar == Scalar::Bool {
+        1
+    } else {
+        u64::from(scalar.width() / 8)
+    }
 }
 
-/// The bytes a pointer occupies, which is also its alignment. `uint` has the
-/// platform pointer width, so a pointer is as wide as a `uint`.
 pub(crate) fn pointer_bytes() -> u64 {
     scalar_bytes(Scalar::Uint)
 }
@@ -140,7 +141,6 @@ mod tests {
 
     fn pointer_to_int() -> Type {
         Type::Pointer {
-            nullable: false,
             target: Box::new(Scalar::Int.into()),
         }
     }
@@ -150,9 +150,8 @@ mod tests {
         let table = Table(Vec::new());
         let layouts = Layouts::default();
         assert_eq!(pointer_bytes(), u64::from(usize::BITS / 8));
-        for nullable in [false, true] {
+        {
             let ty = Type::Pointer {
-                nullable,
                 target: Box::new(Type::Array {
                     length: 1 << 60,
                     element: Box::new(Scalar::Int.into()),

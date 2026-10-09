@@ -1,9 +1,13 @@
 use counter;
 
+extern fn exit(status: i32) -> void;
+
 const base: int = 6;
 
 fn main() -> void {
     counter::value = base;
     counter::bump(step_total());
-    exit(counter::value);
+    if counter::value != 42 {
+        exit(1);
+    }
 }

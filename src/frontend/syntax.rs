@@ -43,6 +43,7 @@ pub(crate) struct Function {
     pub name_span: Range<usize>,
     pub parameters: Vec<TypedName>,
     pub result: FunctionResult,
+    pub external: bool,
     #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
     pub span: Range<usize>,
     pub body: Vec<Idx<Statement>>,
@@ -101,7 +102,7 @@ pub(crate) enum StatementKind {
         name: Spur,
         name_span: Range<usize>,
         annotation: Option<Idx<TypeAnnotation>>,
-        initializer: Option<Idx<Expression>>,
+        initializer: Idx<Expression>,
     },
     Assignment {
         target: Idx<Expression>,
@@ -116,13 +117,6 @@ pub(crate) enum StatementKind {
     Block {
         body: Vec<Idx<Statement>>,
     },
-    Exit {
-        argument: Idx<Expression>,
-    },
-    /// `free(p);`, which ends the life of a heap target.
-    Free {
-        operand: Idx<Expression>,
-    },
     Call {
         call: Call,
     },
@@ -135,22 +129,11 @@ pub(crate) enum StatementKind {
         else_branch: Option<Idx<Statement>>,
     },
     For {
-        label: Option<Label>,
         header: ForHeader,
         body: Vec<Idx<Statement>>,
     },
-    Break {
-        label: Option<Label>,
-    },
-    Continue {
-        label: Option<Label>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct Label {
-    pub name: Spur,
-    pub name_span: Range<usize>,
+    Break {},
+    Continue {},
 }
 
 #[derive(Debug)]
@@ -166,16 +149,6 @@ pub(crate) struct Call {
 pub(crate) enum ForHeader {
     Infinite,
     Condition(Idx<Expression>),
-    ThreeClause {
-        initializer: Idx<Statement>,
-        condition: Idx<Expression>,
-        post: Idx<Statement>,
-    },
-    Iteration {
-        value: Spur,
-        index: Option<(Spur, Range<usize>)>,
-        operand: Idx<Expression>,
-    },
 }
 
 #[derive(Debug)]
@@ -184,20 +157,17 @@ pub(crate) struct TypeAnnotation {
     pub span: Range<usize>,
 }
 
-/// A written type. An array's length is an unevaluated expression, and `None`
-/// is the `[_]` length taken from an initializer.
+/// A written type with explicit array lengths.
 #[derive(Debug)]
 pub(crate) enum AnnotationKind {
     Scalar(Scalar),
     /// A declared type, written plainly or as `module::Name`.
     Named(QualifiedName),
     Array {
-        length: Option<Idx<Expression>>,
+        length: Idx<Expression>,
         element: Idx<TypeAnnotation>,
     },
-    /// `*T`, or `nullable *T` when `nullable` is set.
     Pointer {
-        nullable: bool,
         target: Idx<TypeAnnotation>,
     },
 }
@@ -220,12 +190,13 @@ pub(crate) struct Expression {
 #[derive(Debug)]
 pub(crate) enum ExpressionKind {
     Integer(String),
+    Sizeof {
+        annotation: Idx<TypeAnnotation>,
+    },
     /// A floating-point literal's source spelling, kept exactly so constant
     /// evaluation can read the value the program wrote.
     Floating(String),
     Boolean(bool),
-    /// `null`, the value of every nullable pointer type that refers to no
-    /// target.
     Null,
     Reference(QualifiedName),
     Grouping {
@@ -272,7 +243,6 @@ pub(crate) enum ExpressionKind {
     },
     Conversion {
         destination: Scalar,
-        truncating: bool,
         operand: Idx<Expression>,
     },
     /// `*T(p)`, where `destination` is the whole `*T` annotation.
@@ -280,22 +250,14 @@ pub(crate) enum ExpressionKind {
         destination: Idx<TypeAnnotation>,
         operand: Idx<Expression>,
     },
-    /// `new(e)`, a heap target holding a copy of `e`.
-    New {
-        operand: Idx<Expression>,
-    },
+    /// A directly named function call.
     Call(Call),
-    /// `[a, b, c]`, where `fill` is the span of a trailing `...`.
     ArrayLiteral {
         elements: Vec<Idx<Expression>>,
-        fill: Option<Range<usize>>,
     },
-    /// `Name { field = e, ... }`, where `fill` is the span of the `...` that
-    /// gives every unlisted field its zero value.
     StructLiteral {
         name: QualifiedName,
         fields: Vec<FieldInitializer>,
-        fill: Option<Range<usize>>,
     },
     Field {
         operand: Idx<Expression>,
@@ -349,7 +311,8 @@ pub(crate) fn walk_expression(
 ) {
     visit(expression);
     match &syntax.expressions[expression].kind {
-        ExpressionKind::Integer(_)
+        ExpressionKind::Sizeof { .. }
+        | ExpressionKind::Integer(_)
         | ExpressionKind::Floating(_)
         | ExpressionKind::Boolean(_)
         | ExpressionKind::Null
@@ -381,9 +344,6 @@ pub(crate) fn walk_expression(
         | ExpressionKind::PointerConversion {
             operand: expression,
             ..
-        }
-        | ExpressionKind::New {
-            operand: expression,
         }
         | ExpressionKind::Field {
             operand: expression,

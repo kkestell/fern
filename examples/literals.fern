@@ -1,11 +1,9 @@
+// Literal spelling is independent of the destination type.
 fn main() -> void {
-    const decimal = 42;
-    const hexadecimal = 0x2A;
-    const binary = 0b101010;
-    const octal = 0o52;
-
-    // Leading zeroes do not change a decimal literal's base.
-    const leading_zeroes = 00042;
-
-    exit(decimal);
+    var decimal = 42;
+    var hexadecimal = 0x2a;
+    var binary = 0b101010;
+    var octal = 0o52;
+    var fraction: f32 = .5;
+    var exponent = 1e3;
 }

@@ -2,7 +2,7 @@
 
 use crate::{
     diagnostic::Diagnostic,
-    frontend::syntax::{Expression, ExpressionKind, Syntax, TypeAnnotation, find_call},
+    frontend::syntax::{Expression, ExpressionKind, Syntax, TypeAnnotation},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
 };
 use la_arena::Idx;
@@ -42,10 +42,7 @@ impl LocationUse {
 
 /// Reports a `null` whose context supplies no type.
 fn null_without_context(span: &std::ops::Range<usize>) -> Diagnostic {
-    Diagnostic::new(
-        span.clone(),
-        "`null` requires a nullable pointer type from context",
-    )
+    Diagnostic::new(span.clone(), "`null` requires a pointer type from context")
 }
 
 /// Reports a field name the struct does not declare.
@@ -84,7 +81,51 @@ impl CheckedProgram<'_> {
         if self.is_null(id) {
             return self.check_null(id, destination.as_ref());
         }
-        let mut checked = self.infer_expression(id, scopes)?;
+        let mut checked = match (
+            &syntax.expressions[id].kind,
+            destination.as_ref().and_then(Type::scalar),
+        ) {
+            (
+                ExpressionKind::Binary {
+                    operator,
+                    operator_span,
+                    left,
+                    right,
+                },
+                Some(ty),
+            ) if ty.is_numeric() => self.infer_binary_context(
+                *operator,
+                operator_span,
+                *left,
+                *right,
+                scopes,
+                Some(ty),
+            )?,
+            (
+                ExpressionKind::Unary {
+                    operator,
+                    operator_span,
+                    operand,
+                },
+                Some(ty),
+            ) if ty.is_numeric() => {
+                self.infer_unary_context(*operator, operator_span, *operand, scopes, Some(ty))?
+            }
+            (ExpressionKind::Grouping { expression }, Some(ty)) if ty.is_numeric() => {
+                let inner = self.check_expression(*expression, scopes, Some(ty.into()))?;
+                let result = CheckedExpression {
+                    ty: inner.ty.clone(),
+                    untyped: false,
+                    value: ExpressionValue::Grouping {
+                        expression: *expression,
+                    },
+                    constant: inner.constant.clone(),
+                };
+                self.record_operand(*expression, inner, result.constant.is_some());
+                result
+            }
+            _ => self.infer_expression(id, scopes)?,
+        };
         let mismatch = |checked: &CheckedExpression, destination: &Type| {
             Diagnostic::new(
                 syntax.expressions[id].span.clone(),
@@ -103,12 +144,7 @@ impl CheckedProgram<'_> {
         } else if let Some(destination) = destination
             && checked.ty != destination
         {
-            // A `*T` and a `nullable *T` share one representation, so a
-            // pointer takes the nullable type its context expects.
-            if !checked.ty.widens_to(&destination) {
-                return Err(mismatch(&checked, &destination));
-            }
-            checked.ty = destination;
+            return Err(mismatch(&checked, &destination));
         }
         Ok(checked)
     }
@@ -122,8 +158,6 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// Checks `null`, in any grouping, against the type its context supplies,
-    /// which must be a nullable pointer type.
     fn check_null(
         &mut self,
         id: Idx<Expression>,
@@ -132,7 +166,7 @@ impl CheckedProgram<'_> {
         let span = &self.syntax.expressions[id].span;
         match &self.syntax.expressions[id].kind {
             ExpressionKind::Null => match destination {
-                Some(ty @ Type::Pointer { nullable: true, .. }) => Ok(CheckedExpression {
+                Some(ty @ Type::Pointer { .. }) => Ok(CheckedExpression {
                     ty: ty.clone(),
                     untyped: false,
                     value: ExpressionValue::Null,
@@ -160,29 +194,6 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// `new(e)`, a pointer to a heap copy of the operand, which takes its
-    /// default type when it is an untyped constant.
-    fn infer_new(
-        &mut self,
-        operand: Idx<Expression>,
-        scopes: &ScopeStack<'_>,
-    ) -> Result<CheckedExpression, Diagnostic> {
-        let checked_operand = self.check_expression(operand, scopes, None)?;
-        let ty = Type::Pointer {
-            nullable: false,
-            target: Box::new(checked_operand.ty.clone()),
-        };
-        self.record_operand(operand, checked_operand, false);
-        Ok(CheckedExpression {
-            ty,
-            untyped: false,
-            value: ExpressionValue::New { operand },
-            constant: None,
-        })
-    }
-
-    /// `*T(p)`, which yields the `*T` a `*T` or `nullable *T` holds. A
-    /// constant `null` operand would trap, so it is an error.
     fn infer_pointer_conversion(
         &mut self,
         destination: Idx<TypeAnnotation>,
@@ -190,41 +201,25 @@ impl CheckedProgram<'_> {
         span: &std::ops::Range<usize>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
-        let ty = self.resolve_annotation(destination, scopes, None)?;
-        let Type::Pointer {
-            nullable: false,
-            target,
-        } = &ty
-        else {
-            unreachable!("a pointer conversion's destination is written `*T`")
-        };
-        let nullable = Type::Pointer {
-            nullable: true,
-            target: target.clone(),
-        };
+        let ty = self.resolve_annotation(destination, scopes)?;
         let checked_operand = if self.is_null(operand) {
-            self.check_null(operand, Some(&nullable))?
+            self.check_null(operand, Some(&ty))?
         } else {
             self.infer_expression(operand, scopes)?
         };
-        if checked_operand.ty != ty && checked_operand.ty != nullable {
+        if !matches!(checked_operand.ty, Type::Pointer { .. }) {
             return Err(Diagnostic::new(
                 span.clone(),
-                format!("cannot convert `{}` to `{ty}`", checked_operand.ty),
+                "pointer conversion requires a pointer operand",
             ));
         }
-        if checked_operand.constant == Some(Constant::Null) {
-            return Err(Diagnostic::new(
-                span.clone(),
-                format!("constant conversion to `{ty}` would trap"),
-            ));
-        }
+        let constant = checked_operand.constant.clone();
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
             ty,
             untyped: false,
             value: ExpressionValue::PointerConversion { operand },
-            constant: None,
+            constant,
         })
     }
 
@@ -236,6 +231,16 @@ impl CheckedProgram<'_> {
         let expression = &self.syntax.expressions[id];
         match &expression.kind {
             ExpressionKind::Integer(spelling) => Ok(integer_literal(spelling)),
+            ExpressionKind::Sizeof { annotation } => {
+                let ty = self.resolve_annotation(*annotation, scopes)?;
+                let size = self.layouts.size(self, &ty).expect("validated layout");
+                Ok(CheckedExpression {
+                    ty: Scalar::Uint.into(),
+                    untyped: false,
+                    value: ExpressionValue::Integer,
+                    constant: Some(BigInt::from(size).into()),
+                })
+            }
             ExpressionKind::Floating(spelling) => floating_literal(spelling, &expression.span),
             ExpressionKind::Boolean(value) => Ok(CheckedExpression {
                 ty: Scalar::Bool.into(),
@@ -282,16 +287,9 @@ impl CheckedProgram<'_> {
             } => self.infer_logical_not(operator_span, *operand, scopes),
             ExpressionKind::Conversion {
                 destination,
-                truncating,
                 operand,
                 ..
-            } => self.infer_conversion(
-                *destination,
-                *truncating,
-                *operand,
-                &expression.span,
-                scopes,
-            ),
+            } => self.infer_conversion(*destination, *operand, &expression.span, scopes),
             ExpressionKind::ArrayLiteral { .. } => self.check_array_literal(id, scopes, None),
             ExpressionKind::Index { operand, index, .. } => {
                 self.infer_index(*operand, *index, scopes)
@@ -308,7 +306,6 @@ impl CheckedProgram<'_> {
             }
             ExpressionKind::Dereference { operand, .. } => self.infer_dereference(*operand, scopes),
             ExpressionKind::Null => Err(null_without_context(&expression.span)),
-            ExpressionKind::New { operand } => self.infer_new(*operand, scopes),
             ExpressionKind::PointerConversion {
                 destination,
                 operand,
@@ -335,33 +332,18 @@ impl CheckedProgram<'_> {
         destination: Option<Type>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let span = self.syntax.expressions[id].span.clone();
-        let ExpressionKind::ArrayLiteral { elements, fill } = &self.syntax.expressions[id].kind
-        else {
+        let ExpressionKind::ArrayLiteral { elements } = &self.syntax.expressions[id].kind else {
             unreachable!("an array literal is checked from its own syntax")
         };
-        let (elements, fill) = (elements.clone(), fill.clone());
+        let elements = elements.clone();
         let (length, element_type) =
-            self.array_literal_type(&span, scopes, destination, &elements, fill.as_ref())?;
+            self.array_literal_type(&span, scopes, destination, &elements)?;
         let ty = Type::Array {
             length,
             element: Box::new(element_type.clone()),
         };
         self.validate_aggregate_layout(&ty, &span)?;
-        check_element_count(span.clone(), &ty, length, elements.len(), fill.is_some())?;
-        // A fill expands to one constant per scalar the whole literal holds,
-        // so the bound counts the elements an element itself expands to.
-        if fill.is_some()
-            && self
-                .aggregate_value_count(&ty)
-                .is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES)
-        {
-            return Err(Diagnostic::new(
-                span,
-                format!(
-                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
-                ),
-            ));
-        }
+        check_element_count(span.clone(), &ty, length, elements.len())?;
         let mut checked_elements = Vec::with_capacity(elements.len());
         for &element in &elements {
             checked_elements.push(self.check_expression(
@@ -378,10 +360,7 @@ impl CheckedProgram<'_> {
         Ok(CheckedExpression {
             ty,
             untyped: false,
-            value: ExpressionValue::Array {
-                elements,
-                fill: fill.is_some(),
-            },
+            value: ExpressionValue::Array { elements },
             constant,
         })
     }
@@ -393,7 +372,6 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
         destination: Option<Type>,
         elements: &[Idx<Expression>],
-        fill: Option<&std::ops::Range<usize>>,
     ) -> Result<(u64, Type), Diagnostic> {
         match destination {
             Some(Type::Array { length, element }) => Ok((length, *element)),
@@ -402,12 +380,6 @@ impl CheckedProgram<'_> {
                 format!("cannot implicitly convert an array literal to `{destination}`"),
             )),
             None => {
-                if let Some(fill) = fill {
-                    return Err(Diagnostic::new(
-                        fill.clone(),
-                        "a fill requires a length from context",
-                    ));
-                }
                 let length = u64::try_from(elements.len())
                     .expect("a source file holds fewer elements than u64::MAX");
                 Ok((length, self.common_element_type(elements, scopes)?))
@@ -415,34 +387,13 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// The one type the elements of a literal with no context must share: the
-    /// type of the first typed element, or the untyped default when every
-    /// element is an untyped constant. The checked elements are discarded, so
-    /// every element goes through the one checking path afterwards.
+    /// An inferred array takes its element type from its first element.
     fn common_element_type(
         &mut self,
         elements: &[Idx<Expression>],
         scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
-        let mut default = None;
-        // `null` takes the type the other elements give.
-        for &element in elements {
-            if self.is_null(element) {
-                continue;
-            }
-            let checked = self.infer_expression(element, scopes)?;
-            if !checked.untyped {
-                return Ok(checked.ty);
-            }
-            default.get_or_insert(checked.ty);
-        }
-        match default {
-            Some(default) => Ok(default),
-            // Every element is `null`, which has no type of its own.
-            None => Err(self
-                .check_null(elements[0], None)
-                .expect_err("`null` without a destination is rejected")),
-        }
+        Ok(self.check_expression(elements[0], scopes, None)?.ty)
     }
 
     /// Checks one `[ … ]` step and gives the element type it reaches. The
@@ -456,24 +407,29 @@ impl CheckedProgram<'_> {
         index: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
-        let Type::Array { length, element } = operand.through_pointers() else {
-            return Err(Diagnostic::new(
-                operand_span.clone(),
-                format!("cannot index `{operand}`"),
-            ));
-        };
-        let array = operand.through_pointers();
         let checked = self.check_expression(index, scopes, Some(Scalar::Int.into()))?;
-        if let Some(value) = checked.integer()
-            && value.to_u64().is_none_or(|value| value >= *length)
-        {
-            return Err(Diagnostic::new(
-                self.syntax.expressions[index].span.clone(),
-                format!("index {value} is out of range for `{array}`"),
-            ));
-        }
+        let element = match operand {
+            Type::Array { length, element } => {
+                if let Some(value) = checked.integer()
+                    && value.to_u64().is_none_or(|n| n >= *length)
+                {
+                    return Err(Diagnostic::new(
+                        self.syntax.expressions[index].span.clone(),
+                        format!("constant index out of range for `{operand}`"),
+                    ));
+                }
+                (**element).clone()
+            }
+            Type::Pointer { target, .. } => (**target).clone(),
+            _ => {
+                return Err(Diagnostic::new(
+                    operand_span.clone(),
+                    format!("cannot index `{operand}`"),
+                ));
+            }
+        };
         self.expressions.insert(index, checked);
-        Ok((**element).clone())
+        Ok(element)
     }
 
     /// Checks a struct literal against the type it names itself, so an
@@ -487,8 +443,7 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let syntax = self.syntax;
         let span = syntax.expressions[id].span.clone();
-        let ExpressionKind::StructLiteral { name, fields, fill } = &syntax.expressions[id].kind
-        else {
+        let ExpressionKind::StructLiteral { name, fields } = &syntax.expressions[id].kind else {
             unreachable!("a struct literal is checked from its own syntax")
         };
         let declared = self.resolve_type_name(name, scopes)?;
@@ -524,9 +479,7 @@ impl CheckedProgram<'_> {
             .enumerate()
             .filter_map(|(ordinal, written)| (!written).then_some(ordinal))
             .collect::<Vec<_>>();
-        if let Some(&ordinal) = omitted.first()
-            && fill.is_none()
-        {
+        if let Some(&ordinal) = omitted.first() {
             return Err(Diagnostic::new(
                 span,
                 format!(
@@ -536,41 +489,6 @@ impl CheckedProgram<'_> {
                         .resolve(&self.structs[declared.0].fields[ordinal].name)
                 ),
             ));
-        }
-        if let Some(&ordinal) = omitted
-            .iter()
-            .find(|&&ordinal| !self.has_zero_value(&self.structs[declared.0].fields[ordinal].ty))
-        {
-            return Err(Diagnostic::new(
-                span,
-                format!(
-                    "omitted field `{}` has no zero value",
-                    syntax
-                        .names
-                        .resolve(&self.structs[declared.0].fields[ordinal].name)
-                ),
-            ));
-        }
-        // The fill expands every omitted field, so the bound covers them
-        // together rather than one field at a time.
-        let total = omitted.iter().try_fold(0u64, |count, &ordinal| {
-            count.checked_add(
-                self.aggregate_value_count(&self.structs[declared.0].fields[ordinal].ty)?,
-            )
-        });
-        if total.is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES) {
-            return Err(Diagnostic::new(
-                name.span.clone(),
-                format!(
-                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
-                ),
-            ));
-        }
-        let mut filled = Vec::new();
-        for ordinal in omitted {
-            let zero = self.zero_value_unchecked(&self.structs[declared.0].fields[ordinal].ty);
-            values[ordinal] = Some(zero.clone());
-            filled.push((ordinal, zero));
         }
         let constant = values
             .into_iter()
@@ -586,7 +504,6 @@ impl CheckedProgram<'_> {
             value: ExpressionValue::Struct {
                 id: declared,
                 initializers,
-                filled,
             },
             constant,
         })
@@ -602,7 +519,7 @@ impl CheckedProgram<'_> {
         name: Spur,
         name_span: &std::ops::Range<usize>,
     ) -> Result<(usize, Type), Diagnostic> {
-        let reached = operand.through_pointers();
+        let reached = operand;
         let Type::Struct(struct_type) = reached else {
             return Err(Diagnostic::new(
                 operand_span.clone(),
@@ -628,12 +545,16 @@ impl CheckedProgram<'_> {
         let (ordinal, ty) = self.check_field_step(&checked_operand.ty, &span, name, name_span)?;
         // `p.x` is not a constant expression, so the operand keeps its own
         // constant and is still evaluated.
-        self.record_operand(operand, checked_operand, false);
+        let constant = match &checked_operand.constant {
+            Some(Constant::Struct(fields)) => Some(fields[ordinal].clone()),
+            _ => None,
+        };
+        self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
             ty,
             untyped: false,
             value: ExpressionValue::Field { operand, ordinal },
-            constant: None,
+            constant,
         })
     }
 
@@ -648,12 +569,21 @@ impl CheckedProgram<'_> {
         let element = self.check_index_step(&checked_operand.ty, &span, index, scopes)?;
         // `a[i]` is never a constant expression, so both sub-expressions keep
         // their own constants and are still evaluated.
-        self.record_operand(operand, checked_operand, false);
+        let constant = match (
+            &checked_operand.constant,
+            self.expressions[index]
+                .integer()
+                .and_then(ToPrimitive::to_usize),
+        ) {
+            (Some(Constant::Array(values)), Some(index)) => Some(values[index].clone()),
+            _ => None,
+        };
+        self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
             ty: element,
             untyped: false,
             value: ExpressionValue::Index { operand, index },
-            constant: None,
+            constant,
         })
     }
 
@@ -663,7 +593,7 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
-        let Type::Array { length, .. } = *checked_operand.ty.through_pointers() else {
+        let Type::Array { length, .. } = checked_operand.ty else {
             return Err(Diagnostic::new(
                 self.syntax.expressions[operand].span.clone(),
                 format!(
@@ -674,8 +604,9 @@ impl CheckedProgram<'_> {
         };
         // The length comes from the operand's type, so it folds unless
         // reaching the type needs a call. The operand is evaluated either way.
-        let constant = find_call(self.syntax, operand)
-            .is_none()
+        let constant = checked_operand
+            .constant
+            .is_some()
             .then(|| Constant::Integer(BigInt::from(length)));
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
@@ -835,18 +766,13 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// The target type of a pointer that `*` follows, which must not be
-    /// nullable.
     fn pointer_target(
         &self,
         operand: &Type,
         operand_span: &std::ops::Range<usize>,
     ) -> Result<Type, Diagnostic> {
         match operand {
-            Type::Pointer {
-                nullable: false,
-                target,
-            } => Ok((**target).clone()),
+            Type::Pointer { target } => Ok((**target).clone()),
             _ => Err(Diagnostic::new(
                 operand_span.clone(),
                 format!("cannot dereference `{operand}`"),
@@ -863,7 +789,6 @@ impl CheckedProgram<'_> {
     ) -> Result<CheckedExpression, Diagnostic> {
         let location = self.mutable_location(operand, scopes, LocationUse::Address)?;
         let ty = Type::Pointer {
-            nullable: false,
             target: Box::new(location.ty.clone()),
         };
         self.addresses.insert(id, location);
@@ -900,32 +825,58 @@ impl CheckedProgram<'_> {
         operand: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
-        let checked_operand = self.infer_expression(operand, scopes)?;
-        let error = |message| Diagnostic::new(operator_span.clone(), message);
-        let negation = operator == UnaryOperator::Negate;
-        let integer_only = || "integer unary operator requires an integer operand".to_string();
-        let Some(operand_type) = numeric_operand(&checked_operand) else {
-            return Err(error(if negation {
-                "unary `-` requires a numeric operand".to_string()
+        self.infer_unary_context(operator, operator_span, operand, scopes, None)
+    }
+
+    fn infer_unary_context(
+        &mut self,
+        operator: UnaryOperator,
+        operator_span: &std::ops::Range<usize>,
+        operand: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+        destination: Option<Scalar>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let hint = self.type_hint(operand, scopes)?.and_then(|ty| ty.scalar());
+        let ty = destination
+            .or(hint)
+            .unwrap_or(if self.has_float_literal(operand) {
+                Scalar::F64
             } else {
-                integer_only()
-            }));
+                Scalar::Int
+            });
+        // The signed minimum is written as negation of its magnitude, which
+        // is one beyond the largest positive value of the destination.
+        if operator == UnaryOperator::Negate
+            && ty.is_integer()
+            && ty.signed()
+            && matches!(
+                self.syntax.expressions[operand].kind,
+                ExpressionKind::Integer(_)
+            )
+        {
+            let checked = self.infer_expression(operand, scopes)?;
+            if checked.integer() == Some(&BigInt::from(-ty.min())) {
+                self.record_operand(operand, checked, true);
+                return Ok(CheckedExpression {
+                    ty: ty.into(),
+                    untyped: false,
+                    value: ExpressionValue::Unary { operator, operand },
+                    constant: Some(BigInt::from(ty.min()).into()),
+                });
+            }
+        }
+        let checked_operand = self.check_expression(operand, scopes, Some(ty.into()))?;
+        let Some(operand_type) = numeric_operand(&checked_operand) else {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                "unary operator requires a number",
+            ));
         };
-        if operand_type.is_floating() {
-            if !negation {
-                return Err(error(integer_only()));
-            }
-        } else {
-            if negation && !checked_operand.untyped && !operand_type.signed() {
-                return Err(error(format!(
-                    "unary `-` is not permitted on `{operand_type}`"
-                )));
-            }
-            if operator == UnaryOperator::WrappingNegate && checked_operand.untyped {
-                return Err(error(
-                    "wrapping negation requires a typed operand".to_string(),
-                ));
-            }
+        if operator == UnaryOperator::Complement && !operand_type.is_integer() {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                "integer unary operator requires an integer operand",
+            ));
         }
         let constant = evaluate_unary(
             operator,
@@ -936,11 +887,7 @@ impl CheckedProgram<'_> {
         let result = CheckedExpression {
             ty: checked_operand.ty.clone(),
             untyped: checked_operand.untyped,
-            value: ExpressionValue::Unary {
-                operator,
-                operator_span: operator_span.clone(),
-                operand,
-            },
+            value: ExpressionValue::Unary { operator, operand },
             constant,
         };
         self.record_operand(operand, checked_operand, result.constant.is_some());
@@ -955,8 +902,133 @@ impl CheckedProgram<'_> {
         right: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
-        let checked_left = self.infer_expression(left, scopes)?;
-        let checked_right = self.infer_expression(right, scopes)?;
+        self.infer_binary_context(operator, operator_span, left, right, scopes, None)
+    }
+
+    fn type_hint(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<Option<Type>, Diagnostic> {
+        Ok(match &self.syntax.expressions[id].kind {
+            ExpressionKind::Reference(name) => {
+                let binding = self.resolve(name, scopes)?;
+                Some(self.bindings[binding].ty.clone())
+            }
+            ExpressionKind::Conversion { destination, .. } => Some((*destination).into()),
+            ExpressionKind::Grouping { expression } => self.type_hint(*expression, scopes)?,
+            ExpressionKind::Unary { operand, .. } => self.type_hint(*operand, scopes)?,
+            ExpressionKind::Binary {
+                operator,
+                left,
+                right,
+                ..
+            } => {
+                let left = self.type_hint(*left, scopes)?;
+                let right = self.type_hint(*right, scopes)?;
+                if *operator == BinaryOperator::Subtract
+                    && matches!(left, Some(Type::Pointer { .. }))
+                    && matches!(right, Some(Type::Pointer { .. }))
+                {
+                    Some(Scalar::Int.into())
+                } else {
+                    left.or(if operator.is_shift() { None } else { right })
+                }
+            }
+            ExpressionKind::Call(call) => {
+                let f = self.resolve_call(call, scopes)?;
+                self.functions[f].result.clone()
+            }
+            ExpressionKind::Integer(_) | ExpressionKind::Floating(_) | ExpressionKind::Null => None,
+            _ => Some(self.infer_expression(id, scopes)?.ty),
+        })
+    }
+
+    fn has_float_literal(&self, id: Idx<Expression>) -> bool {
+        match &self.syntax.expressions[id].kind {
+            ExpressionKind::Floating(_) => true,
+            ExpressionKind::Grouping { expression } => self.has_float_literal(*expression),
+            ExpressionKind::Unary { operand, .. } => self.has_float_literal(*operand),
+            ExpressionKind::Binary { left, right, .. } => {
+                self.has_float_literal(*left) || self.has_float_literal(*right)
+            }
+            _ => false,
+        }
+    }
+
+    fn infer_binary_context(
+        &mut self,
+        operator: BinaryOperator,
+        operator_span: &std::ops::Range<usize>,
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+        destination: Option<Scalar>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let left_hint = self.type_hint(left, scopes)?;
+        let right_hint = self.type_hint(right, scopes)?;
+        if let Some(pointer_ty @ Type::Pointer { .. }) = &left_hint
+            && matches!(operator, BinaryOperator::Add | BinaryOperator::Subtract)
+        {
+            let checked_left = self.check_expression(left, scopes, Some(pointer_ty.clone()))?;
+            let difference = operator == BinaryOperator::Subtract
+                && matches!(right_hint, Some(Type::Pointer { .. }));
+            let checked_right = self.check_expression(
+                right,
+                scopes,
+                Some(if difference {
+                    pointer_ty.clone()
+                } else {
+                    Scalar::Int.into()
+                }),
+            )?;
+            self.record_operand(left, checked_left, false);
+            self.record_operand(right, checked_right, false);
+            return Ok(CheckedExpression {
+                ty: if difference {
+                    Scalar::Int.into()
+                } else {
+                    pointer_ty.clone()
+                },
+                untyped: false,
+                value: if difference {
+                    ExpressionValue::PointerDifference { left, right }
+                } else {
+                    ExpressionValue::PointerOffset {
+                        pointer: left,
+                        offset: right,
+                        subtract: operator == BinaryOperator::Subtract,
+                    }
+                },
+                constant: None,
+            });
+        }
+        let ty = destination
+            .or(left_hint.and_then(|t| t.scalar()))
+            .or(if operator.is_shift() {
+                None
+            } else {
+                right_hint.and_then(|t| t.scalar())
+            })
+            .unwrap_or(
+                if self.has_float_literal(left)
+                    || (!operator.is_shift() && self.has_float_literal(right))
+                {
+                    Scalar::F64
+                } else {
+                    Scalar::Int
+                },
+            );
+        let checked_left = self.check_expression(left, scopes, Some(ty.into()))?;
+        let checked_right = self.check_expression(
+            right,
+            scopes,
+            if operator.is_shift() {
+                None
+            } else {
+                Some(ty.into())
+            },
+        )?;
         let (checked_left, checked_right, ty, untyped, constant) = self.check_numeric_binary(
             operator,
             operator_span,
@@ -975,7 +1047,6 @@ impl CheckedProgram<'_> {
             untyped,
             value: ExpressionValue::Binary {
                 operator,
-                operator_span: operator_span.clone(),
                 left,
                 right,
             },
@@ -995,6 +1066,13 @@ impl CheckedProgram<'_> {
         right: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
+        let left_hint = self.type_hint(left, scopes)?;
+        let right_hint = self.type_hint(right, scopes)?;
+        let numeric_context = left_hint
+            .as_ref()
+            .or(right_hint.as_ref())
+            .and_then(Type::scalar)
+            .filter(|ty| ty.is_numeric());
         // A `null` operand takes the other operand's type.
         let (mut checked_left, mut checked_right) = match (self.is_null(left), self.is_null(right))
         {
@@ -1011,8 +1089,8 @@ impl CheckedProgram<'_> {
                 (checked_left, checked_right)
             }
             _ => (
-                self.infer_expression(left, scopes)?,
-                self.infer_expression(right, scopes)?,
+                self.check_expression(left, scopes, numeric_context.map(Type::Scalar))?,
+                self.check_expression(right, scopes, numeric_context.map(Type::Scalar))?,
             ),
         };
         self.unify_comparison(
@@ -1033,7 +1111,6 @@ impl CheckedProgram<'_> {
             untyped: constant.is_some(),
             value: ExpressionValue::Comparison {
                 operator,
-                operator_span: operator_span.clone(),
                 left,
                 right,
             },
@@ -1058,30 +1135,35 @@ impl CheckedProgram<'_> {
     ) -> Result<(), Diagnostic> {
         let (left_id, left) = left;
         let (right_id, right) = right;
-        let unified = match (left.ty.scalar(), right.ty.scalar()) {
-            (Some(left_type), Some(right_type)) => match (left.untyped, right.untyped) {
-                (false, true) => return self.concretize(right_id, right, left_type),
-                (true, false) => return self.concretize(left_id, left, right_type),
-                (true, true) if left_type.is_integer() && right_type.is_floating() => {
-                    return self.make_untyped_floating(left_id, left);
-                }
-                (true, true) if left_type.is_floating() && right_type.is_integer() => {
-                    return self.make_untyped_floating(right_id, right);
-                }
-                _ => left_type == right_type,
-            },
-            // A `*T` compares with a `nullable *T` as a `nullable *T`.
-            _ if left.ty.widens_to(&right.ty) => {
-                left.ty = right.ty.clone();
-                true
+        if let (Some(a), Some(b)) = (left.ty.scalar(), right.ty.scalar()) {
+            let ty = if !left.untyped {
+                a
+            } else if !right.untyped {
+                b
+            } else if a.is_floating() || b.is_floating() {
+                Scalar::F64
+            } else {
+                a
+            };
+            if !operator.is_equality() && !ty.is_numeric() {
+                return Err(Diagnostic::new(
+                    operator_span.clone(),
+                    "ordering requires numeric operands",
+                ));
             }
-            _ if right.ty.widens_to(&left.ty) => {
-                right.ty = left.ty.clone();
-                true
+            if left.untyped {
+                self.concretize(left_id, left, ty)?;
             }
-            _ => left.ty == right.ty,
-        };
-        if !unified {
+            if right.untyped {
+                self.concretize(right_id, right, ty)?;
+            }
+        } else if !operator.is_equality() {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                format!("only `==` and `!=` are defined on `{}`", left.ty),
+            ));
+        }
+        if left.ty != right.ty {
             return Err(Diagnostic::new(
                 operator_span.clone(),
                 format!(
@@ -1090,19 +1172,13 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        if left.ty.scalar().is_none() && !operator.is_equality() {
-            return Err(Diagnostic::new(
-                operator_span.clone(),
-                format!("only `==` and `!=` are defined on `{}`", left.ty),
-            ));
-        }
         Ok(())
     }
 
     fn infer_logical(
         &mut self,
         operator: LogicalOperator,
-        operator_span: &std::ops::Range<usize>,
+        _operator_span: &std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
         scopes: &ScopeStack<'_>,
@@ -1128,7 +1204,6 @@ impl CheckedProgram<'_> {
             untyped: checked_left.untyped && checked_right.untyped,
             value: ExpressionValue::Logical {
                 operator,
-                operator_span: operator_span.clone(),
                 left,
                 right,
             },
@@ -1142,7 +1217,7 @@ impl CheckedProgram<'_> {
 
     fn infer_logical_not(
         &mut self,
-        operator_span: &std::ops::Range<usize>,
+        _operator_span: &std::ops::Range<usize>,
         operand: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
@@ -1154,10 +1229,7 @@ impl CheckedProgram<'_> {
         let result = CheckedExpression {
             ty: Scalar::Bool.into(),
             untyped: checked_operand.untyped,
-            value: ExpressionValue::LogicalNot {
-                operator_span: operator_span.clone(),
-                operand,
-            },
+            value: ExpressionValue::LogicalNot { operand },
             constant: constant.map(Constant::Integer),
         };
         self.record_operand(operand, checked_operand, result.constant.is_some());
@@ -1167,37 +1239,29 @@ impl CheckedProgram<'_> {
     fn infer_conversion(
         &mut self,
         destination: Scalar,
-        truncating: bool,
         operand: Idx<Expression>,
         span: &std::ops::Range<usize>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let mut checked_operand = self.infer_expression(operand, scopes)?;
         // Only integers reinterpret their bits, while every number converts.
-        let convertible = if truncating {
-            integer_operand(&checked_operand)
-        } else {
-            numeric_operand(&checked_operand)
-        };
+        let convertible = numeric_operand(&checked_operand);
         if convertible.is_none() {
             return Err(Diagnostic::new(
                 span.clone(),
                 format!("cannot convert `{}` to `{destination}`", checked_operand.ty),
             ));
         }
-        if checked_operand.untyped && (!truncating || checked_operand.constant.is_none()) {
-            let operand_type = if truncating { Scalar::Int } else { destination };
+        if checked_operand.untyped {
+            let operand_type = checked_operand.ty.scalar().expect("numeric operand");
             self.concretize(operand, &mut checked_operand, operand_type)?;
         }
-        let constant = convert_constant(&checked_operand, destination, truncating, span)?;
+        let constant = convert_constant(&checked_operand, destination, span)?;
         self.record_operand(operand, checked_operand, constant.is_some());
         Ok(CheckedExpression {
             ty: destination.into(),
             untyped: false,
-            value: ExpressionValue::Conversion {
-                operand,
-                truncating,
-            },
+            value: ExpressionValue::Conversion { operand },
             constant,
         })
     }
@@ -1221,87 +1285,40 @@ impl CheckedProgram<'_> {
         ),
         Diagnostic,
     > {
-        let (mut left_type, mut right_type) = binary_operand_types(
+        let (mut left_type, right_type) = binary_operand_types(
             operator,
             operator_span,
             spelling,
             (&left.expression, &right.expression),
         )?;
-        let wrapping = matches!(
-            operator,
-            BinaryOperator::WrappingAdd
-                | BinaryOperator::WrappingSubtract
-                | BinaryOperator::WrappingMultiply
-        );
-        if wrapping && left.expression.untyped && right.expression.untyped {
-            return Err(Diagnostic::new(
-                operator_span.clone(),
-                "wrapping arithmetic requires a typed operand",
-            ));
+        if left.expression.untyped && !right.expression.untyped && !operator.is_shift() {
+            left_type = right_type;
         }
-        if !operator.is_shift() {
-            match (left.expression.untyped, right.expression.untyped) {
-                (false, false) if left_type != right_type => {
-                    return Err(Diagnostic::new(
-                        operator_span.clone(),
-                        format!(
-                            "binary operands have different types `{left_type}` and `{right_type}`"
-                        ),
-                    ));
-                }
-                (false, true) => self.concretize(
-                    right
-                        .id
-                        .expect("an untyped right operand has an expression"),
-                    &mut right.expression,
-                    left_type,
-                )?,
-                (true, false) => {
-                    self.concretize(
-                        left.id.expect("an untyped left operand has an expression"),
-                        &mut left.expression,
-                        right_type,
-                    )?;
-                    left_type = right_type;
-                }
-                // An untyped integer joins an untyped floating-point constant
-                // as the exact value it names.
-                (true, true) if left_type.is_integer() && right_type.is_floating() => {
-                    self.make_untyped_floating(
-                        left.id.expect("an untyped left operand has an expression"),
-                        &mut left.expression,
-                    )?;
-                    left_type = right_type;
-                }
-                (true, true) if left_type.is_floating() && right_type.is_integer() => {
-                    self.make_untyped_floating(
-                        right
-                            .id
-                            .expect("an untyped right operand has an expression"),
-                        &mut right.expression,
-                    )?;
-                    right_type = left_type;
-                }
-                _ => {}
-            }
-        } else if (left.expression.constant.is_none() || right.expression.constant.is_none())
-            && right.expression.untyped
-        {
+        if left.expression.untyped {
             self.concretize(
-                right
-                    .id
-                    .expect("an untyped right operand has an expression"),
-                &mut right.expression,
-                Scalar::Int,
+                left.id.expect("literal operand"),
+                &mut left.expression,
+                left_type,
             )?;
         }
-        let (ty, untyped) = if operator.is_shift() {
-            (left_type, left.expression.untyped)
-        } else if left.expression.untyped {
-            (right_type, right.expression.untyped)
-        } else {
-            (left_type, false)
-        };
+        if right.expression.untyped {
+            self.concretize(
+                right.id.expect("literal operand"),
+                &mut right.expression,
+                if operator.is_shift() {
+                    Scalar::Int
+                } else {
+                    left_type
+                },
+            )?;
+        }
+        if !operator.is_shift() && left.expression.ty != right.expression.ty {
+            return Err(Diagnostic::new(
+                operator_span.clone(),
+                "binary operands have different types",
+            ));
+        }
+        let (ty, untyped) = (left_type, false);
         let constant = evaluate_binary(
             operator,
             operator_span.clone(),
@@ -1311,27 +1328,6 @@ impl CheckedProgram<'_> {
             (&left.expression, &right.expression),
         )?;
         Ok((left, right, ty, untyped, constant))
-    }
-
-    /// Gives an untyped integer constant the exact floating-point value it
-    /// names, which is the one form it combines with an untyped
-    /// floating-point constant in.
-    fn make_untyped_floating(
-        &self,
-        id: Idx<Expression>,
-        checked: &mut CheckedExpression,
-    ) -> Result<(), Diagnostic> {
-        if to_untyped_floating(checked) {
-            return Ok(());
-        }
-        Err(Diagnostic::new(
-            self.syntax.expressions[id].span.clone(),
-            format!(
-                "cannot implicitly convert `{}` to `{}`",
-                checked.ty,
-                Scalar::F64
-            ),
-        ))
     }
 
     fn concretize(
@@ -1374,29 +1370,10 @@ impl CheckedProgram<'_> {
         &mut self,
         id: Idx<Expression>,
         destination: Scalar,
-        constant: bool,
+        _constant: bool,
     ) -> Result<(), Diagnostic> {
         let (first, second) = match &self.syntax.expressions[id].kind {
             ExpressionKind::Grouping { expression } => (Some(*expression), None),
-            ExpressionKind::Unary {
-                operator,
-                operator_span,
-                operand,
-            } if !constant => {
-                if *operator == UnaryOperator::Negate && !destination.signed() {
-                    return Err(Diagnostic::new(
-                        operator_span.clone(),
-                        format!("unary `-` is not permitted on `{destination}`"),
-                    ));
-                }
-                (Some(*operand), None)
-            }
-            ExpressionKind::Binary {
-                operator: BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight,
-                left,
-                ..
-            } if !constant => (Some(*left), None),
-            ExpressionKind::Binary { left, right, .. } if !constant => (Some(*left), Some(*right)),
             _ => (None, None),
         };
         for child in first.into_iter().chain(second) {

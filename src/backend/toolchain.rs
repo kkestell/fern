@@ -1,14 +1,10 @@
 //! Temporary-file and native-tool orchestration.
 
-use crate::{CompileError, ir::verify::VerifiedProgram, source::SourceMap};
+use crate::{CompileError, ir::verify::VerifiedProgram};
 use std::{env, fs, path::Path, process::Command};
 
-pub(crate) fn build(
-    program: &VerifiedProgram,
-    sources: &SourceMap,
-    output: &Path,
-) -> Result<(), CompileError> {
-    build_text(&super::emitter::emit(program, Some(sources)), output)
+pub(crate) fn build(program: &VerifiedProgram, output: &Path) -> Result<(), CompileError> {
+    build_text(&super::emitter::emit(program), output)
 }
 
 pub(super) fn build_text(text: &str, output: &Path) -> Result<(), CompileError> {

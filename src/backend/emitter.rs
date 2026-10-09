@@ -1,20 +1,14 @@
 //! QBE program, function, block, instruction, place, aggregate, and data emission.
 //!
-//! Generated code does not grow with an aggregate's length. Aggregates are
-//! passed and returned through addresses rather than QBE aggregate types, and
-//! are copied, zeroed, and filled with C library calls or loops. A callee reads
-//! an aggregate parameter from the storage its caller passed, which is copied
-//! only when lowering loaded the argument rather than borrowing it. Every Fern
-//! call checks the available stack before entering the callee.
+//! Aggregates travel through addresses and are copied with blit or memcpy.
+//! Callees copy aggregate arguments into their local parameter storage.
 
 use crate::{
-    diagnostic::DiagnosticRenderer,
     ir::model::{
-        BlockId, ConstantId, ControlFlow, Function, FunctionId, Global, Instruction, Literal,
-        Operand, Place, Terminator, ValueId, ValueKind,
+        BlockId, ConstantId, ControlFlow, Function, FunctionId, Global, Instruction, Operand,
+        Place, Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
-    source::SourceMap,
     types::{Scalar, Type},
 };
 use std::fmt::Write;
@@ -56,7 +50,7 @@ const MAX_DIRECT_STATIC_BYTES: u64 = 1 << 23;
 
 /// Names the static data holding constant `id` of function `function`.
 fn constant_symbol(function: usize, ConstantId(id): ConstantId) -> String {
-    format!("function{function}_constant{id}")
+    format!(".fern.function{function}_constant{id}")
 }
 
 /// Writes static data. Its scalars and pointers sit where the layout puts them,
@@ -109,76 +103,29 @@ fn static_address(emitter: &mut Emitter<'_>, symbol: String, ty: Type) -> (Strin
 /// never reach the object file, so a function named `write` or `exit` cannot
 /// collide with libc.
 fn function_symbol(id: FunctionId) -> String {
-    format!("fn{}", id.0)
+    format!(".fern.fn{}", id.0)
 }
 
-/// The address of a place and the type stored there. An element place emits
-/// its bounds check here, so every read and write through it is checked.
 fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) -> (String, Type) {
     let flow = &function.flow;
     match place {
-        // An aggregate parameter is never written, so it is read from the
-        // storage the caller passed rather than from a copy.
-        Place::Local(local)
-            if local.0 < function.parameters && flow.locals[local.0].is_aggregate() =>
-        {
-            (format!("%param{}", local.0), flow.locals[local.0].clone())
-        }
         Place::Local(local) => (format!("%local{}", local.0), flow.locals[local.0].clone()),
         Place::Global(global) => {
             let ty = emitter.globals[global.0].ty.clone();
-            static_address(emitter, format!("global{}", global.0), ty)
+            static_address(emitter, format!(".fern.global{}", global.0), ty)
         }
         Place::Constant(constant) => {
             let symbol = constant_symbol(emitter.function, *constant);
             static_address(emitter, symbol, function.constants[constant.0].ty.clone())
         }
-        Place::Element { base, index, span } => {
+        Place::Element { base, index } => {
             let (base, ty) = place_address(emitter, function, base);
-            let spelling = ty.to_string();
-            let Type::Array { length, element } = ty else {
+            let Type::Array { element, .. } = ty else {
                 unreachable!("a verified element place indexes an array")
             };
             let access = emitter.accesses;
             emitter.accesses += 1;
-            // A constant index the checker accepted is in range, so only an
-            // index computed at run time needs the check. Lowering writes an
-            // array literal through constant indices, and a check for each of
-            // them would carry a trap block and a message that cannot run.
-            let constant = match index {
-                Operand::Literal(Literal::Integer { value, .. }) => {
-                    (0..i128::from(length)).contains(value)
-                }
-                Operand::Literal(Literal::Floating(_) | Literal::Null(_)) => {
-                    unreachable!("a verified index has type `int`")
-                }
-                Operand::Value(_) => false,
-            };
             let index = operand(index.clone());
-            if !constant {
-                // Indices are signed, so one unsigned comparison rejects both
-                // a negative index and one at or past the length.
-                writeln!(
-                    emitter.text,
-                    "    %access{access}_out =w {} {index}, {length}",
-                    comparison_operation("ge", false, Scalar::Int)
-                )
-                .unwrap();
-                let message = operation_message(
-                    Some(span),
-                    emitter.diagnostics.as_ref(),
-                    &format!("array index out of range for `{spelling}`"),
-                );
-                emit_conditional_trap(
-                    &mut emitter.text,
-                    &mut emitter.data,
-                    emitter.function,
-                    access,
-                    "bounds",
-                    &format!("%access{access}_out"),
-                    message,
-                );
-            }
             writeln!(
                 emitter.text,
                 "    %access{access}_offset =l mul {index}, {}",
@@ -225,14 +172,9 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
     }
 }
 
-pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> String {
+pub(super) fn emit(verified: &VerifiedProgram) -> String {
     let program = verified.program();
     let layout = Layout::new(&program.structs);
-    let storage_bytes = program
-        .functions
-        .iter()
-        .map(|function| storage_bytes(&layout, function))
-        .collect();
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
@@ -240,23 +182,21 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         globals: &program.globals,
         functions: &program.functions,
         main: program.main,
-        storage_bytes,
-        stack_checks: 0,
         function: 0,
         qbe_result: None,
         returned_in_place: Vec::new(),
         accesses: 0,
         comparisons: 0,
-        fills: 0,
-        diagnostics: sources.map(DiagnosticRenderer::new),
     };
-    emit_entry(&mut emitter, &program.main_span);
+    emit_entry(&mut emitter);
     for (id, global) in program.globals.iter().enumerate() {
-        emit_data(&mut emitter, &format!("global{id}"), global);
+        emit_data(&mut emitter, &format!(".fern.global{id}"), global);
     }
     for (index, function) in program.functions.iter().enumerate() {
+        if function.external.is_some() {
+            continue;
+        }
         let id = FunctionId(index);
-        let entry = id == program.main;
         emitter.function = index;
         for (constant, data) in function.constants.iter().enumerate() {
             emit_data(
@@ -265,18 +205,11 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
                 data,
             );
         }
-        // `main` reports the process status, so it returns a word even though
-        // Fern declares it as returning nothing. An aggregate result is
-        // written through the address the caller passes first.
-        emitter.qbe_result = if entry {
-            Some('w')
-        } else {
-            function
-                .result
-                .as_ref()
-                .filter(|ty| !ty.is_aggregate())
-                .map(value_class)
-        };
+        emitter.qbe_result = function
+            .result
+            .as_ref()
+            .filter(|ty| !ty.is_aggregate())
+            .map(value_class);
         emitter.returned_in_place = returned_in_place(function);
         let result = function
             .result
@@ -336,20 +269,11 @@ fn returned_in_place(function: &Function) -> Vec<ValueId> {
         .collect()
 }
 
-/// Leaves room for QBE spills, saved registers, alignment, libc calls, and
-/// the trap's own diagnostic and abort below the checked stack limit.
-const STACK_RESERVE_BYTES: u64 = 64 * 1024;
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-compile_error!("stack bounds discovery requires macOS or Linux");
-
-/// The entry allocations shared by emission and stack accounting.
+/// The local and temporary storage allocated at function entry.
 fn allocations(_layout: &Layout<'_>, function: &Function) -> Vec<(String, Type)> {
-    let mut allocations = vec![("%stack_position".to_owned(), Scalar::U32.into())];
+    let mut allocations = Vec::new();
     for (id, ty) in function.flow.locals.iter().enumerate() {
-        if id >= function.parameters || !ty.is_aggregate() {
-            allocations.push((format!("%local{id}"), ty.clone()));
-        }
+        allocations.push((format!("%local{id}"), ty.clone()));
     }
     let returned = returned_in_place(function);
     for (id, value) in function.values.iter().enumerate() {
@@ -363,116 +287,10 @@ fn allocations(_layout: &Layout<'_>, function: &Function) -> Vec<(String, Type)>
     allocations
 }
 
-pub(super) fn storage_bytes(layout: &Layout<'_>, function: &Function) -> u64 {
-    allocations(layout, function)
-        .iter()
-        .fold(0u64, |bytes, (_, ty)| {
-            bytes
-                .saturating_add(layout.size(ty).saturating_add(7) & !7)
-                .min(i64::MAX as u64)
-        })
-}
-
-fn emit_stack_check(
-    emitter: &mut Emitter<'_>,
-    caller_bytes: u64,
-    callee_bytes: u64,
-    arguments: usize,
-    message: String,
-) {
-    let id = emitter.stack_checks;
-    emitter.stack_checks += 1;
-    let needed = caller_bytes
-        .saturating_add(callee_bytes)
-        .saturating_add((arguments as u64).saturating_mul(8))
-        .min(i64::MAX as u64);
+fn emit_entry(emitter: &mut Emitter<'_>) {
     writeln!(
         emitter.text,
-        "    %stack{id}_limit =l loadl $fern_stack_limit"
-    )
-    .unwrap();
-    writeln!(
-        emitter.text,
-        "    %stack{id}_below =w cultl %stack_position, %stack{id}_limit"
-    )
-    .unwrap();
-    writeln!(
-        emitter.text,
-        "    %stack{id}_available =l sub %stack_position, %stack{id}_limit"
-    )
-    .unwrap();
-    writeln!(
-        emitter.text,
-        "    %stack{id}_short =w cultl %stack{id}_available, {needed}"
-    )
-    .unwrap();
-    writeln!(
-        emitter.text,
-        "    %stack{id}_failed =w or %stack{id}_below, %stack{id}_short"
-    )
-    .unwrap();
-    emit_conditional_trap(
-        &mut emitter.text,
-        &mut emitter.data,
-        emitter.function,
-        id,
-        "stack",
-        &format!("%stack{id}_failed"),
-        message,
-    );
-}
-
-fn emit_entry(emitter: &mut Emitter<'_>, main_span: &std::ops::Range<usize>) {
-    // Keep wrapper message ownership separate from every Fern function.
-    emitter.function = emitter.functions.len();
-    emitter.data.push_str("data $fern_stack_limit = { l 0 }\n");
-    emitter
-        .text
-        .push_str("export function w $main() {\n@start\n    %stack_position =l alloc4 4\n");
-    if cfg!(target_os = "macos") {
-        emitter.text.push_str("    %thread =l call $pthread_self()\n    %stack_top =l call $pthread_get_stackaddr_np(l %thread)\n    %stack_size =l call $pthread_get_stacksize_np(l %thread)\n    %stack_bottom =l sub %stack_top, %stack_size\n");
-    } else {
-        emitter.text.push_str("    %attr =l alloc8 128\n    %address =l alloc8 8\n    %size =l alloc8 8\n    %thread =l call $pthread_self()\n    %attr_status =w call $pthread_getattr_np(l %thread, l %attr)\n");
-        emit_conditional_trap(
-            &mut emitter.text,
-            &mut emitter.data,
-            emitter.function,
-            0,
-            "stack_bounds",
-            "%attr_status",
-            "cannot find the stack bounds\n".to_owned(),
-        );
-        emitter.text.push_str("    %bounds_status =w call $pthread_attr_getstack(l %attr, l %address, l %size)\n    call $pthread_attr_destroy(l %attr)\n");
-        emit_conditional_trap(
-            &mut emitter.text,
-            &mut emitter.data,
-            emitter.function,
-            1,
-            "stack_bounds",
-            "%bounds_status",
-            "cannot find the stack bounds\n".to_owned(),
-        );
-        emitter
-            .text
-            .push_str("    %stack_bottom =l loadl %address\n");
-    }
-    writeln!(emitter.text, "    %stack_limit =l add %stack_bottom, {STACK_RESERVE_BYTES}\n    storel %stack_limit, $fern_stack_limit").unwrap();
-    let message = operation_message(
-        Some(main_span),
-        emitter.diagnostics.as_ref(),
-        "stack overflow",
-    );
-    // The wrapper's fixed allocations occupy at most 160 bytes.
-    emit_stack_check(
-        emitter,
-        160,
-        emitter.storage_bytes[emitter.main.0],
-        0,
-        message,
-    );
-    writeln!(
-        emitter.text,
-        "    %status =w call ${}()\n    ret %status\n}}",
+        "export function w $main() {{\n@start\n    call ${}()\n    ret 0\n}}",
         function_symbol(emitter.main)
     )
     .unwrap();
@@ -488,18 +306,14 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
         )
         .unwrap();
     }
-    // The parameters are the leading locals, so the loop above allocated the
-    // ones carried by value. An aggregate parameter needs no entry copy.
     for index in 0..function.parameters {
         let ty = &flow.locals[index];
-        if !ty.is_aggregate() {
-            writeln!(
-                emitter.text,
-                "    store{} %param{index}, %local{index}",
-                value_class(ty)
-            )
-            .unwrap();
-        }
+        emit_store(
+            emitter,
+            &format!("%param{index}"),
+            &format!("%local{index}"),
+            ty,
+        );
     }
     writeln!(emitter.text, "    jmp @block{}", flow.entry.0).unwrap();
 
@@ -523,46 +337,18 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             let source = operand(source.clone());
             emit_store(emitter, &source, &address, &ty);
         }
-        Instruction::Zero { place } => {
-            let (address, ty) = place_address(emitter, function, place);
-            writeln!(
-                emitter.text,
-                "    call $memset(l {address}, w 0, l {})",
-                emitter.layout.size(&ty)
-            )
-            .unwrap();
-        }
-        Instruction::Fill {
-            place,
-            start,
-            operand: source,
-        } => {
-            let (address, ty) = place_address(emitter, function, place);
-            emit_fill(emitter, &address, &ty, *start, &operand(source.clone()));
-        }
         Instruction::Call {
             result,
             destination,
             function: callee,
             arguments,
-            span,
         } => emit_call(
             emitter,
             function,
             *callee,
             arguments,
             (*result, destination.as_ref()),
-            span,
         ),
-        // `free` ignores a null pointer, which is what freeing `null` does.
-        Instruction::Free { operand: pointer } => {
-            writeln!(
-                emitter.text,
-                "    call $free(l {})",
-                operand(pointer.clone())
-            )
-            .unwrap();
-        }
     }
 }
 
@@ -575,57 +361,10 @@ fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type)
         writeln!(
             emitter.text,
             "    store{} {source}, {address}",
-            value_class(ty)
+            memory_class(ty)
         )
         .unwrap();
     }
-}
-
-/// Stores `source` into each element of the array at `address` from index
-/// `start` on, in a loop whose code does not grow with the array.
-fn emit_fill(emitter: &mut Emitter<'_>, address: &str, ty: &Type, start: u64, source: &str) {
-    let Type::Array { length, element } = ty else {
-        unreachable!("a verified fill stores into an array")
-    };
-    let stride = emitter.layout.size(element);
-    let fill = emitter.fills;
-    emitter.fills += 1;
-    let text = &mut emitter.text;
-    writeln!(text, "    jmp @fill{fill}_start").unwrap();
-    writeln!(text, "@fill{fill}_start").unwrap();
-    writeln!(text, "    jmp @fill{fill}_loop").unwrap();
-    writeln!(text, "@fill{fill}_loop").unwrap();
-    writeln!(
-        text,
-        "    %fill{fill}_index =l phi @fill{fill}_start {start}, @fill{fill}_body %fill{fill}_next"
-    )
-    .unwrap();
-    writeln!(
-        text,
-        "    %fill{fill}_more =w csltl %fill{fill}_index, {length}"
-    )
-    .unwrap();
-    writeln!(
-        text,
-        "    jnz %fill{fill}_more, @fill{fill}_body, @fill{fill}_done"
-    )
-    .unwrap();
-    writeln!(text, "@fill{fill}_body").unwrap();
-    writeln!(
-        text,
-        "    %fill{fill}_offset =l mul %fill{fill}_index, {stride}"
-    )
-    .unwrap();
-    writeln!(
-        text,
-        "    %fill{fill}_address =l add {address}, %fill{fill}_offset"
-    )
-    .unwrap();
-    emit_store(emitter, source, &format!("%fill{fill}_address"), element);
-    let text = &mut emitter.text;
-    writeln!(text, "    %fill{fill}_next =l add %fill{fill}_index, 1").unwrap();
-    writeln!(text, "    jmp @fill{fill}_loop").unwrap();
-    writeln!(text, "@fill{fill}_done").unwrap();
 }
 
 fn emit_call(
@@ -634,7 +373,6 @@ fn emit_call(
     callee: FunctionId,
     arguments: &[Operand],
     (result, destination): (Option<ValueId>, Option<&Place>),
-    span: &std::ops::Range<usize>,
 ) {
     let target = &emitter.functions[callee.0];
     // An aggregate result is written into the call's destination, or into the
@@ -660,22 +398,20 @@ fn emit_call(
         .chain(arguments.iter().enumerate().map(|(index, argument)| {
             format!(
                 "{} {}",
-                emitter.layout.class(&target.flow.locals[index]),
+                if target.external.is_some() {
+                    abi_class(&target.flow.locals[index])
+                } else {
+                    emitter.layout.class(&target.flow.locals[index]).to_string()
+                },
                 operand(argument.clone())
             )
         }))
         .collect::<Vec<_>>()
         .join(", ");
-    let argument_count = target.parameters + usize::from(result_storage.is_some());
-    let message = operation_message(Some(span), emitter.diagnostics.as_ref(), "stack overflow");
-    emit_stack_check(
-        emitter,
-        emitter.storage_bytes[emitter.function],
-        emitter.storage_bytes[callee.0],
-        argument_count,
-        message,
-    );
-    let symbol = function_symbol(callee);
+    let symbol = target
+        .external
+        .clone()
+        .unwrap_or_else(|| function_symbol(callee));
     match (result, &result_storage) {
         (Some(ValueId(id)), Some(storage)) => writeln!(
             emitter.text,
@@ -684,12 +420,14 @@ fn emit_call(
         (Some(ValueId(id)), None) => writeln!(
             emitter.text,
             "    %v{id} ={} call ${symbol}({arguments})",
-            emitter.layout.class(
-                target
-                    .result
-                    .as_ref()
-                    .expect("a call result requires a callee that returns one")
-            )
+            if target.external.is_some() {
+                abi_class(target.result.as_ref().unwrap())
+            } else {
+                emitter
+                    .layout
+                    .class(target.result.as_ref().unwrap())
+                    .to_string()
+            }
         ),
         (None, _) => writeln!(emitter.text, "    call ${symbol}({arguments})"),
     }
@@ -699,7 +437,7 @@ fn emit_call(
 fn emit_terminator(
     emitter: &mut Emitter<'_>,
     function: &Function,
-    block: BlockId,
+    _block: BlockId,
     terminator: &Terminator,
 ) {
     match terminator {
@@ -720,17 +458,6 @@ fn emit_terminator(
                 else_target.0
             )
             .unwrap();
-        }
-        Terminator::Exit { status, .. } => {
-            writeln!(
-                emitter.text,
-                "    %block{}_status =w and {}, 255",
-                block.0,
-                operand(status.clone())
-            )
-            .unwrap();
-            writeln!(emitter.text, "    call $exit(w %block{}_status)", block.0).unwrap();
-            emitter.text.push_str("    hlt\n");
         }
         Terminator::Return { value } => match value {
             Some(value) => match function.result.as_ref().filter(|ty| ty.is_aggregate()) {
@@ -763,6 +490,47 @@ fn emit_terminator(
 fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
     let value = &function.values[id];
     match &value.kind {
+        ValueKind::PointerOffset {
+            pointer,
+            offset,
+            subtract,
+        } => {
+            let Type::Pointer { target } = &value.ty else {
+                unreachable!()
+            };
+            writeln!(
+                emitter.text,
+                "    %offset{id} =l mul {}, {}",
+                operand(offset.clone()),
+                emitter.layout.size(target)
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id} =l {} {}, %offset{id}",
+                if *subtract { "sub" } else { "add" },
+                operand(pointer.clone())
+            )
+            .unwrap();
+        }
+        ValueKind::PointerDifference { left, right } => {
+            let Type::Pointer { target } = operand_type(function, left.clone()) else {
+                unreachable!()
+            };
+            writeln!(
+                emitter.text,
+                "    %distance{id} =l sub {}, {}",
+                operand(left.clone()),
+                operand(right.clone())
+            )
+            .unwrap();
+            writeln!(
+                emitter.text,
+                "    %v{id} =l div %distance{id}, {}",
+                emitter.layout.size(&target)
+            )
+            .unwrap();
+        }
         ValueKind::Load(source) => {
             let (address, _) = place_address(emitter, function, source);
             // Loading an aggregate copies it, so a later call in the same
@@ -781,7 +549,11 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                 writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
             } else {
                 let class = value_class(&value.ty);
-                writeln!(emitter.text, "    %v{id} ={class} load{class} {address}")
+                writeln!(
+                    emitter.text,
+                    "    %v{id} ={class} {} {address}",
+                    load_operation(&value.ty)
+                )
             }
             .unwrap();
         }
@@ -792,19 +564,13 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
         }
         // A call result is defined by its call instruction.
         ValueKind::CallResult => {}
-        ValueKind::Convert {
-            operand: source,
-            truncating,
-        } => {
+        ValueKind::Convert { operand: source } => {
             let ty = scalar(&value.ty);
             let source_ty = operand_scalar(function, source.clone());
             if ty.is_floating() || source_ty.is_floating() {
                 floating::emit_conversion(emitter, id, value, source.clone(), source_ty, ty);
-            } else if *truncating || source_ty.all_values_fit(ty) {
-                emit_truncation(&mut emitter.text, id, source.clone(), source_ty, ty);
             } else {
-                let message = conversion_message(emitter, value, source_ty, ty);
-                emit_checked_conversion(emitter, id, source.clone(), source_ty, ty, message);
+                emit_truncation(&mut emitter.text, id, source.clone(), source_ty, ty);
             }
         }
         ValueKind::Unary { operator, operand } => {
@@ -817,7 +583,6 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
         }
         ValueKind::Binary {
             operator,
-            form,
             left,
             right,
         } => {
@@ -837,7 +602,6 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                     id,
                     value,
                     *operator,
-                    *form,
                     (left.clone(), right.clone()),
                     function,
                 );
@@ -897,52 +661,13 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             let (address, _) = place_address(emitter, function, place);
             writeln!(emitter.text, "    %v{id} =l copy {address}").unwrap();
         }
-        // Every Fern type has a nonzero size, so a null result means the
-        // allocation failed.
-        ValueKind::Allocate => {
-            let Type::Pointer { target, .. } = &value.ty else {
-                unreachable!("a verified allocation has a pointer type")
-            };
+        ValueKind::PointerCast { operand: pointer } => {
             writeln!(
                 emitter.text,
-                "    %v{id} =l call $malloc(l {})",
-                emitter.layout.size(target)
+                "    %v{id} =l copy {}",
+                operand(pointer.clone())
             )
             .unwrap();
-            writeln!(emitter.text, "    %v{id}_failed =w ceql %v{id}, 0").unwrap();
-            let message = operation_message(
-                value.span.as_ref(),
-                emitter.diagnostics.as_ref(),
-                "out of memory",
-            );
-            emit_conditional_trap(
-                &mut emitter.text,
-                &mut emitter.data,
-                emitter.function,
-                id,
-                "allocation",
-                &format!("%v{id}_failed"),
-                message,
-            );
-        }
-        ValueKind::CheckNull { operand: pointer } => {
-            let pointer = operand(pointer.clone());
-            writeln!(emitter.text, "    %v{id}_null =w ceql {pointer}, 0").unwrap();
-            let message = operation_message(
-                value.span.as_ref(),
-                emitter.diagnostics.as_ref(),
-                "null pointer",
-            );
-            emit_conditional_trap(
-                &mut emitter.text,
-                &mut emitter.data,
-                emitter.function,
-                id,
-                "null",
-                &format!("%v{id}_null"),
-                message,
-            );
-            writeln!(emitter.text, "    %v{id} =l copy {pointer}").unwrap();
         }
     }
 }

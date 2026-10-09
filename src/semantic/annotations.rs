@@ -2,9 +2,7 @@
 
 use crate::{
     diagnostic::Diagnostic,
-    frontend::syntax::{
-        AnnotationKind, Expression, ExpressionKind, Syntax, TypeAnnotation, find_call,
-    },
+    frontend::syntax::{AnnotationKind, Expression, TypeAnnotation, find_call},
     types::{MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, Type},
 };
 
@@ -14,55 +12,26 @@ use num_traits::ToPrimitive;
 
 use super::model::*;
 
-/// Where an annotation's type is used. A pointer's target is only referred
-/// to, so resolving it neither resolves struct fields nor validates its
-/// layout; a struct may therefore hold a pointer to itself. The enclosing
-/// pointer validates the target's layout once it is final.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Placement {
     Value,
     PointerTarget,
 }
 
-/// The length `[_]` takes from the declaration's initializer, which must be an
-/// array literal that states its own length.
-pub(super) fn inferred_length(
-    syntax: &Syntax,
-    span: &std::ops::Range<usize>,
-    initializer: Option<Idx<Expression>>,
-) -> Result<u64, Diagnostic> {
-    let literal = initializer.map(|id| &syntax.expressions[id].kind);
-    let Some(ExpressionKind::ArrayLiteral { elements, fill }) = literal else {
-        return Err(Diagnostic::new(
-            span.clone(),
-            "`[_]` requires an array-literal initializer",
-        ));
-    };
-    if fill.is_some() {
-        return Err(Diagnostic::new(
-            span.clone(),
-            "`[_]` cannot take a length from a literal with a fill",
-        ));
-    }
-    Ok(u64::try_from(elements.len()).expect("a source file holds fewer elements than u64::MAX"))
-}
 impl CheckedProgram<'_> {
-    /// Resolves a written annotation to the type it names. `initializer` is the
-    /// declaration's initializer, which is where a `[_]` length comes from.
+    /// Resolves a written annotation to its concrete type.
     pub(super) fn resolve_annotation(
         &mut self,
         annotation: Idx<TypeAnnotation>,
         scopes: &ScopeStack<'_>,
-        initializer: Option<Idx<Expression>>,
     ) -> Result<Type, Diagnostic> {
-        self.resolve_written(annotation, scopes, initializer, Placement::Value)
+        self.resolve_written(annotation, scopes, Placement::Value)
     }
 
     fn resolve_written(
         &mut self,
         annotation: Idx<TypeAnnotation>,
         scopes: &ScopeStack<'_>,
-        initializer: Option<Idx<Expression>>,
         placement: Placement,
     ) -> Result<Type, Diagnostic> {
         let syntax = self.syntax;
@@ -78,23 +47,17 @@ impl CheckedProgram<'_> {
             }
             AnnotationKind::Array { length, element } => {
                 let (length, element) = (*length, *element);
-                let length = match length {
-                    Some(length) => self.array_length(length, scopes)?,
-                    None => inferred_length(syntax, &written.span, initializer)?,
-                };
-                // Only the declaration's own annotation has an initializer, so
-                // a nested `[_]` has nothing to take a length from.
-                let element = self.resolve_written(element, scopes, None, placement)?;
+                let length = self.array_length(length, scopes)?;
+                let element = self.resolve_written(element, scopes, placement)?;
                 Ok(Type::Array {
                     length,
                     element: Box::new(element),
                 })
             }
-            AnnotationKind::Pointer { nullable, target } => {
-                let (nullable, target) = (*nullable, *target);
+            AnnotationKind::Pointer { target } => {
+                let target = *target;
                 let target_span = syntax.annotations[target].span.clone();
-                let target =
-                    self.resolve_written(target, scopes, None, Placement::PointerTarget)?;
+                let target = self.resolve_written(target, scopes, Placement::PointerTarget)?;
                 // A target's layout is final once every struct it holds by
                 // value has resolved; until then it waits for the module's
                 // structs, so no partial struct layout is cached.
@@ -104,7 +67,6 @@ impl CheckedProgram<'_> {
                     self.pending_targets.push((target.clone(), target_span));
                 }
                 Ok(Type::Pointer {
-                    nullable,
                     target: Box::new(target),
                 })
             }
@@ -194,10 +156,6 @@ impl CheckedProgram<'_> {
         self.file = outer;
         if result.is_ok() {
             self.structs[id.0].state = FieldState::Resolved;
-            self.structs[id.0].has_zero_value = self.structs[id.0]
-                .fields
-                .iter()
-                .all(|field| self.has_zero_value(&field.ty));
         } else {
             // A struct that failed to resolve holds only the fields the walk
             // reached, so it returns to the state it had before the attempt.
@@ -223,7 +181,7 @@ impl CheckedProgram<'_> {
                     ),
                 ));
             }
-            let ty = self.resolve_annotation(field.annotation, scopes, None)?;
+            let ty = self.resolve_annotation(field.annotation, scopes)?;
             let ordinal = self.structs[id.0].fields.len();
             self.structs[id.0].ordinals.insert(field.name, ordinal);
             self.structs[id.0].fields.push(CheckedField {
@@ -262,26 +220,19 @@ impl CheckedProgram<'_> {
     }
 }
 
-/// Checks a literal's element count against the array's length. A fill covers
-/// the remaining elements, so it only bounds the count from above.
+/// Requires the literal to supply every element.
 pub(super) fn check_element_count(
     span: std::ops::Range<usize>,
     ty: &Type,
     length: u64,
     count: usize,
-    fill: bool,
 ) -> Result<(), Diagnostic> {
-    let count = u64::try_from(count).expect("a source file holds fewer elements than u64::MAX");
-    if if fill {
-        count <= length
+    if u64::try_from(count).ok() == Some(length) {
+        Ok(())
     } else {
-        count == length
-    } {
-        return Ok(());
+        Err(Diagnostic::new(
+            span,
+            format!("`{ty}` requires {length} elements, found {count}"),
+        ))
     }
-    let bound = if fill { "at most " } else { "" };
-    Err(Diagnostic::new(
-        span,
-        format!("expected {bound}{length} elements for `{ty}`, found {count}"),
-    ))
 }

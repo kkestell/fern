@@ -1,31 +1,21 @@
+extern fn exit(status: i32) -> void;
+
 type Point struct {
-    x: int,
-    y: int,
+    x: f64,
+    y: f64,
 }
 
-type Segment struct {
-    start: Point,
-    end: Point,
+fn translated(point: Point) -> Point {
+    point.x += 1.0;
+    return point;
 }
 
 fn main() -> void {
-    var segment = Segment {
-        start = Point { x = 10, y = 20 },
-        end = Point { ... },
-    };
-
-    segment.end.x = segment.start.x + 5;
-    segment.end.y = segment.start.y + 7;
-
-    // Assigning a struct copies its fields, including nested structs.
-    var copy = segment;
-    copy.start.x = 0;
-    if copy == segment {
+    var original = Point { x = 1.0, y = 2.0 };
+    var copy = translated(original);
+    var pointer = &copy;
+    (*pointer).y = 3.0;
+    if original.x != 1.0 || copy.x != 2.0 || copy.y != 3.0 {
         exit(1);
     }
-
-    if segment.end.x != 15 || segment.end.y != 27 {
-        exit(2);
-    }
-    exit(42);
 }

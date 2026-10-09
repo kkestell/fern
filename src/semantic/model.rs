@@ -1,13 +1,12 @@
 //! Checked values, bindings, signatures, and program storage.
 
 use crate::{
-    diagnostic::Diagnostic,
     frontend::syntax::{Expression, Function, Statement, StructDeclaration, Syntax},
     layout::{Layouts, StructFields},
     source::FileId,
     types::{
-        BinaryOperator, ComparisonOperator, Float, LogicalOperator, Scalar, StructId, StructType,
-        Type, UnaryOperator,
+        BinaryOperator, ComparisonOperator, Float, LogicalOperator, StructId, StructType, Type,
+        UnaryOperator,
     },
 };
 
@@ -17,32 +16,19 @@ use lasso::Spur;
 
 use num_bigint::BigInt;
 
-use num_rational::BigRational;
-
 use std::collections::HashMap;
 
 use super::namespaces::{FileImports, Namespace};
 
-/// The largest number of scalar constants the checker expands for one
-/// aggregate initializer. Array and struct fills retain one constant per
-/// scalar until lowering gains a compact repeated-value representation.
-pub(super) const MAX_AGGREGATE_INITIALIZER_VALUES: u64 = 1_000_000;
-
-/// The value a constant expression folds to. An array literal folds when
-/// every element does, and a struct literal when every field does.
-///
-/// An untyped constant keeps the exact value it was written with: an integer
-/// as a `BigInt` and a floating-point value as a `Rational`. A concrete
-/// floating-point value has already rounded to its format, so it is a `Float`.
+/// Concrete constants. BigInt accommodates literal parsing before context
+/// chooses a width; arithmetic is normalized after every operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Constant {
     Integer(BigInt),
-    Rational(BigRational),
     Float(Float),
     Array(Vec<Constant>),
     /// One value per field, in declaration order.
     Struct(Vec<Constant>),
-    /// The `null` value of a nullable pointer type.
     Null,
 }
 
@@ -52,31 +38,7 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => {
-                None
-            }
-        }
-    }
-
-    /// The exact value an untyped floating-point constant folded to.
-    pub(crate) fn rational(&self) -> Option<&BigRational> {
-        match self {
-            Self::Rational(value) => Some(value),
-            Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => {
-                None
-            }
-        }
-    }
-
-    /// The concrete floating-point value this constant folded to.
-    pub(crate) fn float(&self) -> Option<Float> {
-        match self {
-            Self::Float(value) => Some(*value),
-            Self::Integer(_)
-            | Self::Rational(_)
-            | Self::Array(_)
-            | Self::Struct(_)
-            | Self::Null => None,
+            Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => None,
         }
     }
 }
@@ -84,12 +46,6 @@ impl Constant {
 impl From<BigInt> for Constant {
     fn from(value: BigInt) -> Self {
         Self::Integer(value)
-    }
-}
-
-impl From<BigRational> for Constant {
-    fn from(value: BigRational) -> Self {
-        Self::Rational(value)
     }
 }
 
@@ -108,6 +64,15 @@ pub(crate) struct Binding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionValue {
+    PointerOffset {
+        pointer: Idx<Expression>,
+        offset: Idx<Expression>,
+        subtract: bool,
+    },
+    PointerDifference {
+        left: Idx<Expression>,
+        right: Idx<Expression>,
+    },
     Integer,
     /// A compound assignment's already-checked target, used only while
     /// selecting its binary-operator rules.
@@ -120,55 +85,42 @@ pub(crate) enum ExpressionValue {
     },
     Conversion {
         operand: Idx<Expression>,
-        truncating: bool,
     },
     Unary {
         operator: UnaryOperator,
-        operator_span: std::ops::Range<usize>,
         operand: Idx<Expression>,
     },
     Binary {
         operator: BinaryOperator,
-        operator_span: std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
     },
     Comparison {
         operator: ComparisonOperator,
-        operator_span: std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
     },
     Logical {
         operator: LogicalOperator,
-        operator_span: std::ops::Range<usize>,
         left: Idx<Expression>,
         right: Idx<Expression>,
     },
     LogicalNot {
-        operator_span: std::ops::Range<usize>,
         operand: Idx<Expression>,
     },
     Call {
         function: Idx<Function>,
     },
-    /// An array literal, whose fill repeats the last element across the
-    /// array's remaining elements.
     Array {
         elements: Vec<Idx<Expression>>,
-        fill: bool,
     },
     Index {
         operand: Idx<Expression>,
         index: Idx<Expression>,
     },
-    /// A struct literal. `initializers` are the written fields in source
-    /// order, which is the order they are evaluated in, and `filled` holds
-    /// the zero value `...` gives each field the literal omits.
     Struct {
         id: StructId,
         initializers: Vec<(usize, Idx<Expression>)>,
-        filled: Vec<(usize, Constant)>,
     },
     /// `value.field`, holding the field's position in its declaration.
     Field {
@@ -188,11 +140,7 @@ pub(crate) enum ExpressionValue {
     },
     /// `null`, typed by its context.
     Null,
-    /// `new(e)`, a pointer to a new heap target holding the operand's value.
-    New {
-        operand: Idx<Expression>,
-    },
-    /// `*T(p)`, the pointer `p` holds, which traps when `p` is `null`.
+    /// A raw pointer reinterpretation.
     PointerConversion {
         operand: Idx<Expression>,
     },
@@ -212,17 +160,6 @@ impl CheckedExpression {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         self.constant.as_ref().and_then(Constant::integer)
     }
-
-    /// The exact value this expression folded to as an untyped
-    /// floating-point constant.
-    pub(crate) fn rational(&self) -> Option<&BigRational> {
-        self.constant.as_ref().and_then(Constant::rational)
-    }
-
-    /// The concrete floating-point value this expression folded to.
-    pub(crate) fn float(&self) -> Option<Float> {
-        self.constant.as_ref().and_then(Constant::float)
-    }
 }
 
 pub(super) struct CheckedBinaryOperand {
@@ -236,9 +173,6 @@ pub(crate) struct FunctionSignature {
     pub result: Option<Type>,
 }
 
-/// A checked location: a binding, the target of a pointer, or an index or
-/// field selection from another location. An index or field step looks
-/// through every non-nullable pointer its operand's type has.
 #[derive(Debug)]
 pub(crate) struct CheckedLocation {
     pub kind: CheckedLocationKind,
@@ -303,16 +237,6 @@ pub(crate) struct CheckedStruct {
     pub fields: Vec<CheckedField>,
     pub ordinals: HashMap<Spur, usize>,
     pub(super) state: FieldState,
-    /// Whether every field has a zero value, set once the fields resolve.
-    pub(super) has_zero_value: bool,
-}
-
-/// The bindings a `for … in` statement introduces. They belong to the
-/// statement rather than to a declaration, so they are recorded on their own.
-#[derive(Debug)]
-pub(crate) struct IterationBindings {
-    pub value: Idx<Binding>,
-    pub index: Option<Idx<Binding>>,
 }
 
 #[derive(Debug)]
@@ -326,7 +250,6 @@ pub(crate) struct CheckedProgram<'a> {
     pub assignments: ArenaMap<Idx<Statement>, CheckedTarget>,
     /// The location each `&` expression takes the address of.
     pub addresses: ArenaMap<Idx<Expression>, CheckedLocation>,
-    pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,
     pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
     /// Every struct the program declares, indexed by its `StructId`.
@@ -381,98 +304,6 @@ impl CheckedProgram<'_> {
                 .resolve(&self.syntax.structs[declaration].name)
                 .to_owned(),
         })
-    }
-
-    /// Whether this type has a zero value. A non-nullable pointer has none,
-    /// and neither does an array or struct that holds one.
-    pub(super) fn has_zero_value(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Scalar(_) => true,
-            Type::Array { element, .. } => self.has_zero_value(element),
-            Type::Struct(ty) => self.structs[ty.id.0].has_zero_value,
-            Type::Pointer { nullable, .. } => *nullable,
-        }
-    }
-
-    /// Rejects a declaration without an initializer whose type has no zero
-    /// value to start from.
-    pub(super) fn require_zero_value(
-        &self,
-        ty: &Type,
-        span: &std::ops::Range<usize>,
-    ) -> Result<(), Diagnostic> {
-        if self.has_zero_value(ty) {
-            Ok(())
-        } else {
-            Err(Diagnostic::new(
-                span.clone(),
-                format!("`{ty}` has no zero value"),
-            ))
-        }
-    }
-
-    /// The value a binding or field of this type holds before anything is
-    /// stored into it: `0` for a number, `false` for a `bool`, `null` for a
-    /// nullable pointer, and zero values throughout an array or struct.
-    pub(super) fn zero_value(
-        &self,
-        ty: &Type,
-        span: &std::ops::Range<usize>,
-    ) -> Result<Constant, Diagnostic> {
-        if self
-            .aggregate_value_count(ty)
-            .is_none_or(|count| count > MAX_AGGREGATE_INITIALIZER_VALUES)
-        {
-            return Err(Diagnostic::new(
-                span.clone(),
-                format!(
-                    "aggregate initializer exceeds compiler limit of {MAX_AGGREGATE_INITIALIZER_VALUES} values"
-                ),
-            ));
-        }
-        Ok(self.zero_value_unchecked(ty))
-    }
-
-    pub(super) fn zero_value_unchecked(&self, ty: &Type) -> Constant {
-        match ty {
-            Type::Scalar(Scalar::F32) => Constant::Float(Float::Binary32(0)),
-            Type::Scalar(Scalar::F64) => Constant::Float(Float::Binary64(0)),
-            Type::Scalar(_) => Constant::Integer(BigInt::ZERO),
-            Type::Array { length, element } => {
-                let length = usize::try_from(*length)
-                    .expect("the checked aggregate initializer limit fits usize");
-                Constant::Array(vec![self.zero_value_unchecked(element); length])
-            }
-            Type::Struct(ty) => Constant::Struct(
-                self.structs[ty.id.0]
-                    .fields
-                    .iter()
-                    .map(|field| self.zero_value_unchecked(&field.ty))
-                    .collect(),
-            ),
-            Type::Pointer { nullable: true, .. } => Constant::Null,
-            Type::Pointer {
-                nullable: false, ..
-            } => {
-                unreachable!("a type without a zero value is rejected before one is built")
-            }
-        }
-    }
-
-    pub(super) fn aggregate_value_count(&self, ty: &Type) -> Option<u64> {
-        match ty {
-            Type::Scalar(_) => Some(1),
-            Type::Array { length, element } => {
-                length.checked_mul(self.aggregate_value_count(element)?)
-            }
-            Type::Struct(ty) => self.structs[ty.id.0]
-                .fields
-                .iter()
-                .try_fold(0u64, |count, field| {
-                    count.checked_add(self.aggregate_value_count(&field.ty)?)
-                }),
-            Type::Pointer { .. } => Some(1),
-        }
     }
 }
 

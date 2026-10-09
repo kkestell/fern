@@ -1,9 +1,11 @@
 use counter;
 
+extern fn exit(status: i32) -> void;
+
 const base: int = 20;
 
 fn main() -> void {
     counter::value = base;
     counter::bump(step_total());
-    exit(counter::value + base - 10); // reports 42
+    exit(i32(counter::value + base - 10)); // reports 42
 }

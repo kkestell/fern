@@ -5,7 +5,7 @@ use crate::types::{BinaryOperator, ComparisonOperator, Float, Scalar, Type, Unar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ValueId(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LocalId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,14 +42,19 @@ pub(crate) enum Place {
         base: Box<Place>,
         ordinal: usize,
     },
+    /// The target of a non-nullable pointer value.
+    Indirect {
+        pointer: Operand,
+    },
 }
 
 impl Place {
-    /// The local, global, or constant beneath every element and field step.
+    /// The local, global, constant, or pointer target beneath every element
+    /// and field step.
     pub(crate) fn root(&self) -> &Place {
         match self {
             Self::Element { base, .. } | Self::Field { base, .. } => base.root(),
-            Self::Local(_) | Self::Global(_) | Self::Constant(_) => self,
+            Self::Local(_) | Self::Global(_) | Self::Constant(_) | Self::Indirect { .. } => self,
         }
     }
 }
@@ -67,6 +72,8 @@ pub(crate) enum Literal {
     /// A floating-point value, which keeps the bits of its interchange format
     /// rather than the integer they spell.
     Floating(Float),
+    /// `null` of a nullable pointer type.
+    Null(Type),
 }
 
 impl Literal {
@@ -74,6 +81,7 @@ impl Literal {
         match self {
             Self::Integer { ty, .. } => (*ty).into(),
             Self::Floating(value) => value.ty().into(),
+            Self::Null(ty) => ty.clone(),
         }
     }
 }
@@ -89,10 +97,21 @@ pub(crate) enum ValueKind {
     Load(Place),
     /// An aggregate read from its place's storage rather than from a copy of
     /// it. Lowering defines one only as a call argument whose place is rooted
-    /// in a local or a constant: no expression writes a local, a called
-    /// function cannot reach its caller's locals, and nothing writes a
-    /// constant, so the place keeps its value until the call returns.
+    /// in a constant or in a local whose address is never taken: no
+    /// expression writes such a local, a called function cannot reach it,
+    /// and nothing writes a constant, so the place keeps its value until the
+    /// call returns.
     Borrow(Place),
+    /// The address of a place, a `*T` for the place's type `T`.
+    Address(Place),
+    /// A pointer to new heap storage for the target of the value's type. The
+    /// span is the one the `out of memory` trap reports.
+    Allocate,
+    /// The `*T` a `nullable *T` operand holds. The span is the one the
+    /// `null pointer` trap reports.
+    CheckNull {
+        operand: Operand,
+    },
     /// The result of the `Instruction::Call` that defines it. The call carries
     /// the arguments and the source span.
     CallResult,
@@ -150,6 +169,11 @@ pub(crate) enum Instruction {
     Fill {
         place: Place,
         start: u64,
+        operand: Operand,
+    },
+    /// Ends the life of the heap target a pointer of either nullability
+    /// refers to. Freeing `null` does nothing.
+    Free {
         operand: Operand,
     },
     /// Calls `function` with `arguments` in source order. `result` names the

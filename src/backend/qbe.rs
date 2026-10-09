@@ -16,6 +16,7 @@ pub(super) fn operand(operand: Operand) -> String {
         Operand::Literal(literal) => match literal {
             Literal::Integer { value, .. } => value.to_string(),
             Literal::Floating(value) => floating::literal(value),
+            Literal::Null(_) => unreachable!("pointers are rejected before native emission"),
         },
         Operand::Value(ValueId(id)) => format!("%v{id}"),
     }
@@ -33,6 +34,7 @@ pub(super) fn data_item(literal: Literal) -> String {
             if value.ty() == Scalar::F32 { 'w' } else { 'l' },
             value.bits()
         ),
+        Literal::Null(_) => unreachable!("pointers are rejected before native emission"),
     }
 }
 
@@ -200,7 +202,7 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             emit_aggregate_result_blocks(emitter, comparison);
             format!("%aggregate{comparison}_result")
         }
-        Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+        Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
     }
 }
 

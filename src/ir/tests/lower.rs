@@ -1716,3 +1716,351 @@ fn lowers_the_structs_milestone_program() {
     );
     insta::assert_debug_snapshot!("structs", program.program());
 }
+
+/// The kind of every value `main` defines, spelled with `{:?}`.
+fn value_kinds(function: &Function) -> Vec<String> {
+    function
+        .values
+        .iter()
+        .map(|value| format!("{:?}", value.kind))
+        .collect()
+}
+
+#[test]
+fn assignments_store_through_pointers_loaded_before_the_value() {
+    let program = lowered(
+        "type S struct { x: int, a: [3]int }
+fn get(p: *S) -> *S { return p; }
+fn main() -> void {
+    var x = 1;
+    const p = &x;
+    *p = 2;
+    var s: S;
+    const ps = &s;
+    ps.x = 3;
+    ps.a[2] = 4;
+    var vps = ps;
+    const pps = &vps;
+    pps.x = 5;
+    get(ps).x = 6;
+    *p = get(ps).x;
+}",
+    );
+    let main = main_of(&program);
+    assert_eq!(
+        stored_places(main),
+        [
+            "local0",
+            "local1",
+            "*(v1)",
+            "zero local2",
+            "local3",
+            "*(v3).0",
+            "*(v4).1[2]",
+            "local4",
+            "local5",
+            "*(v8).0",
+            "*(v10).0",
+            "*(v11)",
+        ]
+    );
+    let kinds = value_kinds(main);
+    assert_eq!(kinds[0], "Address(Local(LocalId(0)))");
+    assert_eq!(kinds[6], "Address(Local(LocalId(4)))");
+    // `pps.x` loads `pps`, then the `*S` it points at.
+    assert_eq!(kinds[7], "Load(Local(LocalId(5)))");
+    assert_eq!(kinds[8], "Load(Indirect { pointer: Value(ValueId(7)) })");
+    // `*p = get(ps).x;` loads `p` before the call.
+    assert_eq!(kinds[11], "Load(Local(LocalId(1)))");
+    assert_eq!(kinds[13], "CallResult");
+}
+
+#[test]
+fn addresses_name_element_and_field_places() {
+    let program = lowered(
+        "type S struct { x: int }
+fn main() -> void {
+    var a = [1, 2];
+    var s = S { x = 1 };
+    const pa = &a[1];
+    const ps = &s.x;
+    const p = &s;
+    const px = &p.x;
+}",
+    );
+    let main = main_of(&program);
+    let addresses = main
+        .values
+        .iter()
+        .filter_map(|value| match &value.kind {
+            ValueKind::Address(place) => Some((describe(place), value.ty.to_string())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        ("local0[1]", "*int"),
+        ("local1.0", "*int"),
+        ("local1", "*S"),
+        ("*(v5).0", "*int"),
+    ];
+    assert_eq!(
+        addresses,
+        expected.map(|(place, ty)| (place.to_owned(), ty.to_owned()))
+    );
+}
+
+#[test]
+fn values_are_read_through_pointers() {
+    let program = lowered(
+        "type S struct { x: int, a: [3]int }
+fn main() -> void {
+    var x = 1;
+    const p = &x;
+    var s: S;
+    const ps = &s;
+    var a = [1, 2, 3];
+    const q = &a;
+    const c = *ps;
+    exit(*p + ps.x + q[1] + len(q) + c.x);
+}",
+    );
+    let main = main_of(&program);
+    assert_eq!(
+        loads(main).iter().map(describe).collect::<Vec<_>>(),
+        [
+            "constant0",
+            "local3",
+            "*(v4)",
+            "local1",
+            "*(v6)",
+            "local3",
+            "*(v8).0",
+            "local5",
+            "*(v11)[1]",
+            "local5",
+            "local6.0",
+        ]
+    );
+    // `*ps` copies the whole struct target.
+    assert_eq!(main.values[5].ty.to_string(), "S");
+    // `len(q)` folds to the length and still reads `q`.
+    assert_eq!(value_kinds(main)[14], "Load(Local(LocalId(5)))");
+    assert!(matches!(
+        &main.values[15].kind,
+        ValueKind::Binary {
+            right: Operand::Literal(Literal::Integer { value: 3, .. }),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn heap_and_nullable_pointer_operations_lower_to_their_own_instructions() {
+    let source = "type S struct { x: int }
+fn f() -> int { return 1; }
+fn main() -> void {
+    const n = new(1);
+    const m = new(S { x = f() });
+    const o = new(f());
+    var q: nullable *int = n;
+    const r = *int(q);
+    const t = *int(n);
+    free(n);
+    q = null;
+    var z: nullable *int;
+    if n == q { exit(1); }
+}";
+    let program = lowered(source);
+    let main = main_of(&program);
+    assert_eq!(
+        stored_places(main),
+        [
+            "*(v0)", "local0", "local1.0", "*(v3)", "local2", "*(v5)", "local3", "local4",
+            "local5", "local6", "free v10", "local4", "local7",
+        ]
+    );
+    let span = |text: &str| {
+        let start = source.find(text).unwrap();
+        Some(start..start + text.len())
+    };
+    // Each allocation follows its operand and reports its own span.
+    for (id, text) in [(0, "new(1)"), (3, "new(S { x = f() })"), (5, "new(f())")] {
+        assert_eq!(main.values[id].kind, ValueKind::Allocate);
+        assert_eq!(main.values[id].span, span(text));
+    }
+    assert_eq!(main.values[1].kind, ValueKind::CallResult);
+    assert_eq!(main.values[4].kind, ValueKind::CallResult);
+    // Only the nullable operand is checked.
+    assert_eq!(
+        main.values[8].kind,
+        ValueKind::CheckNull {
+            operand: Operand::Value(ValueId(7))
+        }
+    );
+    assert_eq!(main.values[8].span, span("*int(q)"));
+    assert_eq!(value_kinds(main)[9], "Load(Local(LocalId(0)))");
+    // `null` and a nullable zero value are stored as `null` literals, and a
+    // `*int` widens where a `nullable *int` is expected.
+    let nulls = stores(main)
+        .into_iter()
+        .filter(|(_, operand)| matches!(operand, Operand::Literal(Literal::Null(_))))
+        .map(|(place, _)| describe(&place))
+        .collect::<Vec<_>>();
+    assert_eq!(nulls, ["local4", "local7"]);
+    assert_eq!(main.values[6].ty.to_string(), "nullable *int");
+    assert!(matches!(
+        &main.values[13].kind,
+        ValueKind::Comparison {
+            operator: ComparisonOperator::Equal,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn widened_pointers_pass_as_arguments_and_results() {
+    lowered(
+        "fn take(q: nullable *int) -> nullable *int { return q; }
+fn widen(p: *int) -> nullable *int { return p; }
+fn main() -> void {
+    const p = new(1);
+    var q = take(p);
+    q = widen(p);
+    var a: [2]nullable *int = [p...];
+    if p != q { exit(1); }
+}",
+    );
+}
+
+#[test]
+fn globals_hold_null_for_their_pointer_slots() {
+    let program = lowered(
+        "type Node struct { value: int, next: nullable *Node }
+var n = Node { value = 1, next = null };
+var empty = Node { value = 0, next = null };
+fn main() -> void {}",
+    );
+    let node = declared(0, "Node");
+    let nullable_node = Type::Pointer {
+        nullable: true,
+        target: Box::new(node.clone()),
+    };
+    assert_eq!(
+        program.program().globals,
+        [
+            Global {
+                ty: node.clone(),
+                values: Some(vec![
+                    Literal::Integer {
+                        value: 1,
+                        ty: Scalar::Int
+                    },
+                    Literal::Null(nullable_node),
+                ]),
+            },
+            Global {
+                ty: node,
+                values: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn an_aggregate_a_pointer_can_reach_is_copied_into_a_call() {
+    let program = lowered(
+        "fn sum(values: [2]int) -> int { return values[0] + values[1]; }
+fn main() -> void {
+    var kept = [1, 2];
+    var shared = [3, 4];
+    const p = &shared;
+    var total = sum(kept) + sum(shared) + sum(*p);
+}",
+    );
+    let arguments = main_of(&program)
+        .values
+        .iter()
+        .filter_map(|value| match &value.kind {
+            ValueKind::Borrow(place) => Some(format!("borrow {}", describe(place))),
+            ValueKind::Load(place) if value.ty.is_aggregate() => {
+                Some(format!("load {}", describe(place)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        arguments,
+        [
+            "load constant0",
+            "load constant1",
+            "borrow local0",
+            "load local1",
+            "load *(v8)",
+        ]
+    );
+}
+
+#[test]
+fn the_specification_pointer_examples_lower() {
+    for source in [
+        "type Point struct { x: int, y: int }
+fn main() -> void {
+    var p = new(Point { x = 1, y = 2 });
+    var n = new(0);
+    p.x = 5;
+    exit(p.x);
+}",
+        "fn main() -> void {
+    var p = new([10, 20, 30]);
+    p[1] = 25;
+    var copy = *p;
+    copy[0] = 0;
+    exit(p[0] + p[1]);
+}",
+        "type Point struct { x: int, y: int }
+fn main() -> void {
+    var p = Point { x = 1, y = 2 };
+    const a = &p;
+    a.x = 5;
+    exit(p.x);
+}",
+        "fn main() -> void {
+    var a = new(1);
+    var b = new(1);
+    const c = a;
+    if a == b { exit(1); }
+    if a == c { exit(0); }
+    exit(2);
+}",
+    ] {
+        lowered(source);
+    }
+}
+
+#[test]
+fn pointers_snapshot() {
+    let program = lowered(
+        "type Node struct {
+    value: int,
+    next: nullable *Node,
+}
+
+fn sum(list: nullable *Node) -> int {
+    var total = 0;
+    var cursor = list;
+    for cursor != null {
+        const node = *Node(cursor);
+        total += node.value;
+        cursor = node.next;
+    }
+    return total;
+}
+
+fn main() -> void {
+    const tail = new(Node { value = 2, next = null });
+    const head = new(Node { value = 1, next = tail });
+    exit(sum(head));
+}",
+    );
+    insta::assert_debug_snapshot!("pointers", program.program());
+}

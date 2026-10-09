@@ -20,7 +20,7 @@ pub(super) fn pointers_not_implemented(span: &std::ops::Range<usize>) -> Diagnos
 }
 
 /// Rejects a program that writes a pointer type, takes an address, or calls
-/// `new`, which checking accepts but IR lowering does not yet represent. Every
+/// `new`, which Fern IR represents but native emission does not yet. Every
 /// pointer value starts at one of these: `null` takes a nullable pointer type
 /// from an annotation, and `*T(p)` writes one.
 pub(crate) fn reject_pointer_syntax(syntax: &Syntax) -> Result<(), Diagnostic> {

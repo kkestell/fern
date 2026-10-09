@@ -161,29 +161,37 @@ pub(super) fn field(base: Place, ordinal: usize) -> Place {
     }
 }
 
-/// Spells a place the way a test reads it: `local0[1].2`, `global2`.
+/// Spells an integer, `null`, or value operand the way a test reads it:
+/// `3`, `null`, `v2`.
+pub(super) fn describe_operand(operand: &Operand) -> String {
+    match operand {
+        Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
+        Operand::Literal(Literal::Null(_)) => "null".to_owned(),
+        Operand::Literal(Literal::Floating(_)) => {
+            unreachable!("tests describe integer, null, and value operands")
+        }
+        Operand::Value(ValueId(id)) => format!("v{id}"),
+    }
+}
+
+/// Spells a place the way a test reads it: `local0[1].2`, `global2`, and
+/// `*(v3).1` for a field of the target of value 3.
 pub(super) fn describe(place: &Place) -> String {
     match place {
         Place::Local(LocalId(id)) => format!("local{id}"),
         Place::Global(GlobalId(id)) => format!("global{id}"),
         Place::Constant(ConstantId(id)) => format!("constant{id}"),
         Place::Element { base, index, .. } => {
-            let index = match index {
-                Operand::Literal(Literal::Integer { value, .. }) => value.to_string(),
-                Operand::Literal(Literal::Floating(_)) => {
-                    unreachable!("an index has type `int`")
-                }
-                Operand::Value(ValueId(id)) => format!("v{id}"),
-            };
-            format!("{}[{index}]", describe(base))
+            format!("{}[{}]", describe(base), describe_operand(index))
         }
         Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
+        Place::Indirect { pointer } => format!("*({})", describe_operand(pointer)),
     }
 }
 
 /// Spells every place an instruction writes, in order: a store names its
-/// place, a zero reads `zero local0`, and a fill from index 2 reads
-/// `local0[2..]`.
+/// place, a zero reads `zero local0`, a fill from index 2 reads
+/// `local0[2..]`, and a free of value 3 reads `free v3`.
 pub(super) fn stored_places(function: &Function) -> Vec<String> {
     instructions(function)
         .filter_map(|instruction| match instruction {
@@ -192,6 +200,7 @@ pub(super) fn stored_places(function: &Function) -> Vec<String> {
             Instruction::Fill { place, start, .. } => {
                 Some(format!("{}[{start}..]", describe(place)))
             }
+            Instruction::Free { operand } => Some(format!("free {}", describe_operand(operand))),
             _ => None,
         })
         .collect()

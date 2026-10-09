@@ -228,6 +228,12 @@ impl Type {
         }
     }
 
+    /// Whether this type is an array or a struct, which occupies storage that
+    /// values refer to by address. Scalars and pointers are carried by value.
+    pub(crate) fn is_aggregate(&self) -> bool {
+        matches!(self, Self::Array { .. } | Self::Struct(_))
+    }
+
     /// Whether a value of this type is valid where `destination` is expected
     /// without being of that type: a `*T` where a `nullable *T` is expected.
     pub(crate) fn widens_to(&self, destination: &Self) -> bool {
@@ -469,6 +475,14 @@ mod tests {
             pointer(false, nullable.clone()).through_pointers(),
             &nullable
         );
+    }
+
+    #[test]
+    fn only_arrays_and_structs_are_aggregates() {
+        assert!(array(1, Scalar::Int.into()).is_aggregate());
+        assert!(declared(0, "Point").is_aggregate());
+        assert!(!Type::Scalar(Scalar::Int).is_aggregate());
+        assert!(!pointer(false, declared(0, "Point")).is_aggregate());
     }
 
     #[test]

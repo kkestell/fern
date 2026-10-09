@@ -19,9 +19,24 @@ impl VerifiedProgram {
     }
 }
 
+/// Whether a value of type `source` is valid where `expected` is: the types
+/// are the same, or a `*T` stands where a `nullable *T` is expected. Both
+/// pointer types share one representation.
+fn fits(source: &Type, expected: &Type) -> bool {
+    source == expected || source.widens_to(expected)
+}
+
 /// The type a literal has, rejecting an integer whose value its scalar type
-/// cannot hold.
+/// cannot hold and a `null` whose type is not a nullable pointer.
 fn verify_literal(literal: &Literal) -> Result<Type, CompileError> {
+    if let Literal::Null(ty) = literal {
+        if !matches!(ty, Type::Pointer { nullable: true, .. }) {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR null has type `{ty}`"
+            )));
+        }
+        return Ok(ty.clone());
+    }
     let Literal::Integer { value, ty } = literal else {
         return Ok(literal.ty());
     };
@@ -53,14 +68,42 @@ fn valid_value(
     place_type: &impl Fn(&Place) -> Result<Type, CompileError>,
 ) -> Result<bool, CompileError> {
     Ok(match &value.kind {
-        ValueKind::Load(place) => place_type(place)? == value.ty && value.span.is_none(),
-        // A called function can write a global, so an argument read from one
-        // is copied.
+        ValueKind::Load(place) => fits(&place_type(place)?, &value.ty) && value.span.is_none(),
+        // A called function can write a global or a pointer target, so an
+        // argument read from one is copied.
         ValueKind::Borrow(place) => {
-            value.ty.scalar().is_none()
-                && !matches!(place.root(), Place::Global(_))
+            value.ty.is_aggregate()
+                && !matches!(place.root(), Place::Global(_) | Place::Indirect { .. })
                 && place_type(place)? == value.ty
                 && value.span.is_none()
+        }
+        ValueKind::Address(_) => {
+            unreachable!("an address is checked against its place as a destination")
+        }
+        ValueKind::Allocate => {
+            value.span.is_some()
+                && matches!(
+                    value.ty,
+                    Type::Pointer {
+                        nullable: false,
+                        ..
+                    }
+                )
+        }
+        ValueKind::CheckNull { operand } => {
+            let Type::Pointer {
+                nullable: false,
+                target,
+            } = &value.ty
+            else {
+                return Ok(false);
+            };
+            value.span.is_some()
+                && operand_type(operand.clone())?
+                    == Type::Pointer {
+                        nullable: true,
+                        target: target.clone(),
+                    }
         }
         // The defining call checks the result type against the callee's
         // signature, and owns the span the call reports.
@@ -70,11 +113,13 @@ fn valid_value(
             left,
             right,
         } => {
-            // Equality is defined on every type, and ordering on scalars.
+            // Equality is defined on every type, and ordering on scalars. A
+            // `*T` compares with a `nullable *T`.
             let left = operand_type(left.clone())?;
+            let right = operand_type(right.clone())?;
             value.span.is_none()
                 && value.ty == Scalar::Bool.into()
-                && left == operand_type(right.clone())?
+                && (fits(&left, &right) || fits(&right, &left))
                 && (operator.is_equality() || left.scalar().is_some())
         }
         ValueKind::LogicalNot { operand } => {
@@ -252,6 +297,15 @@ impl Program {
                         ))
                     })
             }
+            Place::Indirect { pointer } => match operand_type(pointer.clone())? {
+                Type::Pointer {
+                    nullable: false,
+                    target,
+                } => Ok(*target),
+                other => Err(CompileError::new(format!(
+                    "internal compiler error: IR reads through `{other}`"
+                ))),
+            },
         }
     }
 
@@ -297,7 +351,7 @@ impl Program {
                     self.scalar_types(field, types);
                 }
             }
-            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+            Type::Pointer { .. } => types.push(ty.clone()),
         }
     }
 
@@ -340,7 +394,7 @@ impl Program {
                 .try_fold(0u64, |count, field| {
                     count.checked_add(self.scalar_count(field)?)
                 }),
-            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+            Type::Pointer { .. } => Some(1),
         }
     }
 
@@ -393,8 +447,22 @@ impl Program {
         match instruction {
             Instruction::Value(ValueId(id)) => {
                 let value = &function.values[*id];
-                let place_type = |place: &Place| self.place_type(function, place, &operand_type);
-                if !valid_value(value, &operand_type, &place_type)? {
+                // A pointer may be written through, so an addressed place is
+                // checked as a destination: no constant or parameter.
+                let valid = if let ValueKind::Address(place) = &value.kind {
+                    let target = self.destination_type(function, place, &operand_type)?;
+                    value.span.is_none()
+                        && value.ty
+                            == Type::Pointer {
+                                nullable: false,
+                                target: Box::new(target),
+                            }
+                } else {
+                    let place_type =
+                        |place: &Place| self.place_type(function, place, &operand_type);
+                    valid_value(value, &operand_type, &place_type)?
+                };
+                if !valid {
                     return Err(invalid_value(*id, value));
                 }
                 Ok(())
@@ -402,7 +470,7 @@ impl Program {
             Instruction::Store { place, operand } => {
                 let destination = self.destination_type(function, place, &operand_type)?;
                 let source = operand_type(operand.clone())?;
-                if source != destination {
+                if !fits(&source, &destination) {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR store has type `{source}`, expected `{destination}`"
                     )));
@@ -411,9 +479,9 @@ impl Program {
             }
             Instruction::Zero { place } => {
                 let destination = self.destination_type(function, place, &operand_type)?;
-                if destination.scalar().is_some() {
+                if !destination.is_aggregate() {
                     return Err(CompileError::new(format!(
-                        "internal compiler error: IR zeroes scalar `{destination}`"
+                        "internal compiler error: IR zeroes non-aggregate `{destination}`"
                     )));
                 }
                 Ok(())
@@ -435,7 +503,7 @@ impl Program {
                     )));
                 }
                 let source = operand_type(operand.clone())?;
-                if source != **element {
+                if !fits(&source, element) {
                     return Err(CompileError::new(format!(
                         "internal compiler error: IR fills `{destination}` with `{source}`"
                     )));
@@ -448,6 +516,15 @@ impl Program {
                 arguments,
                 ..
             } => self.verify_call(function, *callee, arguments, *result, &operand_type),
+            Instruction::Free { operand } => {
+                let ty = operand_type(operand.clone())?;
+                if !matches!(ty, Type::Pointer { .. }) {
+                    return Err(CompileError::new(format!(
+                        "internal compiler error: IR frees `{ty}`"
+                    )));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -510,7 +587,7 @@ impl Program {
         for (index, argument) in arguments.iter().enumerate() {
             let source = operand_type(argument.clone())?;
             let parameter = &target.flow.locals[index];
-            if source != *parameter {
+            if !fits(&source, parameter) {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR call argument {index} has type `{source}`, expected `{parameter}`"
                 )));
@@ -624,7 +701,10 @@ fn record_definition(
     let defined = match instruction {
         Instruction::Value(id) => Some((*id, false)),
         Instruction::Call { result, .. } => result.map(|id| (id, true)),
-        Instruction::Store { .. } | Instruction::Zero { .. } | Instruction::Fill { .. } => None,
+        Instruction::Store { .. }
+        | Instruction::Zero { .. }
+        | Instruction::Fill { .. }
+        | Instruction::Free { .. } => None,
     };
     let Some((ValueId(id), from_call)) = defined else {
         return Ok(());
@@ -664,7 +744,7 @@ fn verify_return(
         )),
         (Some(result), Some(value)) => {
             let source = operand_type(value)?;
-            if source != *result {
+            if !fits(&source, result) {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR returns `{source}`, expected `{result}`"
                 )));

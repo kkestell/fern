@@ -260,15 +260,9 @@ pub(crate) enum CheckedLocationKind {
     /// A pointer computed by an expression that is not itself a location,
     /// such as a call. It only appears as the operand of a step or of a
     /// `Dereference`.
-    Pointer(
-        #[expect(dead_code, reason = "lowered once Fern IR represents pointers")] Idx<Expression>,
-    ),
+    Pointer(Idx<Expression>),
     /// `*p`, the target of the pointer the operand holds.
     Dereference {
-        #[cfg_attr(
-            not(test),
-            expect(dead_code, reason = "lowered once Fern IR represents pointers")
-        )]
         operand: Box<CheckedLocation>,
     },
 }

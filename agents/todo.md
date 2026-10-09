@@ -37,7 +37,7 @@
   bitwise operators, and integer conversions on pointers. Reject `*p`, `p.f`,
   `p[i]`, and `len(p)` on nullable pointers.
 
-- [ ] Represent pointers in Fern IR
+- [x] Represent pointers in Fern IR
 
   Add pointer-typed values, an address-of value for binding, field, and
   element places, an indirect place for loads and stores through a pointer,

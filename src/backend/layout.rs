@@ -47,7 +47,7 @@ impl<'a> Layout<'a> {
         match ty {
             Type::Scalar(scalar) => qbe_type(*scalar),
             Type::Array { .. } | Type::Struct(_) => 'l',
-            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+            Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
         }
     }
 
@@ -106,7 +106,7 @@ impl<'a> Layout<'a> {
                     self.collect_scalar_slots(field, base + offset, slots);
                 }
             }
-            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+            Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
         }
     }
 }

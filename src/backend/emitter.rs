@@ -120,7 +120,7 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
         // An aggregate parameter is never written, so it is read from the
         // storage the caller passed rather than from a copy.
         Place::Local(local)
-            if local.0 < function.parameters && is_aggregate(&flow.locals[local.0]) =>
+            if local.0 < function.parameters && flow.locals[local.0].is_aggregate() =>
         {
             (format!("%param{}", local.0), flow.locals[local.0].clone())
         }
@@ -149,7 +149,7 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
                 Operand::Literal(Literal::Integer { value, .. }) => {
                     (0..i128::from(length)).contains(value)
                 }
-                Operand::Literal(Literal::Floating(_)) => {
+                Operand::Literal(Literal::Floating(_) | Literal::Null(_)) => {
                     unreachable!("a verified index has type `int`")
                 }
                 Operand::Value(_) => false,
@@ -208,6 +208,7 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
             .unwrap();
             (format!("%access{access}_address"), field)
         }
+        Place::Indirect { .. } => unreachable!("pointers are rejected before native emission"),
     }
 }
 
@@ -267,7 +268,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         let result = function
             .result
             .as_ref()
-            .filter(|ty| ty.scalar().is_none())
+            .filter(|ty| ty.is_aggregate())
             .map(|_| "l %result".to_owned());
         let parameters = result
             .into_iter()
@@ -307,17 +308,13 @@ fn returned_calls(function: &Function) -> Vec<ValueId> {
             Terminator::Return {
                 value: Some(Operand::Value(id)),
             } if function.values[id.0].kind == ValueKind::CallResult
-                && is_aggregate(&function.values[id.0].ty) =>
+                && function.values[id.0].ty.is_aggregate() =>
             {
                 Some(*id)
             }
             _ => None,
         })
         .collect()
-}
-
-fn is_aggregate(ty: &Type) -> bool {
-    ty.scalar().is_none()
 }
 
 /// Leaves room for QBE spills, saved registers, alignment, libc calls, and
@@ -331,14 +328,14 @@ compile_error!("stack bounds discovery requires macOS or Linux");
 fn allocations(_layout: &Layout<'_>, function: &Function) -> Vec<(String, Type)> {
     let mut allocations = vec![("%stack_position".to_owned(), Scalar::U32.into())];
     for (id, ty) in function.flow.locals.iter().enumerate() {
-        if id >= function.parameters || !is_aggregate(ty) {
+        if id >= function.parameters || !ty.is_aggregate() {
             allocations.push((format!("%local{id}"), ty.clone()));
         }
     }
     let returned = returned_calls(function);
     for (id, value) in function.values.iter().enumerate() {
         if matches!(value.kind, ValueKind::Load(_) | ValueKind::CallResult)
-            && is_aggregate(&value.ty)
+            && value.ty.is_aggregate()
             && !returned.contains(&ValueId(id))
         {
             allocations.push((format!("%v{id}_storage"), value.ty.clone()));
@@ -529,6 +526,7 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             arguments,
             span,
         } => emit_call(emitter, *callee, arguments, *result, span),
+        Instruction::Free { .. } => unreachable!("pointers are rejected before native emission"),
     }
 }
 
@@ -545,7 +543,7 @@ fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type)
         Type::Array { .. } | Type::Struct(_) => {
             emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
         }
-        Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+        Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
     }
 }
 
@@ -606,12 +604,8 @@ fn emit_call(
     let target = &emitter.functions[callee.0];
     // An aggregate result is written into the storage its value owns, whose
     // address the callee takes first.
-    let aggregate_result = result.filter(|_| {
-        target
-            .result
-            .as_ref()
-            .is_some_and(|ty| ty.scalar().is_none())
-    });
+    let aggregate_result =
+        result.filter(|_| target.result.as_ref().is_some_and(|ty| ty.is_aggregate()));
     // The callee's leading locals hold its parameters, so they give each
     // argument its type.
     let storage = |id: ValueId| {
@@ -702,7 +696,7 @@ fn emit_terminator(
             emitter.text.push_str("    hlt\n");
         }
         Terminator::Return { value } => match value {
-            Some(value) => match function.result.as_ref().filter(|ty| ty.scalar().is_none()) {
+            Some(value) => match function.result.as_ref().filter(|ty| ty.is_aggregate()) {
                 Some(ty) => {
                     // A returned call already wrote its result into `%result`.
                     let written =
@@ -751,7 +745,9 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                     );
                     writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
                 }
-                Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
+                Type::Pointer { .. } => {
+                    unreachable!("pointers are rejected before native emission")
+                }
             }
             .unwrap();
         }
@@ -853,6 +849,9 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                 operand(source.clone())
             )
             .unwrap();
+        }
+        ValueKind::Address(_) | ValueKind::Allocate | ValueKind::CheckNull { .. } => {
+            unreachable!("pointers are rejected before native emission")
         }
     }
 }

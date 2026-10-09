@@ -1347,7 +1347,7 @@ fn verification_rejects_writes_to_constants_and_malformed_zeroes_and_fills() {
             Instruction::Zero {
                 place: element(local.clone(), integer(0, Scalar::Int)),
             },
-            "IR zeroes scalar `int`",
+            "IR zeroes non-aggregate `int`",
         ),
         (
             Instruction::Fill {
@@ -1454,4 +1454,262 @@ fn verification_rejects_writing_a_parameter_and_invalid_borrows() {
         let error = program(values, instructions).verify().unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
+}
+
+/// A `main` over locals `int`, `*int`, `nullable *int`, and `*[2]int` and one
+/// `int` constant, which defines `values` in order and then runs
+/// `instructions`.
+fn pointer_program(values: Vec<Value>, instructions: Vec<Instruction>) -> Program {
+    let int = || Type::Scalar(Scalar::Int);
+    let mut main = main_function(
+        vec![],
+        vec![
+            int(),
+            pointer(false, int()),
+            pointer(true, int()),
+            pointer(false, array(2, int())),
+        ],
+        vec![],
+    );
+    let defined = (0..values.len()).map(|id| Instruction::Value(ValueId(id)));
+    main.flow.blocks.push(Block {
+        instructions: defined.chain(instructions).collect(),
+        terminator: Terminator::Exit {
+            status: integer(0, Scalar::Int),
+        },
+    });
+    main.values = values;
+    main.constants = vec![Global {
+        ty: int(),
+        values: None,
+    }];
+    one_function(main)
+}
+
+fn pointer(nullable: bool, target: Type) -> Type {
+    Type::Pointer {
+        nullable,
+        target: Box::new(target),
+    }
+}
+
+fn pointer_value(ty: Type, kind: ValueKind, span: Option<std::ops::Range<usize>>) -> Value {
+    Value { span, ty, kind }
+}
+
+fn load(ty: Type, place: Place) -> Value {
+    pointer_value(ty, ValueKind::Load(place), None)
+}
+
+fn value(id: usize) -> Operand {
+    Operand::Value(ValueId(id))
+}
+
+#[test]
+fn verification_accepts_pointer_operations_and_widening() {
+    let int = || Type::Scalar(Scalar::Int);
+    let local = |id| Place::Local(LocalId(id));
+    pointer_program(
+        vec![
+            pointer_value(pointer(false, int()), ValueKind::Address(local(0)), None),
+            pointer_value(pointer(false, int()), ValueKind::Allocate, Some(0..1)),
+            load(pointer(true, int()), local(2)),
+            pointer_value(
+                pointer(false, int()),
+                ValueKind::CheckNull { operand: value(2) },
+                Some(0..1),
+            ),
+            // A `*int` place reads as a `nullable *int`.
+            load(pointer(true, int()), local(1)),
+            load(pointer(false, int()), local(1)),
+            pointer_value(
+                Scalar::Bool.into(),
+                ValueKind::Comparison {
+                    operator: ComparisonOperator::Equal,
+                    left: value(5),
+                    right: value(2),
+                },
+                None,
+            ),
+            load(int(), Place::Indirect { pointer: value(5) }),
+        ],
+        vec![
+            Instruction::Store {
+                place: Place::Indirect { pointer: value(1) },
+                operand: integer(1, Scalar::Int),
+            },
+            // A `*int` stores into a `nullable *int` place.
+            Instruction::Store {
+                place: local(2),
+                operand: value(0),
+            },
+            Instruction::Store {
+                place: local(2),
+                operand: Operand::Literal(Literal::Null(pointer(true, int()))),
+            },
+            Instruction::Free { operand: value(2) },
+        ],
+    )
+    .verify()
+    .unwrap();
+}
+
+#[test]
+fn verification_rejects_malformed_pointer_operations() {
+    let int = || Type::Scalar(Scalar::Int);
+    let local = |id| Place::Local(LocalId(id));
+    let invalid = |id| format!("invalid IR value {id}");
+    for (values, instructions, expected) in [
+        (
+            vec![
+                load(int(), local(0)),
+                load(int(), Place::Indirect { pointer: value(0) }),
+            ],
+            vec![],
+            "IR reads through `int`".to_owned(),
+        ),
+        (
+            vec![
+                load(pointer(true, int()), local(2)),
+                load(int(), Place::Indirect { pointer: value(0) }),
+            ],
+            vec![],
+            "IR reads through `nullable *int`".to_owned(),
+        ),
+        (
+            vec![pointer_value(
+                pointer(false, int()),
+                ValueKind::Address(Place::Constant(ConstantId(0))),
+                None,
+            )],
+            vec![],
+            "IR writes constant 0".to_owned(),
+        ),
+        (
+            vec![pointer_value(
+                pointer(false, Scalar::U8.into()),
+                ValueKind::Address(local(0)),
+                None,
+            )],
+            vec![],
+            invalid(0),
+        ),
+        (
+            vec![pointer_value(
+                pointer(false, int()),
+                ValueKind::Allocate,
+                None,
+            )],
+            vec![],
+            invalid(0),
+        ),
+        (
+            vec![pointer_value(
+                pointer(true, int()),
+                ValueKind::Allocate,
+                Some(0..1),
+            )],
+            vec![],
+            invalid(0),
+        ),
+        (
+            vec![
+                load(pointer(true, int()), local(2)),
+                pointer_value(
+                    pointer(false, int()),
+                    ValueKind::CheckNull { operand: value(0) },
+                    None,
+                ),
+            ],
+            vec![],
+            invalid(1),
+        ),
+        (
+            vec![
+                load(pointer(false, int()), local(1)),
+                pointer_value(
+                    pointer(false, int()),
+                    ValueKind::CheckNull { operand: value(0) },
+                    Some(0..1),
+                ),
+            ],
+            vec![],
+            invalid(1),
+        ),
+        (
+            vec![],
+            vec![Instruction::Free {
+                operand: integer(1, Scalar::Int),
+            }],
+            "IR frees `int`".to_owned(),
+        ),
+        (
+            vec![],
+            vec![Instruction::Store {
+                place: local(1),
+                operand: Operand::Literal(Literal::Null(pointer(false, int()))),
+            }],
+            "IR null has type `*int`".to_owned(),
+        ),
+        (
+            vec![load(pointer(true, int()), local(2))],
+            vec![Instruction::Store {
+                place: local(1),
+                operand: value(0),
+            }],
+            "IR store has type `nullable *int`, expected `*int`".to_owned(),
+        ),
+        (
+            vec![load(pointer(false, int()), local(2))],
+            vec![],
+            invalid(0),
+        ),
+        (
+            vec![
+                load(pointer(false, array(2, int())), local(3)),
+                pointer_value(
+                    array(2, int()),
+                    ValueKind::Borrow(Place::Indirect { pointer: value(0) }),
+                    None,
+                ),
+            ],
+            vec![],
+            invalid(1),
+        ),
+    ] {
+        let error = pointer_program(values, instructions).verify().unwrap_err();
+        assert!(error.to_string().contains(&expected), "{error}");
+    }
+}
+
+#[test]
+fn verification_rejects_the_address_of_a_parameter() {
+    let int = || Type::Scalar(Scalar::Int);
+    let program = two_functions(
+        Function {
+            parameters: 1,
+            result: None,
+            values: vec![pointer_value(
+                pointer(false, int()),
+                ValueKind::Address(Place::Local(LocalId(0))),
+                None,
+            )],
+            constants: vec![],
+            flow: ControlFlow {
+                entry: BlockId(0),
+                locals: vec![int()],
+                blocks: vec![Block {
+                    instructions: vec![Instruction::Value(ValueId(0))],
+                    terminator: Terminator::Return { value: None },
+                }],
+            },
+        },
+        vec![],
+        vec![],
+    );
+    let error = program.verify().unwrap_err();
+    assert!(
+        error.to_string().contains("IR writes parameter 0"),
+        "{error}"
+    );
 }

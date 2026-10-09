@@ -50,8 +50,8 @@ pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
     reject_input_output_alias(&sources, output)?;
     let checked = semantic::namespaces::check(&syntax, &program.modules, &program.files)
         .map_err(|e| CompileError::new(e.render(&sources)))?;
-    semantic::reject_pointer_syntax(&syntax).map_err(|e| CompileError::new(e.render(&sources)))?;
     let entry = ir::lower::lower(checked).verify()?;
+    semantic::reject_pointer_syntax(&syntax).map_err(|e| CompileError::new(e.render(&sources)))?;
     backend::toolchain::build(&entry, &sources, output)
 }
 

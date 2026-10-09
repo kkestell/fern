@@ -59,16 +59,16 @@ fn constant_symbol(function: usize, ConstantId(id): ConstantId) -> String {
     format!("function{function}_constant{id}")
 }
 
-/// Writes static data. Its scalars sit where the layout puts them, so the gaps
-/// between them and the padding after the last one are zeroed, and data with
-/// no values is zero throughout.
+/// Writes static data. Its scalars and pointers sit where the layout puts them,
+/// so the gaps between them and the padding after the last one are zeroed, and
+/// data with no values is zero throughout.
 fn emit_data(emitter: &mut Emitter<'_>, symbol: &str, global: &Global) {
     let mut items = Vec::new();
     let mut written = 0;
     if let Some(values) = &global.values {
         for ((offset, ty), value) in emitter
             .layout
-            .scalar_slots(&global.ty)
+            .value_slots(&global.ty)
             .into_iter()
             .zip(values)
         {
@@ -208,7 +208,13 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
             .unwrap();
             (format!("%access{access}_address"), field)
         }
-        Place::Indirect { .. } => unreachable!("pointers are rejected before native emission"),
+        // A pointer's value is the address of its target.
+        Place::Indirect { pointer } => {
+            let Type::Pointer { target, .. } = operand_type(function, pointer.clone()) else {
+                unreachable!("a verified indirect place reads through a pointer")
+            };
+            (operand(pointer.clone()), *target)
+        }
     }
 }
 
@@ -261,8 +267,8 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
             function
                 .result
                 .as_ref()
-                .and_then(|ty| ty.scalar())
-                .map(qbe_type)
+                .filter(|ty| !ty.is_aggregate())
+                .map(value_class)
         };
         emitter.returned_calls = returned_calls(function);
         let result = function
@@ -470,13 +476,14 @@ fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &Cont
         .unwrap();
     }
     // The parameters are the leading locals, so the loop above allocated the
-    // scalar ones. An aggregate parameter needs no entry copy.
+    // ones carried by value. An aggregate parameter needs no entry copy.
     for index in 0..function.parameters {
-        if let Type::Scalar(scalar) = &flow.locals[index] {
+        let ty = &flow.locals[index];
+        if !ty.is_aggregate() {
             writeln!(
                 emitter.text,
                 "    store{} %param{index}, %local{index}",
-                qbe_type(*scalar)
+                value_class(ty)
             )
             .unwrap();
         }
@@ -526,24 +533,24 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             arguments,
             span,
         } => emit_call(emitter, *callee, arguments, *result, span),
-        Instruction::Free { .. } => unreachable!("pointers are rejected before native emission"),
+        Instruction::Free { .. } => {
+            unreachable!("heap allocation and null checks are rejected before native emission")
+        }
     }
 }
 
 /// Stores a value of type `ty` at `address`. An aggregate value is the
 /// address of its storage, so storing one copies it.
 fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type) {
-    match ty {
-        Type::Scalar(scalar) => writeln!(
+    if ty.is_aggregate() {
+        emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
+    } else {
+        writeln!(
             emitter.text,
             "    store{} {source}, {address}",
-            qbe_type(*scalar)
+            value_class(ty)
         )
-        .unwrap(),
-        Type::Array { .. } | Type::Struct(_) => {
-            emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
-        }
-        Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
+        .unwrap();
     }
 }
 
@@ -728,26 +735,20 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
     match &value.kind {
         ValueKind::Load(source) => {
             let (address, _) = place_address(emitter, function, source);
-            match &value.ty {
-                Type::Scalar(scalar) => {
-                    let width = qbe_type(*scalar);
-                    writeln!(emitter.text, "    %v{id} ={width} load{width} {address}")
-                }
-                // Loading an aggregate copies it, so a later call in the same
-                // expression cannot change what the value holds.
-                Type::Array { .. } | Type::Struct(_) => {
-                    let size = emitter.layout.size(&value.ty);
-                    emit_copy(
-                        &mut emitter.text,
-                        &address,
-                        &format!("%v{id}_storage"),
-                        size,
-                    );
-                    writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
-                }
-                Type::Pointer { .. } => {
-                    unreachable!("pointers are rejected before native emission")
-                }
+            // Loading an aggregate copies it, so a later call in the same
+            // expression cannot change what the value holds.
+            if value.ty.is_aggregate() {
+                let size = emitter.layout.size(&value.ty);
+                emit_copy(
+                    &mut emitter.text,
+                    &address,
+                    &format!("%v{id}_storage"),
+                    size,
+                );
+                writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
+            } else {
+                let class = value_class(&value.ty);
+                writeln!(emitter.text, "    %v{id} ={class} load{class} {address}")
             }
             .unwrap();
         }
@@ -816,6 +817,15 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
         } => {
             let operand_ty = operand_type(function, left.clone());
             match operand_ty.scalar() {
+                // A pointer of either nullability is a `uint`-width word.
+                None if matches!(operand_ty, Type::Pointer { .. }) => emit_comparison(
+                    &mut emitter.text,
+                    id,
+                    *operator,
+                    left.clone(),
+                    right.clone(),
+                    Scalar::Uint,
+                ),
                 None => emit_aggregate_comparison(
                     emitter,
                     id,
@@ -850,8 +860,12 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             )
             .unwrap();
         }
-        ValueKind::Address(_) | ValueKind::Allocate | ValueKind::CheckNull { .. } => {
-            unreachable!("pointers are rejected before native emission")
+        ValueKind::Address(place) => {
+            let (address, _) = place_address(emitter, function, place);
+            writeln!(emitter.text, "    %v{id} =l copy {address}").unwrap();
+        }
+        ValueKind::Allocate | ValueKind::CheckNull { .. } => {
+            unreachable!("heap allocation and null checks are rejected before native emission")
         }
     }
 }

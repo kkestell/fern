@@ -154,4 +154,5 @@ fn assert_native_failure(body: &str, expected: &str) -> String {
 mod emitter;
 mod floating;
 mod integer;
+mod pointers;
 mod structs;

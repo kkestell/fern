@@ -38,6 +38,8 @@ fn native_programs_exit_zero() {
         EMPTY,
         "fn main() -> void { const x = 42; var y = x; }",
         "fn helper() -> void { const value = 1; } fn main() -> void {}",
+        "fn f(p: *int) -> void {} fn main() -> void {}",
+        "fn main() -> void { var x = 1; const p = &x; }",
         "\t\r\n\x0b\x0c /* 🌿 /* nested */ */ fn/*a*/main( ) -> void { // body\n } // eof",
     ] {
         let (dir, input, output) = fixture(source);
@@ -176,16 +178,16 @@ fn source_failures_preserve_output() {
             "aggregate layout exceeds compiler limit of 1 PiB",
         ),
         (
-            "fn f(p: *int) -> void {} fn main() -> void {}",
-            "pointers are not yet implemented",
-        ),
-        (
-            "fn main() -> void { var x = 1; const p = &x; }",
-            "pointers are not yet implemented",
-        ),
-        (
             "fn main() -> void { const p = new(1); }",
-            "pointers are not yet implemented",
+            "heap allocation and null checks are not yet implemented",
+        ),
+        (
+            "fn main() -> void { var x = 1; free(&x); }",
+            "heap allocation and null checks are not yet implemented",
+        ),
+        (
+            "fn main() -> void { var q: nullable *int; const p = *int(q); }",
+            "heap allocation and null checks are not yet implemented",
         ),
         (
             "fn main() -> void { { var x = 1; } x = 2; }",

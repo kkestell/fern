@@ -3,7 +3,8 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{
-        AnnotationKind, Expression, ExpressionKind, Syntax, TypeAnnotation, find_call,
+        AnnotationKind, Expression, ExpressionKind, StatementKind, Syntax, TypeAnnotation,
+        find_call,
     },
     types::{MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, Type},
 };
@@ -14,35 +15,36 @@ use num_traits::ToPrimitive;
 
 use super::model::*;
 
-/// Rejects pointer syntax, which parses but is not yet checked.
-pub(super) fn pointers_not_implemented(span: &std::ops::Range<usize>) -> Diagnostic {
-    Diagnostic::new(span.clone(), "pointers are not yet implemented")
+/// Reports a form native emission does not yet support.
+fn heap_not_implemented(span: &std::ops::Range<usize>) -> Diagnostic {
+    Diagnostic::new(
+        span.clone(),
+        "heap allocation and null checks are not yet implemented",
+    )
 }
 
-/// Rejects a program that writes a pointer type, takes an address, or calls
-/// `new`, which Fern IR represents but native emission does not yet. Every
-/// pointer value starts at one of these: `null` takes a nullable pointer type
-/// from an annotation, and `*T(p)` writes one.
-pub(crate) fn reject_pointer_syntax(syntax: &Syntax) -> Result<(), Diagnostic> {
-    let annotation = syntax
-        .annotations
+/// Rejects a program that calls `new`, converts with `*T(p)`, or frees a
+/// pointer, which Fern IR represents but native emission does not yet.
+pub(crate) fn reject_heap_syntax(syntax: &Syntax) -> Result<(), Diagnostic> {
+    let expression = syntax
+        .expressions
         .values()
-        .find(|annotation| matches!(annotation.kind, AnnotationKind::Pointer { .. }))
-        .map(|annotation| &annotation.span);
-    let address = || {
+        .find(|expression| {
+            matches!(
+                expression.kind,
+                ExpressionKind::New { .. } | ExpressionKind::PointerConversion { .. }
+            )
+        })
+        .map(|expression| &expression.span);
+    let statement = || {
         syntax
-            .expressions
+            .statements
             .values()
-            .find(|expression| {
-                matches!(
-                    expression.kind,
-                    ExpressionKind::AddressOf { .. } | ExpressionKind::New { .. }
-                )
-            })
-            .map(|expression| &expression.span)
+            .find(|statement| matches!(statement.kind, StatementKind::Free { .. }))
+            .map(|statement| &statement.span)
     };
-    match annotation.or_else(address) {
-        Some(span) => Err(pointers_not_implemented(span)),
+    match expression.or_else(statement) {
+        Some(span) => Err(heap_not_implemented(span)),
         None => Ok(()),
     }
 }

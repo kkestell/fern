@@ -6,13 +6,13 @@ use crate::{
     types::{StructId, Type},
 };
 
-use super::qbe::qbe_type;
+use super::qbe::value_class;
 
 /// The QBE layout of Fern values: a type's class, size, alignment, field
-/// offsets, and scalar storage slots. Struct identity and shape both belong to
+/// offsets, and value storage slots. Struct identity and shape both belong to
 /// the verified IR program, so this is the one backend helper that reads them.
 /// Size, alignment, and offsets come from the crate's shared derivation;
-/// classes and scalar slots are the backend's own.
+/// classes and value slots are the backend's own.
 pub(super) struct Layout<'a> {
     structs: &'a [Struct],
     layouts: Layouts,
@@ -44,10 +44,10 @@ impl<'a> Layout<'a> {
     /// address of its storage: QBE's own aggregate convention copies one word
     /// at a time, so its code would grow with the aggregate.
     pub(super) fn class(&self, ty: &Type) -> char {
-        match ty {
-            Type::Scalar(scalar) => qbe_type(*scalar),
-            Type::Array { .. } | Type::Struct(_) => 'l',
-            Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
+        if ty.is_aggregate() {
+            'l'
+        } else {
+            value_class(ty)
         }
     }
 
@@ -80,21 +80,21 @@ impl<'a> Layout<'a> {
             .clone()
     }
 
-    /// Every scalar storage leaf and its byte offset, in the order
+    /// Every scalar or pointer storage leaf and its byte offset, in the order
     /// IR globals flatten their literals.
-    pub(super) fn scalar_slots(&self, ty: &Type) -> Vec<(u64, Type)> {
+    pub(super) fn value_slots(&self, ty: &Type) -> Vec<(u64, Type)> {
         let mut slots = Vec::new();
-        self.collect_scalar_slots(ty, 0, &mut slots);
+        self.collect_value_slots(ty, 0, &mut slots);
         slots
     }
 
-    fn collect_scalar_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Type)>) {
+    fn collect_value_slots(&self, ty: &Type, base: u64, slots: &mut Vec<(u64, Type)>) {
         match ty {
             Type::Scalar(scalar) => slots.push((base, (*scalar).into())),
             Type::Array { length, element } => {
                 let stride = self.size(element);
                 for index in 0..*length {
-                    self.collect_scalar_slots(element, base + index * stride, slots);
+                    self.collect_value_slots(element, base + index * stride, slots);
                 }
             }
             Type::Struct(declared) => {
@@ -103,10 +103,10 @@ impl<'a> Layout<'a> {
                     .iter()
                     .zip(self.offsets(declared.id))
                 {
-                    self.collect_scalar_slots(field, base + offset, slots);
+                    self.collect_value_slots(field, base + offset, slots);
                 }
             }
-            Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
+            Type::Pointer { .. } => slots.push((base, ty.clone())),
         }
     }
 }

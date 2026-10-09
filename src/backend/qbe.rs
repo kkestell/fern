@@ -16,7 +16,8 @@ pub(super) fn operand(operand: Operand) -> String {
         Operand::Literal(literal) => match literal {
             Literal::Integer { value, .. } => value.to_string(),
             Literal::Floating(value) => floating::literal(value),
-            Literal::Null(_) => unreachable!("pointers are rejected before native emission"),
+            // `null` is the zero address.
+            Literal::Null(_) => "0".to_owned(),
         },
         Operand::Value(ValueId(id)) => format!("%v{id}"),
     }
@@ -34,7 +35,7 @@ pub(super) fn data_item(literal: Literal) -> String {
             if value.ty() == Scalar::F32 { 'w' } else { 'l' },
             value.bits()
         ),
-        Literal::Null(_) => unreachable!("pointers are rejected before native emission"),
+        Literal::Null(ty) => format!("{} 0", value_class(&ty)),
     }
 }
 
@@ -43,6 +44,19 @@ pub(super) fn data_item(literal: Literal) -> String {
 pub(super) fn scalar(ty: &Type) -> Scalar {
     ty.scalar()
         .expect("arithmetic and conversion emission runs on scalars")
+}
+
+/// The QBE class of a value carried by value: a scalar's own class, or the
+/// word a pointer occupies. A pointer has the width of `uint`, which is the
+/// platform's pointer width.
+pub(super) fn value_class(ty: &Type) -> char {
+    match ty {
+        Type::Scalar(scalar) => qbe_type(*scalar),
+        Type::Pointer { .. } => qbe_type(Scalar::Uint),
+        Type::Array { .. } | Type::Struct(_) => {
+            unreachable!("an aggregate is carried by the address of its storage")
+        }
+    }
 }
 
 pub(super) fn qbe_type(ty: Scalar) -> char {
@@ -54,10 +68,10 @@ pub(super) fn qbe_type(ty: Scalar) -> char {
     }
 }
 
-/// Two aggregates are equal when every pair of corresponding scalars is, which
-/// is not the same question as holding identical bytes: two floating-point
-/// zeroes are equal, a NaN equals nothing, and padding holds no value at all.
-/// Comparing the layout's scalar slots answers the question one field at a
+/// Two aggregates are equal when every pair of corresponding scalars and
+/// pointers is, which is not the same question as holding identical bytes: two
+/// floating-point zeroes are equal, a NaN equals nothing, and padding holds no
+/// value at all. Comparing leaf by leaf answers the question one field at a
 /// time, however deeply arrays and structs nest.
 pub(super) fn emit_aggregate_comparison(
     emitter: &mut Emitter<'_>,
@@ -78,15 +92,15 @@ pub(super) fn emit_aggregate_comparison(
 }
 
 /// Emits an equality test without flattening an aggregate into one instruction
-/// sequence per scalar. Arrays are walked at run time, while structs visit
+/// sequence per leaf. Arrays are walked at run time, while structs visit
 /// their fields in declaration order. Scalar leaves retain QBE's IEEE 754
 /// comparison instructions for floating-point fields.
 fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: &Type) -> String {
     let comparison = emitter.comparisons;
     emitter.comparisons += 1;
     match ty {
-        Type::Scalar(scalar) => {
-            let class = qbe_type(*scalar);
+        Type::Scalar(_) | Type::Pointer { .. } => {
+            let class = value_class(ty);
             writeln!(
                 emitter.text,
                 "    %aggregate{comparison}_leftvalue ={class} load{class} {left}"
@@ -202,7 +216,6 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             emit_aggregate_result_blocks(emitter, comparison);
             format!("%aggregate{comparison}_result")
         }
-        Type::Pointer { .. } => unreachable!("pointers are rejected before native emission"),
     }
 }
 

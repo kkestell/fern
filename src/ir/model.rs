@@ -238,8 +238,8 @@ pub(crate) struct ControlFlow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Global {
     pub ty: Type,
-    /// One entry per scalar, in memory order, or `None` when every byte is
-    /// zero.
+    /// One entry per scalar or pointer, in memory order, or `None` when every
+    /// byte is zero.
     pub values: Option<Vec<Literal>>,
 }
 

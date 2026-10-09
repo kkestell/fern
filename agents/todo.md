@@ -45,7 +45,7 @@
   traps, and pointer equality. Lower the checked forms from the previous tasks
   and verify that indirect places are rooted in pointer-typed values.
 
-- [ ] Emit address-of, dereference, and pointer comparison in native code
+- [x] Emit address-of, dereference, and pointer comparison in native code
 
   Take the address of stack and module-level storage in QBE, load and store
   scalars and aggregates through pointer values, copy pointers as word-sized

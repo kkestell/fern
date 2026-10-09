@@ -10,15 +10,16 @@ baggage, undefined behavior, or unsafe default semantics.
 Choose a document by the fact it owns, not by whether the change is broadly
 described as "behavior" or a "specification."
 
-| Document          | Owns                                                                                      |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| `docs/spec.md`    | The Fern language: source syntax, types, semantic rules, built-ins, and program execution. |
-| `agents/bugs.md`  | Known defects and implementation limitations.                                             |
-| `agents/todo.md`  | Planned improvements that are not defects.                                                |
-| `agents/plans/`   | Implementation plans written by `kplan`.                                                  |
-| `agents/work/`    | Work logs written by `kwork`.                                                             |
-| `agents/reviews/` | Code reviews written by `kreview`.                                                        |
-| `AGENTS.md`       | Repository workflow, document ownership, and instructions for agents.                     |
+| Document                              | Owns                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `docs/spec.md`                        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution. |
+| `agents/values-references-and-ffi.md` | The proposed design for references, garbage collection, and C interop, and its open questions. |
+| `agents/bugs.md`                      | Known defects and implementation limitations.                                             |
+| `agents/todo.md`                      | Planned improvements that are not defects.                                                |
+| `agents/plans/`                       | Implementation plans written by `kplan`.                                                  |
+| `agents/work/`                        | Work logs written by `kwork`.                                                             |
+| `agents/reviews/`                     | Code reviews written by `kreview`.                                                        |
+| `AGENTS.md`                           | Repository workflow, document ownership, and instructions for agents.                     |
 
 The code and its comments describe the implementation.
 

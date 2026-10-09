@@ -462,8 +462,9 @@ impl Program {
                 let value = &function.values[*id];
                 // A pointer may be written through, so an addressed place is
                 // checked as a destination: no constant or parameter. No
-                // pointer reaches the result storage, so a returned call or
-                // literal writes it without any read observing the write.
+                // pointer reaches the result storage, so only the returned
+                // call, literal, or local the function builds there reads or
+                // writes it.
                 let valid = if let ValueKind::Address(place) = &value.kind {
                     let target = self.destination_type(function, place, &operand_type)?;
                     value.span.is_none()

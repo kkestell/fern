@@ -2073,7 +2073,7 @@ fn pair(x: int) -> [2]int { return [x, x + 1]; }
 fn grouped(x: int) -> S { return (S { a = x, ... }); }
 fn filled(x: int) -> [3]int { return [x...]; }
 fn folded() -> [2]int { return [1, 2]; }
-fn copied(x: int) -> [2]int { var local = [x, x]; return local; }
+fn copied(x: [2]int) -> [2]int { return x; }
 fn main() -> void {}",
     );
     let functions = &program.program().functions;
@@ -2099,5 +2099,82 @@ fn main() -> void {}",
     assert_eq!(stored_places(&functions[2]), ["result[0]", "result[1..]"]);
     assert_eq!(returned(&functions[2]), "Load(Result)");
     assert_eq!(returned(&functions[3]), "Load(Constant(ConstantId(0)))");
-    assert_eq!(returned(&functions[4]), "Load(Local(LocalId(2)))");
+    assert_eq!(returned(&functions[4]), "Load(Local(LocalId(0)))");
+}
+
+/// The kind of the value each `return` of `function` returns, in block order.
+fn returned_kinds(function: &Function) -> Vec<String> {
+    function
+        .flow
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            Terminator::Return {
+                value: Some(Operand::Value(ValueId(id))),
+            } => Some(format!("{:?}", function.values[*id].kind)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_local_every_return_returns_lives_in_the_result_storage() {
+    let program = lowered(
+        "fn build(n: int) -> [3]int { var out: [3]int; out[0] = n; return out; }
+fn branches(flag: bool) -> [2]int {
+    var r = [0, 0];
+    if flag { r[0] = 1; return r; }
+    for var i = 0; i < 2; i += 1 { if i == 1 { return (r); } }
+    return r;
+}
+fn mixed(flag: bool) -> [2]int { var r = [1, 2]; if flag { return [3, 4]; } return r; }
+fn addressed() -> [2]int { var r = [1, 2]; const p = &r; p[0] = 5; return r; }
+fn folded() -> [2]int { const r = [1, 2]; return r; }
+fn two(flag: bool) -> [2]int { var a = [1, 2]; var b = [3, 4]; if flag { return a; } return b; }
+fn sum(r: [2]int) -> int { return r[0] + r[1]; }
+fn passed() -> [2]int { var r = [1, 2]; r[0] = sum(r); return r; }
+fn main() -> void {}",
+    );
+    let functions = &program.program().functions;
+    assert_eq!(stored_places(&functions[0]), ["zero result", "result[0]"]);
+    assert_eq!(returned_kinds(&functions[0]), ["Load(Result)"]);
+    assert_eq!(functions[0].flow.locals.len(), 1);
+    assert_eq!(returned_kinds(&functions[1]), ["Load(Result)"; 3]);
+    assert!(
+        !functions[1].flow.locals.iter().any(Type::is_aggregate),
+        "{:?}",
+        functions[1].flow.locals
+    );
+    for (index, expected) in [
+        (
+            2,
+            vec!["Load(Constant(ConstantId(1)))", "Load(Local(LocalId(1)))"],
+        ),
+        (3, vec!["Load(Local(LocalId(0)))"]),
+        (4, vec!["Load(Constant(ConstantId(0)))"]),
+        (
+            5,
+            vec!["Load(Local(LocalId(1)))", "Load(Local(LocalId(2)))"],
+        ),
+    ] {
+        assert_eq!(
+            returned_kinds(&functions[index]),
+            expected,
+            "function {index}"
+        );
+    }
+    // An argument read from the returned local is copied, not borrowed.
+    assert!(
+        functions[7]
+            .values
+            .iter()
+            .any(|value| value.kind == ValueKind::Load(Place::Result))
+    );
+    assert!(
+        !functions[7]
+            .values
+            .iter()
+            .any(|value| matches!(value.kind, ValueKind::Borrow(_)))
+    );
+    assert_eq!(returned_kinds(&functions[7]), ["Load(Result)"]);
 }

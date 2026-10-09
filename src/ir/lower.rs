@@ -119,6 +119,7 @@ fn lower_function(
         let local = builder.local(checked.bindings[parameter].ty.clone());
         bindings.insert(parameter, Place::Local(local));
     }
+    bindings.returned = returned_local(checked, id, addressed);
     let parameters = signature.parameters.len();
     let result = signature.result.clone();
     let terminated = lower_flow_body(
@@ -136,6 +137,113 @@ fn lower_function(
     builder.finish(parameters, result)
 }
 
+/// The aggregate local every `return` of `function` returns, which can live in
+/// the result storage so that no `return` copies it. Nothing else reads or
+/// writes the result storage: the local is never addressed, an argument read
+/// from it is copied, and no call returns into the storage because every
+/// `return` returns the local. A parameter, a `for … in` binding, and a folded
+/// `const` do not qualify, since each has storage of its own or none.
+fn returned_local(
+    checked: &CheckedProgram<'_>,
+    function: Idx<SyntaxFunction>,
+    addressed: &HashSet<Idx<Binding>>,
+) -> Option<Idx<Binding>> {
+    if !checked.functions[function]
+        .result
+        .as_ref()
+        .is_some_and(Type::is_aggregate)
+    {
+        return None;
+    }
+    let mut returns = Vec::new();
+    let mut declared = HashSet::new();
+    collect_returns(
+        checked,
+        &checked.syntax.functions[function].body,
+        &mut returns,
+        &mut declared,
+    );
+    let mut returned = None;
+    for value in returns {
+        let binding = value.and_then(|value| returned_binding(checked, value))?;
+        if returned
+            .replace(binding)
+            .is_some_and(|other| other != binding)
+        {
+            return None;
+        }
+    }
+    returned.filter(|binding| {
+        declared.contains(binding)
+            && checked.bindings[*binding].constant.is_none()
+            && !addressed.contains(binding)
+    })
+}
+
+/// Every `return` value in `body`, and every binding a declaration in it
+/// introduces, however deeply nested.
+fn collect_returns(
+    checked: &CheckedProgram<'_>,
+    body: &[Idx<Statement>],
+    returns: &mut Vec<Option<Idx<Expression>>>,
+    declared: &mut HashSet<Idx<Binding>>,
+) {
+    for &statement in body {
+        collect_statement_returns(checked, statement, returns, declared);
+    }
+}
+
+fn collect_statement_returns(
+    checked: &CheckedProgram<'_>,
+    statement: Idx<Statement>,
+    returns: &mut Vec<Option<Idx<Expression>>>,
+    declared: &mut HashSet<Idx<Binding>>,
+) {
+    match &checked.syntax.statements[statement].kind {
+        StatementKind::Binding { .. } => {
+            declared.insert(checked.declarations[statement]);
+        }
+        StatementKind::Return { value } => returns.push(*value),
+        StatementKind::Block { body } => collect_returns(checked, body, returns, declared),
+        StatementKind::If {
+            then_body,
+            else_branch,
+            ..
+        } => {
+            collect_returns(checked, then_body, returns, declared);
+            if let Some(branch) = else_branch {
+                collect_statement_returns(checked, *branch, returns, declared);
+            }
+        }
+        StatementKind::For { header, body, .. } => {
+            if let ForHeader::ThreeClause {
+                initializer, post, ..
+            } = header
+            {
+                collect_statement_returns(checked, *initializer, returns, declared);
+                collect_statement_returns(checked, *post, returns, declared);
+            }
+            collect_returns(checked, body, returns, declared);
+        }
+        StatementKind::Assignment { .. }
+        | StatementKind::CompoundAssignment { .. }
+        | StatementKind::Free { .. }
+        | StatementKind::Exit { .. }
+        | StatementKind::Call { .. }
+        | StatementKind::Break { .. }
+        | StatementKind::Continue { .. } => {}
+    }
+}
+
+/// The binding a `return` value reads, looking through any parentheses.
+fn returned_binding(checked: &CheckedProgram<'_>, id: Idx<Expression>) -> Option<Idx<Binding>> {
+    match &checked.expressions[id].value {
+        ExpressionValue::Reference(binding) => Some(*binding),
+        ExpressionValue::Grouping { expression } => returned_binding(checked, *expression),
+        _ => None,
+    }
+}
+
 /// The immutable module storage and the locals one function owns while it is
 /// lowered. Local bindings shadow module bindings without copying the latter.
 /// `addressed` holds every binding whose address an `&` takes, whose storage
@@ -146,6 +254,9 @@ struct Places<'a> {
     locals: HashMap<Idx<Binding>, Place>,
     /// The locals of addressed bindings.
     addressed_locals: HashSet<LocalId>,
+    /// The local every `return` of the function returns, which lives in the
+    /// result storage; see `returned_local`.
+    returned: Option<Idx<Binding>>,
 }
 
 impl<'a> Places<'a> {
@@ -155,6 +266,7 @@ impl<'a> Places<'a> {
             addressed,
             locals: HashMap::new(),
             addressed_locals: HashSet::new(),
+            returned: None,
         }
     }
 
@@ -481,15 +593,30 @@ fn lower_flow_binding(
     }
     let ty = checked.bindings[binding].ty.clone();
     let Some(initializer) = initializer else {
-        let place = Place::Local(builder.local(ty.clone()));
+        let place = binding_place(binding, &ty, bindings, builder);
         builder.store_zero(place.clone(), &ty);
         bindings.insert(binding, place);
         return;
     };
     let operand = lower_flow_operand(checked, *initializer, bindings, builder);
-    let local = builder.local(ty);
-    builder.store(Place::Local(local), operand);
-    bindings.insert(binding, Place::Local(local));
+    let place = binding_place(binding, &ty, bindings, builder);
+    builder.store(place.clone(), operand);
+    bindings.insert(binding, place);
+}
+
+/// The storage a declared binding lives in: the result storage for the
+/// function's returned local, and a fresh local otherwise.
+fn binding_place(
+    binding: Idx<Binding>,
+    ty: &Type,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Place {
+    if bindings.returned == Some(binding) {
+        Place::Result
+    } else {
+        Place::Local(builder.local(ty.clone()))
+    }
 }
 
 fn lower_flow_body(

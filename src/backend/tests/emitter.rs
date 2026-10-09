@@ -342,8 +342,9 @@ fn stack_storage_excludes_borrowed_parameters_and_forwarded_results() {
     let layout = Layout::new(&program.structs);
     assert_eq!(storage_bytes(&layout, &program.functions[0]), 8);
     assert_eq!(storage_bytes(&layout, &program.functions[2]), 8);
+    // `build`'s returned local lives in the caller's result storage.
     let build = &program.functions[1];
-    assert_eq!(storage_bytes(&layout, build), 16008);
+    assert_eq!(storage_bytes(&layout, build), 8);
 }
 
 #[test]

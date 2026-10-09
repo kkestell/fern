@@ -311,9 +311,10 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
 
 /// The aggregate values the function's `return`s return that already sit in
 /// `%result`: call results, which each call writes straight into `%result`,
-/// and loads of the result storage a returned literal was built in. A value
-/// is used only in the block defining it, so each shares its block with the
-/// `return`, and nothing reads `%result` before the function returns.
+/// and loads of the result storage a returned literal or local was built in.
+/// A value is used only in the block defining it, so each shares its block
+/// with the `return`, and nothing writes `%result` between the value's
+/// definition and the `return`.
 fn returned_in_place(function: &Function) -> Vec<ValueId> {
     function
         .flow
@@ -723,7 +724,8 @@ fn emit_terminator(
         Terminator::Return { value } => match value {
             Some(value) => match function.result.as_ref().filter(|ty| ty.is_aggregate()) {
                 Some(ty) => {
-                    // A returned call or literal already sits in `%result`.
+                    // A returned call, literal, or local already sits in
+                    // `%result`.
                     let written = matches!(value, Operand::Value(id) if emitter.returned_in_place.contains(id));
                     if !written {
                         let size = emitter.layout.size(ty);

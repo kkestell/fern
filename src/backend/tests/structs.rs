@@ -327,3 +327,77 @@ fn native_returned_literals_read_their_inputs_before_returning() {
         Some(42)
     );
 }
+
+#[test]
+fn a_returned_local_is_built_where_the_caller_reads_it() {
+    let source = "fn build(n: int) -> [3]int { var out: [3]int; out[0] = n; return out; }
+fn main() -> void { exit(build(9)[0]); }";
+    let qbe = emit(&lowered(source), None);
+    let body = qbe
+        .split("function $fn0(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap();
+    assert!(body.contains("%result"), "{body}");
+    assert!(!body.contains("blit") && !body.contains("memcpy"), "{body}");
+    assert_eq!(native_program_status(source), Some(9));
+}
+
+#[test]
+fn native_returned_locals_keep_local_semantics() {
+    assert_eq!(
+        native_program_status(
+            "type Point struct { x: int, y: int }
+             fn sum(values: [4]int) -> int { return values[0] + values[1] + values[2] + values[3]; }
+             fn squares() -> [4]int {
+                 var out: [4]int;
+                 for var i = 0; i < 4; i += 1 { out[i] = i * i; }
+                 return out;
+             }
+             fn running() -> [4]int {
+                 var out = [1, 1, 1, 1];
+                 // Each call reads a copy of `out` taken before the write.
+                 out[1] = sum(out);
+                 out[2] = sum(out);
+                 return out;
+             }
+             fn walk(n: int) -> Point {
+                 var p = Point { x = 0, y = 0 };
+                 if n == 0 { return p; }
+                 p = walk(n - 1);
+                 p.x += 1;
+                 p.y += n;
+                 return p;
+             }
+             fn swapped(a: [2]int) -> [2]int { var r: [2]int; r[0] = a[1]; r[1] = a[0]; return r; }
+             fn forwarded(a: [2]int) -> [2]int { return swapped(a); }
+             fn redeclared() -> [2]int {
+                 var i = 0;
+                 for {
+                     // Each iteration starts from a zeroed `r`.
+                     var r: [2]int;
+                     r[0] += i;
+                     r[1] += 1;
+                     i += 1;
+                     if i == 3 { return r; }
+                 }
+             }
+             fn main() -> void {
+                 var x = [1, 2];
+                 x = swapped(x);
+                 if x[0] != 2 || x[1] != 1 { exit(4); }
+                 x = forwarded(x);
+                 if x[0] != 1 || x[1] != 2 { exit(5); }
+                 const d = redeclared();
+                 if d[0] != 2 || d[1] != 1 { exit(6); }
+                 if sum(squares()) != 14 { exit(1); }
+                 const r = running();
+                 if r[1] != 4 || r[2] != 7 { exit(2); }
+                 const p = walk(4);
+                 if p.x != 4 || p.y != 10 { exit(3); }
+                 exit(42);
+             }"
+        ),
+        Some(42)
+    );
+}

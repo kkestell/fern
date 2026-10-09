@@ -544,7 +544,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -596,7 +596,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -609,7 +609,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -653,7 +653,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -690,11 +690,7 @@ Program {
                         ),
                     },
                     kind: Load(
-                        Local(
-                            LocalId(
-                                1,
-                            ),
-                        ),
+                        Result,
                     ),
                 },
             ],
@@ -723,12 +719,6 @@ Program {
                             ),
                         },
                     },
-                    Array {
-                        length: 2,
-                        element: Scalar(
-                            Int,
-                        ),
-                    },
                     Scalar(
                         Int,
                     ),
@@ -742,11 +732,7 @@ Program {
                                 ),
                             ),
                             Store {
-                                place: Local(
-                                    LocalId(
-                                        1,
-                                    ),
-                                ),
+                                place: Result,
                                 operand: Value(
                                     ValueId(
                                         0,
@@ -756,7 +742,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Literal(
@@ -842,11 +828,7 @@ Program {
                             },
                             Store {
                                 place: Element {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
+                                    base: Result,
                                     index: Value(
                                         ValueId(
                                             4,
@@ -882,7 +864,7 @@ Program {
                             Store {
                                 place: Local(
                                     LocalId(
-                                        2,
+                                        1,
                                     ),
                                 ),
                                 operand: Value(

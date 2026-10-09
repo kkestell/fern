@@ -72,7 +72,7 @@
   temporary local, copies it into the load's storage, and copies that into the
   caller's result storage. Build it in the result storage directly.
 
-- [ ] Give a returned local the result storage
+- [x] Give a returned local the result storage
 
   A function that returns the same aggregate local on every `return` copies that
   local into the caller's result storage. Allocate the local in the result

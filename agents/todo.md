@@ -18,7 +18,7 @@
   Give pointers the platform pointer width in `src/layout.rs` and a scalar
   slot in the semantic model. Reject `*void`.
 
-- [ ] Check address-of, dereference, and access through pointers
+- [x] Check address-of, dereference, and access through pointers
 
   Type `&location` as a `*T` and reject it on `const` bindings, parameters,
   their fields and elements, and non-locations. Treat `*p` as a mutable

@@ -644,6 +644,11 @@ fn checked_target_steps(source: &str) -> Vec<Vec<String>> {
                         steps(operand, found);
                         found.push(format!("field {ordinal}"));
                     }
+                    CheckedLocationKind::Pointer(_) => found.push("pointer".to_owned()),
+                    CheckedLocationKind::Dereference { operand } => {
+                        steps(operand, found);
+                        found.push("dereference".to_owned());
+                    }
                 }
             }
             let mut found = Vec::new();
@@ -876,4 +881,84 @@ fn an_assignment_target_must_be_a_location() {
         "type Point struct { x: int }
          fn main() -> void { var p = Point { x = 1 }; (p).x = 2; }",
     );
+}
+
+#[test]
+fn assignments_store_through_pointers() {
+    let source = "type S struct { x: int, a: [3]int }
+fn get(p: *S) -> *S { return p; }
+fn set(p: *S) -> void { p.x = 1; }
+fn main() -> void {
+    var x = 1;
+    const p = &x;
+    var vp = p;
+    const pp = &vp;
+    *p = 2;
+    *p += 1;
+    (*p) = 3;
+    **pp = 4;
+    var s = S { x = 1, a = [1, 2, 3] };
+    const ps = &s;
+    var vps = ps;
+    const pps = &vps;
+    ps.x = 1;
+    ps.a[2] = 3;
+    (*ps).x = 4;
+    pps.x = 5;
+    get(ps).x = 4;
+    for *p = 0; *p < 3; *p += 1 {}
+}";
+    let steps =
+        |names: &[&str]| -> Vec<String> { names.iter().map(|&name| name.to_owned()).collect() };
+    assert_eq!(
+        checked_target_steps(source),
+        vec![
+            steps(&["field 0"]),
+            steps(&["dereference"]),
+            steps(&["dereference"]),
+            steps(&["dereference"]),
+            steps(&["dereference", "dereference"]),
+            steps(&["field 0"]),
+            steps(&["field 1", "index"]),
+            steps(&["dereference", "field 0"]),
+            steps(&["field 0"]),
+            steps(&["pointer", "field 0"]),
+            steps(&["dereference"]),
+            steps(&["dereference"]),
+        ]
+    );
+}
+
+#[test]
+fn a_pointer_binding_is_immutable_while_its_target_is_not() {
+    let prelude = "type S struct { x: int }
+fn get(p: *S) -> *S { return p; }
+fn copy(s: S) -> S { return s; }
+";
+    for (body, message) in [
+        (
+            "var x = 1; const p = &x; *p = «true»;",
+            "cannot implicitly convert `bool` to `int`",
+        ),
+        (
+            "var x = 1; const p = &x; «p» = &x;",
+            "cannot assign to immutable binding `p`",
+        ),
+        (
+            "const s = S { x = 1 }; «s».x = 2;",
+            "cannot assign to immutable binding `s`",
+        ),
+        (
+            "var s = S { x = 1 }; const ps = &s; «get(ps)» = ps;",
+            "cannot assign to an expression that is not a location",
+        ),
+        ("var x = 1; *«(x + 1)» = 2;", "cannot dereference `int`"),
+        ("var x = 1; const p = &*«1»;", "cannot dereference `int`"),
+        (
+            "var s = S { x = 1 }; («copy(s)»).x = 2;",
+            "cannot assign to an expression that is not a location",
+        ),
+    ] {
+        rejects_root(&format!("{prelude}fn main() -> void {{ {body} }}"), message);
+    }
 }

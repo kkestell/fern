@@ -227,6 +227,19 @@ impl Type {
             Self::Array { .. } | Self::Struct(_) | Self::Pointer { .. } => None,
         }
     }
+
+    /// The type reached by following every non-nullable pointer, which is
+    /// what field selection, indexing, and `len` act on. A nullable pointer
+    /// is not followed.
+    pub(crate) fn through_pointers(&self) -> &Self {
+        match self {
+            Self::Pointer {
+                nullable: false,
+                target,
+            } => target.through_pointers(),
+            _ => self,
+        }
+    }
 }
 
 impl fmt::Display for Type {
@@ -421,6 +434,23 @@ mod tests {
         assert_eq!(pointer(false, pointer(false, int())).to_string(), "**int");
         assert_eq!(array(2, pointer(false, int())).to_string(), "[2]*int");
         assert_eq!(pointer(false, array(2, int())).to_string(), "*[2]int");
+    }
+
+    #[test]
+    fn field_selection_looks_through_non_nullable_pointers_only() {
+        let point = || declared(0, "Point");
+        assert_eq!(point().through_pointers(), &point());
+        assert_eq!(pointer(false, point()).through_pointers(), &point());
+        assert_eq!(
+            pointer(false, pointer(false, point())).through_pointers(),
+            &point()
+        );
+        let nullable = pointer(true, point());
+        assert_eq!(nullable.through_pointers(), &nullable);
+        assert_eq!(
+            pointer(false, nullable.clone()).through_pointers(),
+            &nullable
+        );
     }
 
     #[test]

@@ -576,6 +576,9 @@ fn lower_location(
             held.steps.push(HeldStep::Field(*ordinal));
             held
         }
+        CheckedLocationKind::Pointer(_) | CheckedLocationKind::Dereference { .. } => {
+            unreachable!("pointer types are rejected before lowering")
+        }
     }
 }
 
@@ -1169,6 +1172,9 @@ fn lower_folded_effects(
         | ExpressionValue::Call { .. }
         | ExpressionValue::Index { .. }
         | ExpressionValue::Field { .. } => {}
+        ExpressionValue::AddressOf | ExpressionValue::Dereference { .. } => {
+            unreachable!("pointer types are rejected before lowering")
+        }
     }
     for operand in operands {
         lower_folded_effects(checked, operand, bindings, builder);
@@ -1209,6 +1215,9 @@ fn lower_flow_operand(
         ExpressionValue::Field { .. } => {
             let place = field_place(checked, id, bindings, builder);
             load_place(builder, place, ty)
+        }
+        ExpressionValue::AddressOf | ExpressionValue::Dereference { .. } => {
+            unreachable!("pointer types are rejected before lowering")
         }
         ExpressionValue::Reference(binding) => load_place(builder, bindings[binding].clone(), ty),
         ExpressionValue::Grouping { expression } => {

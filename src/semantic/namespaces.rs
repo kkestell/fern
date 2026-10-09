@@ -168,6 +168,7 @@ pub(crate) fn check<'a>(
         declarations: ArenaMap::default(),
         bindings: Arena::default(),
         assignments: ArenaMap::default(),
+        addresses: ArenaMap::default(),
         iterations: ArenaMap::default(),
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),

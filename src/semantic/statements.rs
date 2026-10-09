@@ -12,7 +12,7 @@ use la_arena::Idx;
 use lasso::Spur;
 use std::collections::HashMap;
 
-use super::{annotations::pointers_not_implemented, model::*};
+use super::{annotations::pointers_not_implemented, expressions::LocationUse, model::*};
 
 impl CheckedProgram<'_> {
     pub(super) fn check_body(
@@ -390,19 +390,34 @@ impl CheckedProgram<'_> {
         }
     }
 
-    /// Checks an assignable location, which is mutable exactly when the
-    /// binding it is rooted in is.
+    /// Checks an assignable location.
     fn assignment_target(
         &mut self,
         target: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedTarget, Diagnostic> {
-        let location = self.check_location(target, scopes)?;
-        if !self.bindings[Self::location_binding(&location)].mutable {
+        let location = self.mutable_location(target, scopes, LocationUse::Assign)?;
+        Ok(CheckedTarget {
+            ty: location.ty.clone(),
+            location,
+        })
+    }
+
+    /// Checks a location that must be mutable: one reached through a
+    /// pointer, or one whose root binding is mutable.
+    pub(super) fn mutable_location(
+        &mut self,
+        target: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+        use_: LocationUse,
+    ) -> Result<CheckedLocation, Diagnostic> {
+        let location = self.check_location(target, scopes, use_)?;
+        if self.immutable_root(&location).is_some() {
             return Err(Diagnostic::new(
                 location.span.clone(),
                 format!(
-                    "cannot assign to immutable binding `{}`",
+                    "cannot {} immutable binding `{}`",
+                    use_.verb(),
                     self.syntax.names.resolve(
                         &self
                             .target_name(target)
@@ -411,10 +426,7 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
-        Ok(CheckedTarget {
-            ty: location.ty.clone(),
-            location,
-        })
+        Ok(location)
     }
 
     fn target_name(&self, target: Idx<Expression>) -> Option<lasso::Spur> {
@@ -436,11 +448,26 @@ impl CheckedProgram<'_> {
         }
     }
 
-    fn location_binding(location: &CheckedLocation) -> Idx<Binding> {
+    /// The immutable binding that makes this location immutable, or `None`
+    /// when the location is mutable. A location reached through a pointer is
+    /// mutable whatever binding holds the pointer.
+    fn immutable_root(&self, location: &CheckedLocation) -> Option<Idx<Binding>> {
         match &location.kind {
-            CheckedLocationKind::Binding(binding) => *binding,
+            CheckedLocationKind::Binding(binding) => {
+                (!self.bindings[*binding].mutable).then_some(*binding)
+            }
             CheckedLocationKind::Index { operand, .. }
-            | CheckedLocationKind::Field { operand, .. } => Self::location_binding(operand),
+            | CheckedLocationKind::Field { operand, .. } => {
+                if matches!(operand.ty, Type::Pointer { .. }) {
+                    None
+                } else {
+                    self.immutable_root(operand)
+                }
+            }
+            CheckedLocationKind::Dereference { .. } => None,
+            CheckedLocationKind::Pointer(_) => {
+                unreachable!("a pointer value is only the operand of a step or a dereference")
+            }
         }
     }
 

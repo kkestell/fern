@@ -180,6 +180,12 @@ pub(crate) enum ExpressionValue {
     Length {
         operand: Idx<Expression>,
     },
+    /// `&location`, whose checked location is in `CheckedProgram::addresses`.
+    AddressOf,
+    /// `*p`, a copy of the pointer's target.
+    Dereference {
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug)]
@@ -220,8 +226,9 @@ pub(crate) struct FunctionSignature {
     pub result: Option<Type>,
 }
 
-/// A checked location: a binding, or an index or field selection from another
-/// location.
+/// A checked location: a binding, the target of a pointer, or an index or
+/// field selection from another location. An index or field step looks
+/// through every non-nullable pointer its operand's type has.
 #[derive(Debug)]
 pub(crate) struct CheckedLocation {
     pub kind: CheckedLocationKind,
@@ -240,11 +247,24 @@ pub(crate) enum CheckedLocationKind {
         operand: Box<CheckedLocation>,
         ordinal: usize,
     },
+    /// A pointer computed by an expression that is not itself a location,
+    /// such as a call. It only appears as the operand of a step or of a
+    /// `Dereference`.
+    Pointer(
+        #[expect(dead_code, reason = "lowered once Fern IR represents pointers")] Idx<Expression>,
+    ),
+    /// `*p`, the target of the pointer the operand holds.
+    Dereference {
+        #[cfg_attr(
+            not(test),
+            expect(dead_code, reason = "lowered once Fern IR represents pointers")
+        )]
+        operand: Box<CheckedLocation>,
+    },
 }
 
-/// Where an assignment stores: the binding its steps start from, those steps,
-/// and the type they reach, which is the binding's own type when it has no
-/// steps.
+/// Where an assignment stores: the location its steps start from, which is a
+/// binding or a pointer, those steps, and the type they reach.
 #[derive(Debug)]
 pub(crate) struct CheckedTarget {
     pub location: CheckedLocation,
@@ -300,6 +320,8 @@ pub(crate) struct CheckedProgram<'a> {
     pub declarations: ArenaMap<Idx<Statement>, Idx<Binding>>,
     pub bindings: Arena<Binding>,
     pub assignments: ArenaMap<Idx<Statement>, CheckedTarget>,
+    /// The location each `&` expression takes the address of.
+    pub addresses: ArenaMap<Idx<Expression>, CheckedLocation>,
     pub iterations: ArenaMap<Idx<Statement>, IterationBindings>,
     pub functions: ArenaMap<Idx<Function>, FunctionSignature>,
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,

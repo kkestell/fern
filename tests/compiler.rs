@@ -180,6 +180,10 @@ fn source_failures_preserve_output() {
             "pointers are not yet implemented",
         ),
         (
+            "fn main() -> void { var x = 1; const p = &x; }",
+            "pointers are not yet implemented",
+        ),
+        (
             "fn main() -> void { { var x = 1; } x = 2; }",
             "unknown binding `x`",
         ),

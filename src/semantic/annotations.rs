@@ -19,15 +19,25 @@ pub(super) fn pointers_not_implemented(span: &std::ops::Range<usize>) -> Diagnos
     Diagnostic::new(span.clone(), "pointers are not yet implemented")
 }
 
-/// Rejects a program that writes a pointer type, which checking resolves but
-/// IR lowering does not yet represent.
-pub(crate) fn reject_pointer_annotations(syntax: &Syntax) -> Result<(), Diagnostic> {
-    match syntax
+/// Rejects a program that writes a pointer type or takes an address, which
+/// checking accepts but IR lowering does not yet represent. Every pointer
+/// value starts at one of these while `null`, `new`, and `*T(p)` are rejected
+/// during checking.
+pub(crate) fn reject_pointer_syntax(syntax: &Syntax) -> Result<(), Diagnostic> {
+    let annotation = syntax
         .annotations
         .values()
         .find(|annotation| matches!(annotation.kind, AnnotationKind::Pointer { .. }))
-    {
-        Some(annotation) => Err(pointers_not_implemented(&annotation.span)),
+        .map(|annotation| &annotation.span);
+    let address = || {
+        syntax
+            .expressions
+            .values()
+            .find(|expression| matches!(expression.kind, ExpressionKind::AddressOf { .. }))
+            .map(|expression| &expression.span)
+    };
+    match annotation.or_else(address) {
+        Some(span) => Err(pointers_not_implemented(span)),
         None => Ok(()),
     }
 }

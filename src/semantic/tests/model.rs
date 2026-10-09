@@ -69,7 +69,9 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             | ExpressionValue::LogicalNot { .. }
             | ExpressionValue::Struct { .. }
             | ExpressionValue::Field { .. }
-            | ExpressionValue::Call { .. } => None,
+            | ExpressionValue::Call { .. }
+            | ExpressionValue::AddressOf
+            | ExpressionValue::Dereference { .. } => None,
         })
         .collect();
     assert_eq!(

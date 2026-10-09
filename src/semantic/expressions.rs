@@ -16,6 +16,34 @@ use super::{
     model::*,
 };
 
+/// Reports an expression used where a location is required.
+fn not_a_location(span: &std::ops::Range<usize>, use_: LocationUse) -> Diagnostic {
+    Diagnostic::new(
+        span.clone(),
+        format!(
+            "cannot {} an expression that is not a location",
+            use_.verb()
+        ),
+    )
+}
+
+/// What a location is checked for, which words the diagnostics that differ
+/// between an assignment target and an `&` operand.
+#[derive(Clone, Copy)]
+pub(super) enum LocationUse {
+    Assign,
+    Address,
+}
+
+impl LocationUse {
+    pub(super) fn verb(self) -> &'static str {
+        match self {
+            Self::Assign => "assign to",
+            Self::Address => "take the address of",
+        }
+    }
+}
+
 /// Reports a field name the struct does not declare.
 fn no_field(
     syntax: &Syntax,
@@ -147,9 +175,11 @@ impl CheckedProgram<'_> {
                 name,
                 name_span,
             } => self.infer_field(*operand, *name, name_span, scopes),
+            ExpressionKind::AddressOf { operand, .. } => {
+                self.infer_address_of(id, *operand, scopes)
+            }
+            ExpressionKind::Dereference { operand, .. } => self.infer_dereference(*operand, scopes),
             ExpressionKind::Null
-            | ExpressionKind::AddressOf { .. }
-            | ExpressionKind::Dereference { .. }
             | ExpressionKind::New { .. }
             | ExpressionKind::PointerConversion { .. } => {
                 Err(pointers_not_implemented(&expression.span))
@@ -277,9 +307,9 @@ impl CheckedProgram<'_> {
     }
 
     /// Checks one `[ … ]` step and gives the element type it reaches. The
-    /// operand must be an array, whose type supplies a constant range check,
-    /// and the index must be an `int`. Index expressions and assignment
-    /// targets share this, so both spell one rule.
+    /// operand must be an array, or a pointer to one, whose type supplies a
+    /// constant range check, and the index must be an `int`. Index
+    /// expressions and assignment targets share this, so both spell one rule.
     pub(super) fn check_index_step(
         &mut self,
         operand: &Type,
@@ -287,19 +317,20 @@ impl CheckedProgram<'_> {
         index: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
-        let Type::Array { length, element } = operand else {
+        let Type::Array { length, element } = operand.through_pointers() else {
             return Err(Diagnostic::new(
                 operand_span.clone(),
                 format!("cannot index `{operand}`"),
             ));
         };
+        let array = operand.through_pointers();
         let checked = self.check_expression(index, scopes, Some(Scalar::Int.into()))?;
         if let Some(value) = checked.integer()
             && value.to_u64().is_none_or(|value| value >= *length)
         {
             return Err(Diagnostic::new(
                 self.syntax.expressions[index].span.clone(),
-                format!("index {value} is out of range for `{operand}`"),
+                format!("index {value} is out of range for `{array}`"),
             ));
         }
         self.expressions.insert(index, checked);
@@ -422,8 +453,9 @@ impl CheckedProgram<'_> {
         })
     }
 
-    /// Checks one `.name` step and gives the field's position and type. Field
-    /// expressions and assignment targets share this, so both spell one rule.
+    /// Checks one `.name` step and gives the field's position and type. The
+    /// operand is a struct or a pointer to one. Field expressions and
+    /// assignment targets share this, so both spell one rule.
     pub(super) fn check_field_step(
         &self,
         operand: &Type,
@@ -431,7 +463,8 @@ impl CheckedProgram<'_> {
         name: Spur,
         name_span: &std::ops::Range<usize>,
     ) -> Result<(usize, Type), Diagnostic> {
-        let Type::Struct(struct_type) = operand else {
+        let reached = operand.through_pointers();
+        let Type::Struct(struct_type) = reached else {
             return Err(Diagnostic::new(
                 operand_span.clone(),
                 format!("cannot select a field of `{operand}`"),
@@ -439,7 +472,7 @@ impl CheckedProgram<'_> {
         };
         let declared = &self.structs[struct_type.id.0];
         let Some(&ordinal) = declared.ordinals.get(&name) else {
-            return Err(no_field(self.syntax, operand, name, name_span));
+            return Err(no_field(self.syntax, reached, name, name_span));
         };
         Ok((ordinal, declared.fields[ordinal].ty.clone()))
     }
@@ -491,7 +524,7 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
         let checked_operand = self.infer_expression(operand, scopes)?;
-        let Type::Array { length, .. } = checked_operand.ty else {
+        let Type::Array { length, .. } = *checked_operand.ty.through_pointers() else {
             return Err(Diagnostic::new(
                 self.syntax.expressions[operand].span.clone(),
                 format!(
@@ -545,12 +578,14 @@ impl CheckedProgram<'_> {
     }
 
     /// Checks an expression in a position that requires a stored location: a
-    /// binding, or an index or field selection from another location, in any
-    /// grouping. Index expressions are checked in source order.
+    /// binding, the target of a pointer, or an index or field selection from
+    /// another location, in any grouping. Index expressions are checked in
+    /// source order.
     pub(super) fn check_location(
         &mut self,
         id: Idx<Expression>,
         scopes: &ScopeStack<'_>,
+        use_: LocationUse,
     ) -> Result<CheckedLocation, Diagnostic> {
         match &self.syntax.expressions[id].kind {
             ExpressionKind::Reference(name) => {
@@ -561,9 +596,11 @@ impl CheckedProgram<'_> {
                     span: name.span.clone(),
                 })
             }
-            ExpressionKind::Grouping { expression } => self.check_location(*expression, scopes),
+            ExpressionKind::Grouping { expression } => {
+                self.check_location(*expression, scopes, use_)
+            }
             ExpressionKind::Index { operand, index } => {
-                let operand_location = self.check_location(*operand, scopes)?;
+                let operand_location = self.check_step_operand(*operand, scopes, use_)?;
                 let span = operand_location.span.clone();
                 let ty = self.check_index_step(&operand_location.ty, &span, *index, scopes)?;
                 Ok(CheckedLocation {
@@ -580,7 +617,7 @@ impl CheckedProgram<'_> {
                 name,
                 name_span,
             } => {
-                let operand_location = self.check_location(*operand, scopes)?;
+                let operand_location = self.check_step_operand(*operand, scopes, use_)?;
                 let span = operand_location.span.clone();
                 let (ordinal, ty) =
                     self.check_field_step(&operand_location.ty, &span, *name, name_span)?;
@@ -593,14 +630,128 @@ impl CheckedProgram<'_> {
                     span,
                 })
             }
-            ExpressionKind::Dereference { .. } => {
-                Err(pointers_not_implemented(&self.syntax.expressions[id].span))
+            ExpressionKind::Dereference { operand, .. } => {
+                let operand_location = self.check_pointer_operand(*operand, scopes, use_)?;
+                let ty = self.pointer_target(
+                    &operand_location.ty,
+                    &self.syntax.expressions[*operand].span,
+                )?;
+                Ok(CheckedLocation {
+                    kind: CheckedLocationKind::Dereference {
+                        operand: Box::new(operand_location),
+                    },
+                    ty,
+                    span: self.syntax.expressions[id].span.clone(),
+                })
             }
+            _ => Err(not_a_location(&self.syntax.expressions[id].span, use_)),
+        }
+    }
+
+    /// Checks the operand of an index or field step, which is a location or
+    /// an expression that computes a pointer, such as a call.
+    fn check_step_operand(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+        use_: LocationUse,
+    ) -> Result<CheckedLocation, Diagnostic> {
+        let location = self.check_pointer_operand(id, scopes, use_)?;
+        if matches!(location.kind, CheckedLocationKind::Pointer(_))
+            && !matches!(location.ty, Type::Pointer { .. })
+        {
+            return Err(not_a_location(&location.span, use_));
+        }
+        Ok(location)
+    }
+
+    /// Checks the operand of a step or of `*`, which is a location or an
+    /// expression that computes a value, such as a call. A computed value
+    /// becomes a `Pointer` location whatever its type, and each caller
+    /// rejects one that is not a pointer.
+    fn check_pointer_operand(
+        &mut self,
+        id: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+        use_: LocationUse,
+    ) -> Result<CheckedLocation, Diagnostic> {
+        match &self.syntax.expressions[id].kind {
+            ExpressionKind::Reference(_)
+            | ExpressionKind::Index { .. }
+            | ExpressionKind::Field { .. }
+            | ExpressionKind::Dereference { .. } => self.check_location(id, scopes, use_),
+            ExpressionKind::Grouping { expression } => {
+                self.check_pointer_operand(*expression, scopes, use_)
+            }
+            _ => {
+                let checked = self.infer_expression(id, scopes)?;
+                let ty = checked.ty.clone();
+                self.expressions.insert(id, checked);
+                Ok(CheckedLocation {
+                    kind: CheckedLocationKind::Pointer(id),
+                    ty,
+                    span: self.syntax.expressions[id].span.clone(),
+                })
+            }
+        }
+    }
+
+    /// The target type of a pointer that `*` follows, which must not be
+    /// nullable.
+    fn pointer_target(
+        &self,
+        operand: &Type,
+        operand_span: &std::ops::Range<usize>,
+    ) -> Result<Type, Diagnostic> {
+        match operand {
+            Type::Pointer {
+                nullable: false,
+                target,
+            } => Ok((**target).clone()),
             _ => Err(Diagnostic::new(
-                self.syntax.expressions[id].span.clone(),
-                "cannot assign to an expression that is not a location",
+                operand_span.clone(),
+                format!("cannot dereference `{operand}`"),
             )),
         }
+    }
+
+    /// `&location`, a pointer to a mutable location.
+    fn infer_address_of(
+        &mut self,
+        id: Idx<Expression>,
+        operand: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let location = self.mutable_location(operand, scopes, LocationUse::Address)?;
+        let ty = Type::Pointer {
+            nullable: false,
+            target: Box::new(location.ty.clone()),
+        };
+        self.addresses.insert(id, location);
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::AddressOf,
+            constant: None,
+        })
+    }
+
+    /// `*p` read as a value, a copy of the pointer's target.
+    fn infer_dereference(
+        &mut self,
+        operand: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let checked_operand = self.infer_expression(operand, scopes)?;
+        let ty =
+            self.pointer_target(&checked_operand.ty, &self.syntax.expressions[operand].span)?;
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::Dereference { operand },
+            constant: None,
+        })
     }
 
     fn infer_unary(

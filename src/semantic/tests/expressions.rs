@@ -1317,20 +1317,11 @@ fn pointer_syntax_reports_that_pointers_are_not_yet_implemented() {
     let message = "pointers are not yet implemented";
     for (body, offending) in [
         ("var x = 1; var p = null;", "null"),
-        ("var x = 1; const p = &x;", "&x"),
-        ("var x = 1; exit(*x);", "*x"),
         ("const p = new(1);", "new(1)"),
         ("var x = 1; const p = *int(x);", "*int(x)"),
-        ("var x = 1; *x = 2;", "*x"),
-        ("var x = 1; *x += 2;", "*x"),
-        ("var x = 1; (*x).y = 2;", "*x"),
         ("var x = 1; free(x);", "free(x);"),
-        ("for *new(0) = 0; true; *new(1) = 1 {}", "*new(0)"),
-        ("var x = 1; for *&x = 0; true; *new(1) = 1 {}", "*&x"),
-        (
-            "var x = 1; for *[&x][0] = 0; true; *[&x][1] = 1 {}",
-            "*[&x][0]",
-        ),
+        ("*new(0) = 0;", "new(0)"),
+        ("var x = 1; for *&x = 0; true; *new(1) = 1 {}", "new(1)"),
     ] {
         rejects(body, offending, message);
     }
@@ -1369,4 +1360,169 @@ fn a_fill_cannot_omit_a_field_without_a_zero_value() {
             Constant::Null,
         ]))
     );
+}
+
+/// A struct and a function returning a pointer to one, for the pointer tests.
+const POINTER_PRELUDE: &str = "type S struct { x: int, a: [3]int }
+fn get(p: *S) -> *S { return p; }
+";
+
+#[test]
+fn an_address_points_at_the_type_of_its_location() {
+    let int = || value_type(Scalar::Int);
+    let s = || struct_type(0, "S");
+    let source = format!(
+        "{POINTER_PRELUDE}fn main() -> void {{
+    var x = 1;
+    var a = [1, 2];
+    var s = S {{ x = 1, a = [1, 2, 3] }};
+    const px = &x;
+    const pa = &a[1];
+    const psx = &s.x;
+    const ps = &s;
+    var vp = &x;
+    const pp = &vp;
+    const deref = &*px;
+    const through = &ps.x;
+    const call = &get(ps).x;
+}}"
+    );
+    let types = checked_bindings(&source)
+        .into_iter()
+        .map(|(ty, _)| ty)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        [
+            pointer_type(false, s()),
+            int(),
+            array_type(2, int()),
+            s(),
+            pointer_type(false, int()),
+            pointer_type(false, int()),
+            pointer_type(false, int()),
+            pointer_type(false, s()),
+            pointer_type(false, int()),
+            pointer_type(false, pointer_type(false, int())),
+            pointer_type(false, int()),
+            pointer_type(false, int()),
+            pointer_type(false, int()),
+        ]
+    );
+}
+
+#[test]
+fn an_address_requires_a_mutable_location() {
+    for (marked, message) in [
+        (
+            "fn main() -> void { const q = 1; const p = &«q»; }",
+            "cannot take the address of immutable binding `q`",
+        ),
+        (
+            "fn f(v: int) -> void { const p = &«v»; } fn main() -> void {}",
+            "cannot take the address of immutable binding `v`",
+        ),
+        (
+            "type S struct { x: int }
+             fn main() -> void { const s = S { x = 1 }; const p = &«s».x; }",
+            "cannot take the address of immutable binding `s`",
+        ),
+        (
+            "fn f(v: [2]int) -> void { const p = &«v»[0]; } fn main() -> void {}",
+            "cannot take the address of immutable binding `v`",
+        ),
+        (
+            "fn main() -> void { const p = &«1»; }",
+            "cannot take the address of an expression that is not a location",
+        ),
+        (
+            "fn f() -> int { return 1; } fn main() -> void { const p = &«f()»; }",
+            "cannot take the address of an expression that is not a location",
+        ),
+        (
+            "fn main() -> void { var x = 1; const p = &(«x + 1»); }",
+            "cannot take the address of an expression that is not a location",
+        ),
+        (
+            "type S struct { x: int }
+             fn main() -> void { const p = &«S { x = 1 }»; }",
+            "cannot take the address of an expression that is not a location",
+        ),
+        (
+            "fn main() -> void { var a = [1, 2]; const p = &a[«5»]; }",
+            "index 5 is out of range for `[2]int`",
+        ),
+    ] {
+        rejects_root(marked, message);
+    }
+}
+
+#[test]
+fn values_are_read_through_pointers() {
+    let source = format!(
+        "{POINTER_PRELUDE}fn main() -> void {{
+    var x = 1;
+    const p = &x;
+    var vp = p;
+    const pp = &vp;
+    var s = S {{ x = 1, a = [1, 2, 3] }};
+    const ps = &s;
+    var vps = ps;
+    const pps = &vps;
+    var a = [1, 2, 3];
+    const q = &a;
+    exit(*p + **pp);
+    exit(ps.x + ps.a[0] + len(ps.a) + pps.x + get(ps).x + (*ps).x);
+    exit(q[1] + len(q));
+}}"
+    );
+    let syntax = parse(&source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let lengths = checked
+        .expressions
+        .iter()
+        .filter(|(_, expression)| matches!(expression.value, ExpressionValue::Length { .. }))
+        .map(|(_, expression)| expression.constant.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(lengths, [folded(3), folded(3)]);
+}
+
+#[test]
+fn reading_through_a_pointer_requires_a_non_nullable_pointer_to_the_right_type() {
+    for (body, message) in [
+        ("var x = 1; exit(*«x»);", "cannot dereference `int`"),
+        (
+            "var n: nullable *int; exit(*«n»);",
+            "cannot dereference `nullable *int`",
+        ),
+        (
+            "var x = 1; const p = &x; exit(«p».x);",
+            "cannot select a field of `*int`",
+        ),
+        (
+            "var s: S = S { ... }; const ps = &s; exit(«ps»[0]);",
+            "cannot index `*S`",
+        ),
+        (
+            "var s: S = S { ... }; const ps = &s; exit(ps.«y»);",
+            "struct `S` has no field `y`",
+        ),
+        (
+            "var a = [1, 2, 3]; const q = &a; exit(q[«5»]);",
+            "index 5 is out of range for `[3]int`",
+        ),
+        (
+            "var x = 1; const p = &x; exit(len(«p»));",
+            "`len` requires an array operand, found `*int`",
+        ),
+        (
+            "var n: nullable *S; exit(«n».x);",
+            "cannot select a field of `nullable *S`",
+        ),
+    ] {
+        rejects_root(
+            &format!("{POINTER_PRELUDE}fn main() -> void {{ {body} }}"),
+            message,
+        );
+    }
 }

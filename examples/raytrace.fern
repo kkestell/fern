@@ -1,0 +1,710 @@
+// Path traces the classic Cornell box and writes a binary PPM (P6) image to
+// standard output:
+//
+//   fern examples/raytrace.fern -o target/raytrace
+//   target/raytrace > target/raytrace.ppm
+//
+// The camera looks in through the open front of a white room whose left wall
+// is red and right wall is green, with two turned blocks and a light panel in
+// the ceiling. Each path bounces diffusely until Russian roulette ends it, and
+// every bounce samples the panel directly. Worker processes trace interleaved
+// rows in parallel and send them back through pipes.
+
+extern fn malloc(bytes: uint) -> *u8;
+extern fn free(memory: *u8) -> void;
+extern fn read(file: i32, bytes: *u8, count: uint) -> int;
+extern fn write(file: i32, bytes: *u8, count: uint) -> int;
+extern fn close(file: i32) -> i32;
+extern fn pipe(files: *i32) -> i32;
+extern fn fork() -> i32;
+extern fn waitpid(process: i32, status: *i32, options: i32) -> i32;
+extern fn dprintf(file: i32, format: *u8, ...) -> i32;
+extern fn exit(status: i32) -> void;
+
+type Vec3 struct {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+// Two coordinates in the unit square, which the samplers map onto the pixel,
+// the panel, or the hemisphere.
+type Sample struct {
+    u: f64,
+    v: f64,
+}
+
+// A box is axis aligned in its own frame, which is the world's turned about
+// the vertical axis by the angle whose cosine and sine it stores.
+type Box struct {
+    center: Vec3,
+    half: Vec3,
+    cosine: f64,
+    sine: f64,
+    color: Vec3,
+}
+
+// Where a ray crosses a box: the distances at which it enters and leaves, and
+// the face it enters through, as the axis of the box's frame that the face
+// lies across (0 for x, 1 for y, 2 for z) and the sign of its outward normal
+// along that axis.
+type Span struct {
+    entry: f64,
+    exit: f64,
+    axis: int,
+    facing: f64,
+}
+
+// Where a ray meets a surface: a point just off it, where new rays start so
+// that the surface neither shades nor occludes itself; its normal, facing the
+// ray; its albedo; and the radiance it emits.
+type Hit struct {
+    start: Vec3,
+    normal: Vec3,
+    color: Vec3,
+    emission: f64,
+}
+
+const image_width: int = 512;
+const image_height: int = 512;
+
+// A square grid of samples per pixel. Each sample also takes its own cell of
+// the panel and of the first bounce's hemisphere, in a shuffled order, so the
+// samples spread over every dimension rather than clumping.
+const samples_per_axis: int = 8;
+const samples_per_pixel = samples_per_axis * samples_per_axis;
+
+// Bounces every path takes before Russian roulette may end it.
+const certain_bounces: int = 2;
+
+// Worker processes, each tracing every `workers`th row. The image is the same
+// for any number of them.
+const workers: int = 12;
+
+const pi = 3.141592653589793;
+
+// How far a new ray starts off the surface it leaves.
+const ray_offset = 0.001;
+
+// The distance to a surface a ray never meets.
+const far_away = 1.0e30;
+
+// The room's interior runs from the origin to these extents. Its front, at
+// z = 0, is open.
+const room_width = 556.0;
+const room_height = 548.0;
+const room_depth = 560.0;
+
+// The eye is centered on the open front, far enough back that the widest ray
+// of the frustum still enters through the opening. `screen_scale` is the
+// tangent of the half angle of view.
+const eye = Vec3 { x = 278.0, y = 273.0, z = -800.0 };
+const screen_scale = 0.3;
+
+const white = Vec3 { x = 0.73, y = 0.73, z = 0.73 };
+const green = Vec3 { x = 0.14, y = 0.45, z = 0.091 };
+const red = Vec3 { x = 0.63, y = 0.065, z = 0.05 };
+const black = Vec3 { x = 0.0, y = 0.0, z = 0.0 };
+
+// The blocks stand turned 17 degrees about the vertical axis, in opposite
+// directions.
+const turn_cosine = 0.9563047559630354;
+const turn_sine = 0.2923717047227367;
+
+// The light: a rectangle of the ceiling that emits downward, and the power
+// that reaches a surface from it once that surface's albedo over pi and the
+// panel's area are folded in.
+const panel_min_x = 213.0;
+const panel_min_z = 227.0;
+const panel_width = 130.0;
+const panel_depth = 105.0;
+const panel_radiance = 40.0;
+const panel_power = panel_radiance * panel_width * panel_depth / pi;
+
+// The blocks standing in the room. Since the room itself is convex, only they
+// can come between a point in the room and the panel.
+var blocks: [2]Box = [
+    Box {
+        center = Vec3 { x = 368.5, y = 165.0, z = 351.0 },
+        half = Vec3 { x = 82.5, y = 165.0, z = 82.5 },
+        cosine = turn_cosine,
+        sine = turn_sine,
+        color = white,
+    },
+    Box {
+        center = Vec3 { x = 185.5, y = 82.5, z = 169.0 },
+        half = Vec3 { x = 82.5, y = 82.5, z = 82.5 },
+        cosine = turn_cosine,
+        sine = -turn_sine,
+        color = white,
+    },
+];
+
+// Brightens the image before the tone curve compresses its highlights.
+const exposure = 1.2;
+
+// How much each channel contributes to perceived brightness (Rec. 709).
+const luminance_weights = Vec3 { x = 0.2126, y = 0.7152, z = 0.0722 };
+
+// Reports why the program cannot go on, and stops it.
+fn fail(message: *u8) -> void {
+    dprintf(2, "raytrace: %s\n", message);
+    exit(1);
+}
+
+// SplitMix64: a counter run through a mixing function, so that neighboring
+// seeds still give unrelated streams.
+type Random struct {
+    state: u64,
+}
+
+fn random_unit(random: *Random) -> f64 {
+    (*random).state += 0x9e3779b97f4a7c15;
+    var z = (*random).state;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+    z = z ^ (z >> 31);
+    return f64(z >> 11) * 1.1102230246251565e-16;
+}
+
+fn uniform(random: *Random) -> Sample {
+    return Sample { u = random_unit(random), v = random_unit(random) };
+}
+
+// A random point in one cell of the square sample grid.
+fn stratified(random: *Random, cell: int) -> Sample {
+    return Sample {
+        u = (f64(cell % samples_per_axis) + random_unit(random)) / f64(samples_per_axis),
+        v = (f64(cell / samples_per_axis) + random_unit(random)) / f64(samples_per_axis),
+    };
+}
+
+// The sample for one vertex of a path. The vertex nearest the camera takes
+// its assigned cell of the grid. The grid cannot keep later vertices apart, as
+// they scatter from wherever the first bounce went, so they sample uniformly.
+fn vertex_sample(random: *Random, depth: int, cell: int) -> Sample {
+    if depth == 0 {
+        return stratified(random, cell);
+    }
+    return uniform(random);
+}
+
+// Fills `cells` with the indices below `count` in a random order.
+fn shuffle(random: *Random, cells: *int, count: int) -> void {
+    var index = 0;
+    for index < count {
+        var other = int(random_unit(random) * f64(index + 1));
+        cells[index] = cells[other];
+        cells[other] = index;
+        index += 1;
+    }
+}
+
+// The bit pattern of an f64, and the f64 a bit pattern names. Reinterpreting
+// the address of a local is how this example reaches an exponent field.
+fn bits_of(value: f64) -> u64 {
+    var pointer = *u64(&value);
+    return *pointer;
+}
+
+fn from_bits(bits: u64) -> f64 {
+    var value = bits;
+    var pointer = *f64(&value);
+    return *pointer;
+}
+
+// The square root of a positive value. Dividing the exponent by two lands
+// within a few percent of the root, and each Newton step then doubles the
+// correct digits, so three steps reach about twelve, far more than an image
+// needs. This keeps the example free of any library beyond the C calls it
+// declares.
+fn square_root(value: f64) -> f64 {
+    if value <= 0.0 {
+        return 0.0;
+    }
+    var guess = from_bits((bits_of(value) >> 1) + 0x1ff8000000000000);
+    guess = 0.5 * (guess + value / guess);
+    guess = 0.5 * (guess + value / guess);
+    return 0.5 * (guess + value / guess);
+}
+
+// The cube root of a positive value, the same way: a third of the exponent,
+// then Newton steps.
+fn cube_root(value: f64) -> f64 {
+    if value <= 0.0 {
+        return 0.0;
+    }
+    var guess = from_bits(bits_of(value) / 3 + 0x2a9f7893782da1ce);
+    var step = 0;
+    for step < 4 {
+        guess = (2.0 * guess + value / (guess * guess)) / 3.0;
+        step += 1;
+    }
+    return guess;
+}
+
+// The sine of an angle in [-pi, pi], folded onto [-pi/2, pi/2], where its
+// Taylor series through the 13th power is accurate to about 1e-9.
+fn sine(angle: f64) -> f64 {
+    var x = angle;
+    if x > pi / 2.0 {
+        x = pi - x;
+    } else if x < -pi / 2.0 {
+        x = -pi - x;
+    }
+    var x2 = x * x;
+    return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0
+        * (1.0 - x2 / 72.0 * (1.0 - x2 / 110.0 * (1.0 - x2 / 156.0))))));
+}
+
+fn cosine(angle: f64) -> f64 {
+    if angle < 0.0 {
+        return sine(pi / 2.0 + angle);
+    }
+    return sine(pi / 2.0 - angle);
+}
+
+fn minimum(a: f64, b: f64) -> f64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn sign(value: f64) -> f64 {
+    if value < 0.0 {
+        return -1.0;
+    }
+    return 1.0;
+}
+
+fn add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x = a.x + b.x, y = a.y + b.y, z = a.z + b.z };
+}
+
+fn subtract(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x = a.x - b.x, y = a.y - b.y, z = a.z - b.z };
+}
+
+fn scale(value: Vec3, factor: f64) -> Vec3 {
+    return Vec3 { x = value.x * factor, y = value.y * factor, z = value.z * factor };
+}
+
+// Componentwise, for filtering one color by another.
+fn multiply(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x = a.x * b.x, y = a.y * b.y, z = a.z * b.z };
+}
+
+fn dot(a: Vec3, b: Vec3) -> f64 {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+fn normalize(value: Vec3) -> Vec3 {
+    return scale(value, 1.0 / square_root(dot(value, value)));
+}
+
+fn largest(value: Vec3) -> f64 {
+    if value.x >= value.y && value.x >= value.z {
+        return value.x;
+    }
+    if value.y >= value.z {
+        return value.y;
+    }
+    return value.z;
+}
+
+// A world direction in a box's own frame. The box's vertical axis is the
+// world's, so only the horizontal components turn.
+fn local_direction(box: *Box, direction: Vec3) -> Vec3 {
+    return Vec3 {
+        x = direction.x * (*box).cosine - direction.z * (*box).sine,
+        y = direction.y,
+        z = direction.x * (*box).sine + direction.z * (*box).cosine,
+    };
+}
+
+fn local_point(box: *Box, point: Vec3) -> Vec3 {
+    return local_direction(box, subtract(point, (*box).center));
+}
+
+fn world_direction(box: *Box, local: Vec3) -> Vec3 {
+    return Vec3 {
+        x = local.x * (*box).cosine + local.z * (*box).sine,
+        y = local.y,
+        z = local.z * (*box).cosine - local.x * (*box).sine,
+    };
+}
+
+// Narrows a span to the slab between a box's two faces across `axis`, at
+// -half and +half along it, for a ray that starts at `start` along the axis
+// and moves `step` along it per unit of distance. A ray parallel to the slab
+// divides by zero, and the resulting infinities pass or miss the slab as they
+// should.
+fn clip(span: *Span, axis: int, start: f64, step: f64, half: f64) -> void {
+    var inverse = 1.0 / step;
+    var near = (-half - start) * inverse;
+    var far = (half - start) * inverse;
+    var facing = -1.0;
+    if near > far {
+        var swap = near;
+        near = far;
+        far = swap;
+        facing = 1.0;
+    }
+    if near > (*span).entry {
+        (*span).entry = near;
+        (*span).axis = axis;
+        (*span).facing = facing;
+    }
+    if far < (*span).exit {
+        (*span).exit = far;
+    }
+}
+
+// Where a ray crosses a box; a ray that misses enters at `far_away`. Every
+// ray starts outside every box.
+fn intersect_box(box: *Box, origin: Vec3, direction: Vec3) -> Span {
+    var start = local_point(box, origin);
+    var step = local_direction(box, direction);
+    var span = Span { entry = -far_away, exit = far_away, axis = 0, facing = 0.0 };
+    clip(&span, 0, start.x, step.x, (*box).half.x);
+    clip(&span, 1, start.y, step.y, (*box).half.y);
+    clip(&span, 2, start.z, step.z, (*box).half.z);
+    if span.entry > span.exit || span.entry <= 0.0 {
+        span.entry = far_away;
+    }
+    return span;
+}
+
+// The outward normal, in the box's frame, of the face a span enters through.
+fn entry_normal(span: Span) -> Vec3 {
+    if span.axis == 0 {
+        return Vec3 { x = span.facing, y = 0.0, z = 0.0 };
+    }
+    if span.axis == 1 {
+        return Vec3 { x = 0.0, y = span.facing, z = 0.0 };
+    }
+    return Vec3 { x = 0.0, y = 0.0, z = span.facing };
+}
+
+// The distance along one axis to the wall a ray inside the room heads for.
+fn wall_distance(origin: f64, direction: f64, extent: f64) -> f64 {
+    if direction > 0.0 {
+        return (extent - origin) / direction;
+    }
+    if direction < 0.0 {
+        return -origin / direction;
+    }
+    return far_away;
+}
+
+fn surface(point: Vec3, normal: Vec3, color: Vec3, emission: f64) -> Hit {
+    return Hit {
+        start = add(point, scale(normal, ray_offset)),
+        normal = normal,
+        color = color,
+        emission = emission,
+    };
+}
+
+fn in_panel(point: Vec3) -> bool {
+    return point.x >= panel_min_x && point.x <= panel_min_x + panel_width
+        && point.z >= panel_min_z && point.z <= panel_min_z + panel_depth;
+}
+
+// The surface a ray from inside the room meets: a block, if one stands in the
+// way, or else the wall it leaves the room through. Whatever leaves through
+// the open front never returns, as if it had met a black wall there.
+fn trace(origin: Vec3, direction: Vec3) -> Hit {
+    var to_side = wall_distance(origin.x, direction.x, room_width);
+    var to_level = wall_distance(origin.y, direction.y, room_height);
+    var to_end = wall_distance(origin.z, direction.z, room_depth);
+    var closest = minimum(to_side, minimum(to_level, to_end));
+    var block = -1;
+    var entered = Span { entry = far_away, exit = far_away, axis = 0, facing = 0.0 };
+    var i = 0;
+    for i < len(blocks) {
+        var span = intersect_box(&blocks[i], origin, direction);
+        if span.entry < closest {
+            closest = span.entry;
+            block = i;
+            entered = span;
+        }
+        i += 1;
+    }
+
+    var point = add(origin, scale(direction, closest));
+    if block >= 0 {
+        var box = &blocks[block];
+        return surface(point, world_direction(box, entry_normal(entered)), (*box).color, 0.0);
+    }
+    if to_side == closest {
+        var facing = Vec3 { x = -sign(direction.x), y = 0.0, z = 0.0 };
+        if direction.x > 0.0 {
+            return surface(point, facing, red, 0.0);
+        }
+        return surface(point, facing, green, 0.0);
+    }
+    if to_level == closest {
+        var facing = Vec3 { x = 0.0, y = -sign(direction.y), z = 0.0 };
+        if direction.y > 0.0 && in_panel(point) {
+            return surface(point, facing, black, panel_radiance);
+        }
+        return surface(point, facing, white, 0.0);
+    }
+    var facing = Vec3 { x = 0.0, y = 0.0, z = -sign(direction.z) };
+    if direction.z > 0.0 {
+        return surface(point, facing, white, 0.0);
+    }
+    return surface(point, facing, black, 0.0);
+}
+
+// Whether a block stands between a point and a distance along a direction.
+fn occluded(origin: Vec3, direction: Vec3, limit: f64) -> bool {
+    var i = 0;
+    for i < len(blocks) {
+        if intersect_box(&blocks[i], origin, direction).entry < limit {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// The light a surface reflects straight from the panel, through one point of
+// the panel: the panel's power, the two cosines, and one over the squared
+// distance.
+fn direct(hit: Hit, sample: Sample) -> Vec3 {
+    var target = Vec3 {
+        x = panel_min_x + sample.u * panel_width,
+        y = room_height,
+        z = panel_min_z + sample.v * panel_depth,
+    };
+    var offset = subtract(target, hit.start);
+    var squared = dot(offset, offset);
+    var distance = square_root(squared);
+    var direction = scale(offset, 1.0 / distance);
+    var surface_cosine = dot(hit.normal, direction);
+    // The panel emits downward, and `direction` climbs to it.
+    var panel_cosine = direction.y;
+    if surface_cosine <= 0.0 || panel_cosine <= 0.0 || occluded(hit.start, direction, distance) {
+        return black;
+    }
+    return scale(hit.color, panel_power * surface_cosine * panel_cosine / squared);
+}
+
+// A direction sampled with cosine weight about a unit normal: a uniform point
+// of the unit disk, lifted onto the hemisphere. The disk lies across two axes
+// perpendicular to the normal, built as Duff and others give in "Building an
+// Orthonormal Basis, Revisited".
+fn bounce_direction(normal: Vec3, sample: Sample) -> Vec3 {
+    var radius = square_root(sample.u);
+    var angle = 2.0 * pi * sample.v - pi;
+    var x = radius * cosine(angle);
+    var y = radius * sine(angle);
+    var height = square_root(1.0 - sample.u);
+
+    var side = sign(normal.z);
+    var a = -1.0 / (side + normal.z);
+    var b = normal.x * normal.y * a;
+    var tangent = Vec3 {
+        x = 1.0 + side * normal.x * normal.x * a,
+        y = side * b,
+        z = -side * normal.x,
+    };
+    var bitangent = Vec3 { x = b, y = side + normal.y * normal.y * a, z = -normal.y };
+    return add(add(scale(tangent, x), scale(bitangent, y)), scale(normal, height));
+}
+
+// The light a camera ray brings back. Only the camera sees what the panel
+// emits: every bounce already sampled the panel directly, and the panel, being
+// black, ends any path that reaches it. A cosine-weighted bounce cancels the
+// cosine and the pi of the reflected light's integral, so each bounce filters
+// by the albedo alone. After the first few bounces, a path continues with
+// probability equal to its largest albedo component and is weighted up to
+// match, so its expected light is unchanged.
+fn radiance(random: *Random, origin: Vec3, direction: Vec3, light_cell: int, bounce_cell: int) -> Vec3 {
+    var hit = trace(origin, direction);
+    var total = Vec3 { x = hit.emission, y = hit.emission, z = hit.emission };
+    var weight = Vec3 { x = 1.0, y = 1.0, z = 1.0 };
+    var depth = 0;
+    for hit.color != black {
+        var light = direct(hit, vertex_sample(random, depth, light_cell));
+        total = add(total, multiply(weight, light));
+        var survival = 1.0;
+        if depth >= certain_bounces {
+            survival = largest(hit.color);
+            if random_unit(random) >= survival {
+                break;
+            }
+        }
+        weight = multiply(weight, scale(hit.color, 1.0 / survival));
+        var bounce = bounce_direction(hit.normal, vertex_sample(random, depth, bounce_cell));
+        hit = trace(hit.start, bounce);
+        depth += 1;
+    }
+    return total;
+}
+
+// The average radiance of one pixel. The grid starts at the top left of the
+// image and looks along +z, so the red wall at the far x is on the left. Each
+// pixel seeds its own random stream, so the image does not depend on which
+// worker traced it. `light_cells` and `bounce_cells` are scratch space for a
+// cell order each.
+fn pixel_radiance(row: int, column: int, light_cells: *int, bounce_cells: *int) -> Vec3 {
+    var random = Random { state = u64(row * image_width + column) };
+    shuffle(&random, light_cells, samples_per_pixel);
+    shuffle(&random, bounce_cells, samples_per_pixel);
+    var total = black;
+    var index = 0;
+    for index < samples_per_pixel {
+        var position = stratified(&random, index);
+        var x = (f64(column) + position.u) / f64(image_width);
+        var y = (f64(row) + position.v) / f64(image_height);
+        var direction = normalize(Vec3 {
+            x = (1.0 - 2.0 * x) * screen_scale,
+            y = (1.0 - 2.0 * y) * screen_scale,
+            z = 1.0,
+        });
+        // Start where the ray enters the room through its open front.
+        var origin = add(eye, scale(direction, -eye.z / direction.z));
+        var light = radiance(&random, origin, direction, light_cells[index], bounce_cells[index]);
+        total = add(total, light);
+        index += 1;
+    }
+    return scale(total, 1.0 / f64(samples_per_pixel));
+}
+
+// Exposes a color and rolls its brightness off with a filmic curve (Krzysztof
+// Narkowicz's fit of ACES), so bright surfaces fade to white instead of
+// clipping. Scaling the whole color by the curve of its luminance keeps the
+// walls as saturated as they are.
+fn tone_map(color: Vec3) -> Vec3 {
+    var exposed = scale(color, exposure);
+    var x = dot(exposed, luminance_weights);
+    if x <= 0.0 {
+        return black;
+    }
+    var mapped = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
+    return scale(exposed, mapped / x);
+}
+
+// One channel of the output, encoded with the sRGB transfer function. Its
+// power of 1/2.4 is the product of a fourth root and a sixth root.
+fn to_byte(value: f64) -> u8 {
+    var linear = minimum(value, 1.0);
+    var encoded = 12.92 * linear;
+    if linear > 0.0031308 {
+        var root = square_root(linear);
+        encoded = 1.055 * square_root(root) * cube_root(root) - 0.055;
+    }
+    return u8(encoded * 255.0 + 0.5);
+}
+
+// Writes every byte, since one write call may store fewer.
+fn write_bytes(file: i32, bytes: *u8, count: int) -> void {
+    var written = 0;
+    for written < count {
+        var result = write(file, bytes + written, uint(count - written));
+        if result <= 0 {
+            fail("cannot write the image");
+        }
+        written += int(result);
+    }
+}
+
+// Reads exactly `count` bytes; a writer that closes first has failed.
+fn read_bytes(file: i32, bytes: *u8, count: int) -> void {
+    var done = 0;
+    for done < count {
+        var result = read(file, bytes + done, uint(count - done));
+        if result <= 0 {
+            fail("a worker stopped before finishing its rows");
+        }
+        done += int(result);
+    }
+}
+
+fn allocate(bytes: uint) -> *u8 {
+    var memory = malloc(bytes);
+    if memory == null {
+        fail("out of memory");
+    }
+    return memory;
+}
+
+const row_bytes = image_width * 3;
+
+// One worker's share of the image: every `workers`th row from `first`, each
+// written to `file` as soon as it is done.
+fn render_rows(first: int, file: i32) -> void {
+    var bytes = allocate(uint(row_bytes));
+    var light_cells = *int(allocate(uint(samples_per_pixel) * sizeof(int)));
+    var bounce_cells = *int(allocate(uint(samples_per_pixel) * sizeof(int)));
+    var row = first;
+    for row < image_height {
+        var column = 0;
+        for column < image_width {
+            var color = tone_map(pixel_radiance(row, column, light_cells, bounce_cells));
+            bytes[column * 3] = to_byte(color.x);
+            bytes[column * 3 + 1] = to_byte(color.y);
+            bytes[column * 3 + 2] = to_byte(color.z);
+            column += 1;
+        }
+        write_bytes(file, bytes, row_bytes);
+        row += workers;
+    }
+    free(*u8(bounce_cells));
+    free(*u8(light_cells));
+    free(bytes);
+}
+
+fn main() -> void {
+    // One pipe per worker. A worker keeps only its own pipe's write end, so if
+    // it dies, reading its next row fails rather than waiting forever.
+    var readers = *i32(allocate(uint(workers) * sizeof(i32)));
+    var worker = 0;
+    for worker < workers {
+        var ends: [2]i32 = [0, 0];
+        if pipe(&ends[0]) != 0 {
+            fail("cannot open a pipe");
+        }
+        var process = fork();
+        if process < 0 {
+            fail("cannot start a worker");
+        }
+        if process == 0 {
+            close(ends[0]);
+            var earlier = 0;
+            for earlier < worker {
+                close(readers[earlier]);
+                earlier += 1;
+            }
+            render_rows(worker, ends[1]);
+            exit(0);
+        }
+        close(ends[1]);
+        readers[worker] = ends[0];
+        worker += 1;
+    }
+
+    var pixels = allocate(uint(image_height * row_bytes));
+    var row = 0;
+    for row < image_height {
+        read_bytes(readers[row % workers], pixels + row * row_bytes, row_bytes);
+        row += 1;
+    }
+    worker = 0;
+    for worker < workers {
+        var status: i32 = 0;
+        if waitpid(-1, &status, 0) < 0 || status != 0 {
+            fail("a worker failed");
+        }
+        worker += 1;
+    }
+
+    dprintf(1, "P6\n%d %d\n255\n", i32(image_width), i32(image_height));
+    write_bytes(1, pixels, image_height * row_bytes);
+    free(pixels);
+    free(*u8(readers));
+}

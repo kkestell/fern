@@ -103,3 +103,50 @@
   conventions, so programs can call `printf` and similar functions. Specify
   which types extra arguments may have and how untyped literals and `f32`
   arguments are typed and promoted.
+
+- [ ] Fill and zero-initialize arrays
+
+  Fern has no aggregate fill and no zero initialization, so an array needs a
+  literal with every element written out. `examples/raytrace.fern` spells
+  `[2]i32 = [0, 0]` and allocates its scratch buffers with `malloc` rather than
+  declare a 64-element array. Decide and specify a way to initialize an array
+  from one repeated value.
+
+- [ ] Enumerations or tagged unions
+
+  A value that is one of a few named cases is an `int` with a documented
+  meaning, such as the 0, 1, or 2 that names a box axis in
+  `examples/raytrace.fern`, or is encoded in another field's value. Decide and
+  specify whether Fern has enumerations, tagged unions, or both.
+
+- [ ] A counted loop
+
+  Counting loops are written `var i = 0; for i < n { ...; i += 1; }`. The
+  counter outlives the loop, and a `continue` skips the increment. Decide and
+  specify a loop form whose step runs on every iteration.
+
+- [ ] Reinterpret the bits of a scalar
+
+  Reading an `f64`'s bit pattern takes the address of a local and dereferences
+  it as a `*u64`, as `bits_of` and `from_bits` do in `examples/raytrace.fern`.
+  Decide and specify a bit-preserving conversion between scalar types of the
+  same size.
+
+- [ ] Floating-point math operations
+
+  Fern has no square root or other floating-point function without calling an
+  external library and linking it. `examples/raytrace.fern` computes square
+  roots, cube roots, and sines by hand. Decide and specify which operations,
+  such as square root, minimum, maximum, and absolute value, are built in.
+
+- [ ] Select a field through a pointer
+
+  Field access requires a struct value, so access through a pointer is written
+  `(*p).field` every time. Decide and specify whether field selection looks
+  through a pointer.
+
+- [ ] Take the address of a constant
+
+  A `const` has no addressable location, so a constant aggregate cannot be
+  passed to a function that takes a pointer, and must be copied into a `var` or
+  passed by value. Decide and specify whether constants may be addressed.

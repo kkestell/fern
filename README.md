@@ -18,6 +18,7 @@ The [examples](examples/) form a topic-based tour:
 - [Floating-point numbers](examples/floating_point.fern)
 - [Modules and imports](examples/modules_and_imports/), whose root module is
   `examples/modules_and_imports/app`.
+- [Ray tracing](examples/raytrace.fern)
 
 ## Build and run
 

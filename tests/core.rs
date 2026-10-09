@@ -584,10 +584,14 @@ fn examples_execute() {
         if path.extension().is_some_and(|x| x == "fern") {
             let output = dir.path().join(path.file_stem().unwrap());
             fern::compile(&path, &output).unwrap();
+            // Capture the output: an example may print something large, such as
+            // the ray traced image.
+            let result = Command::new(output).output().unwrap();
             assert!(
-                Command::new(output).status().unwrap().success(),
-                "{}",
-                path.display()
+                result.status.success(),
+                "{}\n{}",
+                path.display(),
+                String::from_utf8_lossy(&result.stderr)
             );
         }
     }

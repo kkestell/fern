@@ -13,7 +13,6 @@ described as "behavior" or a "specification."
 | Document                              | Owns                                                                                      |
 | ------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `docs/spec.md`                        | The Fern language: source syntax, types, semantic rules, built-ins, and program execution. |
-| `agents/values-references-and-ffi.md` | The proposed design for references, garbage collection, and C interop, and its open questions. |
 | `agents/bugs.md`                      | Known defects and implementation limitations.                                             |
 | `agents/todo.md`                      | Planned improvements that are not defects.                                                |
 | `agents/plans/`                       | Implementation plans written by `kplan`.                                                  |

@@ -2,7 +2,8 @@
 
 This specification defines Fern's language behavior. It is authoritative
 wherever it is explicit. An invalid program must be rejected during
-compilation. A trap halts execution with a diagnostic on standard error identifying the
+compilation, and every invalid runtime operation traps, except the pointer
+errors listed under [Unchecked errors](#unchecked-errors). A trap halts execution with a diagnostic on standard error identifying the
 failing operation and its source location. It terminates the process abnormally
 through the platform's abort mechanism. The resulting termination status is
 platform-defined and is never a status that `exit` can report.
@@ -54,8 +55,8 @@ var x = 10; // int
 ### Keywords
 
 `fn`, `void`, `var`, `const`, `type`, `struct`, `pub`, `use`, `if`, `else`,
-`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `true`, and `false`
-are reserved. The ten integer type names listed under Integer types, the two
+`for`, `in`, `break`, `continue`, `return`, `exit`, `len`, `new`, `free`,
+`nullable`, `null`, `true`, and `false` are reserved. The ten integer type names listed under Integer types, the two
 floating-point type names listed under Floating-point types, and `bool` are also
 reserved. Reserved words cannot be identifiers.
 
@@ -190,8 +191,10 @@ explicit. Without an annotation, the binding takes the initializer's type.
 Untyped integer, floating-point, and boolean constants default to `int`, `f64`,
 and `bool`, respectively. A declaration without an initializer must have a type
 annotation and receives that type's zero value. Zero values are `0` for integer
-and floating-point types, `false` for `bool`, and recursive zero values for
-arrays and structs.
+and floating-point types, `false` for `bool`, `null` for nullable pointer types,
+and recursive zero values for arrays and structs. A non-nullable pointer type
+has no zero value, and neither does an array or struct type that contains one;
+a declaration of such a type must have an initializer.
 A binding reference has the binding's type.
 Initialization copies the value; later assignment to the source binding does
 not change the copy.
@@ -301,7 +304,8 @@ are accessible wherever the struct type is accessible.
 
 A struct declaration is invalid when following struct fields and array element
 types can reach that same struct type, directly or indirectly. Every struct
-therefore has a finite value size.
+therefore has a finite value size. A pointer field does not contribute to this
+rule, so a struct may hold a pointer to its own type.
 
 Type declarations whose right-hand side is a struct end at the closing `}` and
 do not have a semicolon. Anonymous struct types are not part of the language.
@@ -309,7 +313,9 @@ do not have a semicolon. Anonymous struct types are not part of the language.
 Structs are value types. Initialization, assignment, argument passing, and
 return copy every field recursively. A field is selected with `value.field`.
 Selecting a field of a `var` struct produces an assignable target; selecting a
-field of a `const` struct does not.
+field of a `const` struct does not. A field may also be selected through a
+pointer to a struct, as [Access through a pointer](#access-through-a-pointer)
+specifies.
 
 ```fern
 type Point struct {
@@ -476,7 +482,9 @@ or `i32` and `f32`.
 
 #### Checked conversion
 
-`T(x)` converts a numeric value `x` to numeric type `T`. The conversion must
+`T(x)` converts a numeric value `x` to numeric type `T`. The same syntax
+converts a nullable pointer to a non-nullable pointer, as
+[Nullable pointers](#nullable-pointers) specifies. The conversion must
 preserve the value exactly. If it would discard a fractional part, precision, or
 range, the program traps at runtime. A conversion between floating-point types
 preserves an infinity, NaN, or signed zero when the destination has that value;
@@ -527,9 +535,10 @@ var d = i8.truncate(200); // -56
 
 #### Precedence, associativity, and evaluation order
 
-Field selection, indexing, calls, conversions, and `len` bind more tightly than
-any operator.
-Among the operators, unary operators have the highest precedence. Binary
+Field selection, indexing, calls, conversions, `len`, and `new` bind more
+tightly than any operator.
+Among the operators, unary operators, including the pointer operators `*` and
+`&`, have the highest precedence. `*p.x` is `*(p.x)`. Binary
 operators have five precedence levels, from highest to lowest:
 
 1. `* / % *% << >> &`
@@ -744,7 +753,8 @@ with an operand that is not a constant expression is evaluated at runtime, even
 when its result is always true or always false.
 
 `==` and `!=` are defined on every type. [Array comparison](#array-comparison)
-and [Struct literals](#struct-literals) specify them on aggregates.
+and [Struct literals](#struct-literals) specify them on aggregates, and
+[Pointer comparison](#pointer-comparison) specifies them on pointers.
 
 ### Assignment
 
@@ -752,12 +762,12 @@ and [Struct literals](#struct-literals) specify them on aggregates.
 have the type of `x` or to be an untyped constant that fits. Assignment is a
 statement and ends with a semicolon.
 
-A *location* is a binding, a field of a location, or an element of an array
-location. A location is *mutable* when it is a `var` binding or a field or
-element of a mutable location. A `const` binding and a parameter are immutable,
-and so is every field and array element of an immutable location. An expression
-that is not a location, such as a call result or an arithmetic result, is not
-assignable.
+A *location* is a binding, a field of a location, an element of an array
+location, or the target `*p` of a pointer. A location is *mutable* when it is a
+`var` binding, the target of a pointer, or a field or element of a mutable
+location. A `const` binding and a parameter are immutable, and so is every
+field and array element of an immutable location. An expression that is not a
+location, such as a call result or an arithmetic result, is not assignable.
 
 An assignment target is a mutable location. `a[i] = e;` stores into the element
 of `a` at index `i`. `p.x = e;` stores into field `x` of `p`. Every index and
@@ -784,6 +794,7 @@ are platform-dependent. Their consequences are:
 - Arithmetic on `int`/`uint` may succeed on one platform and trap on another (Overflow).
 - Truncating conversions to or from `int`/`uint` produce different values on different platforms (Truncating conversion).
 - Shifts on `int`/`uint` with counts between 32 and 63 produce different results on different platforms (Integer shifts).
+- The size of a pointer is the platform's pointer width (Pointer types).
 
 Checked arithmetic and checked conversions preserve mathematical values when
 they succeed. Explicit wrapping, truncating conversions, and runtime shifts can
@@ -806,6 +817,9 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
 | Stack has no room for the called function, including entry into `main` | Trap |
+| `new` cannot obtain memory | Trap |
+| Conversion of `null` to a non-nullable pointer type | Trap |
+| Access through a dangling pointer, double free, free of a pointer not from `new` | Unchecked; see Unchecked errors |
 | Runtime shift count ≥ width | Defined, no trap |
 | Untyped constant shift result does not fit its target type | Compile error |
 | Wrapping operators | Defined, no trap |
@@ -1034,7 +1048,9 @@ var worse: [_]int = [0...]; // error: no length
 ### Indexing
 
 `a[i]` is the element of the array `a` at index `i` and is an expression of the
-element type. Indexing requires an operand of array type.
+element type. Indexing requires an operand of array type or of non-nullable
+pointer-to-array type; [Access through a pointer](#access-through-a-pointer)
+specifies the latter.
 [Indexing and lengths](#indexing-and-lengths) gives the type of `i` and
 the range of valid indices; an out-of-range index traps. Because an array's
 length is part of its type, an out-of-range constant index is rejected at
@@ -1068,8 +1084,9 @@ len(a)
 ```
 
 `len` is a reserved word and uses call syntax without being a call, as an
-integer conversion does. Its operand is an expression of array type. A trailing
-comma after that operand is permitted, and the result has type `int`.
+integer conversion does. Its operand is an expression of array type or of
+non-nullable pointer-to-array type. A trailing comma after that operand is
+permitted, and the result has type `int`.
 
 `len(a)` yields the length recorded in the operand's type. The operand is still
 evaluated, so a trap inside it, such as an out-of-range index, still occurs.
@@ -1112,11 +1129,201 @@ fn main() -> void {
 }
 ```
 
+## Pointers and Heap Memory
+
+### Pointer types
+
+```text
+*T
+nullable *T
+```
+
+`*T` is a pointer to a location holding a value of type `T`, its *target type*.
+`T` may be any value type, including an array, a struct, or another pointer
+type; `void` is not permitted. A `*T` always refers to a live target and is
+never null. `nullable *T` is a distinct type whose value is either a `*T` or
+`null`.
+
+Both pointer types are value types: a pointer may be the type of a binding, a
+parameter, a field, an array element, or a function result. Copying a pointer
+copies the reference, and every copy refers to the same target. Two pointer
+types are the same type when they have the same target type and the same
+nullability.
+
+Every pointer has the size and alignment of the platform's pointer width. A
+pointer is never a constant expression, except `null`.
+
+### Heap allocation
+
+```text
+new(e)
+```
+
+`new` is a reserved word and uses call syntax without being a call, as `len`
+does. `new(e)` evaluates `e`, allocates a heap location holding a copy of its
+value, and yields a `*T`, where `T` is the type of `e`. An untyped constant
+operand takes its default type. A trailing comma after the operand is
+permitted. The target lives until it is freed. When memory cannot be obtained,
+`new` traps with `out of memory`.
+
+```fern
+type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var p = new(Point { x = 1, y = 2 }); // *Point
+    var n = new(0);                       // *int
+    p.x = 5;
+    exit(p.x); // reports 5
+}
+```
+
+### Freeing
+
+```text
+free(p);
+```
+
+`free` is a reserved word and a statement, as `exit` is. Its operand has type
+`*T` or `nullable *T`; a trailing comma is permitted. `free(p)` ends the life of
+the target that `new` allocated, after which every pointer to that target is
+dangling. Freeing `null` does nothing.
+
+### Address of a location
+
+```text
+&location
+```
+
+`&` applied to a mutable location yields a `*T`, where `T` is the type of the
+location. The operand must be a mutable location as [Assignment](#assignment)
+defines one: a `var` binding, the target of a pointer, or a field or element of
+a mutable location. Applying `&` to a `const` binding, a parameter, a field or
+element of one, or an expression that is not a location is a compile-time
+error. Index and field-selection expressions in the operand are evaluated as
+for an assignment target, so `&a[i]` traps when `i` is out of range.
+
+The pointer is valid while the location lives. A local binding lives until
+execution leaves the block that declares it, including when a loop iteration
+ends. A module-level binding lives for the whole program. A heap target lives
+until it is freed.
+
+```fern
+fn main() -> void {
+    var p = Point { x = 1, y = 2 };
+    const q = p;
+    const a = &p;   // *Point; a cannot be reassigned
+    a.x = 5;        // writes p.x
+    const b = &q;   // error: q is immutable
+    exit(p.x);      // reports 5
+}
+```
+
+### Access through a pointer
+
+`*p` is the target of the non-nullable pointer `p`, a mutable location of the
+target type. Reading `*p` copies the target value; assigning to `*p` replaces
+it. Mutability through a pointer does not depend on the binding that holds the
+pointer: a `const` binding of pointer type cannot be reassigned, but its target
+can be assigned.
+
+Field selection and indexing look through non-nullable pointers. When `p` has
+type `*S` for a struct `S`, `p.f` is `(*p).f`. When `p` has type `*[N]T`,
+`p[i]` is `(*p)[i]` and `len(p)` is `len(*p)`. These forms apply through any
+number of non-nullable pointer types, so a `**S` also permits `p.f`. A nullable
+pointer permits none of `*p`, `p.f`, `p[i]`, or `len(p)`.
+
+```fern
+fn main() -> void {
+    var p = new([10, 20, 30]);  // *[3]int
+    p[1] = 25;
+    var copy = *p;              // [3]int, a copy
+    copy[0] = 0;
+    exit(p[0] + p[1]);          // reports 35
+}
+```
+
+### Nullable pointers
+
+`null` is a value of every nullable pointer type and of no other type. It is
+valid wherever the context supplies a nullable pointer type: the initializer of
+an annotated binding, the right-hand side of an assignment, a call argument, a
+`return` expression, a field in a struct literal, an element of an array
+literal, or one operand of `==` or `!=` whose other operand has a nullable
+pointer type. `null` has no default type; `var p = null;` is invalid.
+
+A `*T` is valid wherever a `nullable *T` is expected, and the conversion is
+implicit. The reverse direction is the checked conversion `*T(p)`, which yields
+the `*T` held by `p` and traps with `null pointer` when `p` is `null`.
+
+```fern
+type Node struct {
+    value: int,
+    next: nullable *Node,
+}
+
+fn sum(list: nullable *Node) -> int {
+    var total = 0;
+    var cursor = list;
+    for cursor != null {
+        const node = *Node(cursor);
+        total += node.value;
+        cursor = node.next;
+    }
+    return total;
+}
+
+fn main() -> void {
+    const tail = new(Node { value = 2, next = null });
+    const head = new(Node { value = 1, next = tail });
+    exit(sum(head)); // reports 3
+}
+```
+
+### Pointer comparison
+
+`==` and `!=` compare two pointers of the same type, or a `*T` and a
+`nullable *T` with the same target type, and yield `true` for `==` when both
+refer to the same target or both are `null`. Pointers to distinct live targets
+are never equal. Ordering operators, arithmetic, bitwise operators, and
+conversions between pointers and integers are not defined on pointers.
+
+```fern
+fn main() -> void {
+    var a = new(1);
+    var b = new(1);
+    const c = a;
+    if a == b {
+        exit(1);
+    }
+    if a == c {
+        exit(0); // reports 0
+    }
+    exit(2);
+}
+```
+
+### Unchecked errors
+
+The implementation does not detect the following errors, and this
+specification does not define the behavior of a program that commits one of
+them:
+
+- reading or writing through a pointer whose target has been freed or whose
+  location's life has ended, including through a copy of such a pointer;
+- freeing a target that has already been freed;
+- freeing a pointer that was not returned by `new`.
+
+This list is exhaustive. Every other invalid operation is rejected at
+compilation or traps.
+
 ## Statements and Execution
 
 A function body and each nested brace-delimited block execute statements in
 source order. Declarations, assignments, compound assignments, calls, `break`,
-`continue`, `return`, and `exit` statements end with `;`. A nested block, an
+`continue`, `return`, `exit`, and `free` statements end with `;`. A nested block, an
 `if` statement, and a `for` statement need no trailing semicolon. Declarations
 and references must be valid even after a statement that terminates execution.
 

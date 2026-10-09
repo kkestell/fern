@@ -2064,3 +2064,40 @@ fn main() -> void {
     );
     insta::assert_debug_snapshot!("pointers", program.program());
 }
+
+#[test]
+fn a_returned_literal_is_built_in_the_result_storage() {
+    let program = lowered(
+        "type S struct { a: int, b: [2]int }
+fn pair(x: int) -> [2]int { return [x, x + 1]; }
+fn grouped(x: int) -> S { return (S { a = x, ... }); }
+fn filled(x: int) -> [3]int { return [x...]; }
+fn folded() -> [2]int { return [1, 2]; }
+fn copied(x: int) -> [2]int { var local = [x, x]; return local; }
+fn main() -> void {}",
+    );
+    let functions = &program.program().functions;
+    let returned = |function: &Function| {
+        function
+            .flow
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                Terminator::Return {
+                    value: Some(Operand::Value(ValueId(id))),
+                } => Some(format!("{:?}", function.values[*id].kind)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(stored_places(&functions[0]), ["result[0]", "result[1]"]);
+    assert_eq!(returned(&functions[0]), "Load(Result)");
+    // Only the parameter is a local.
+    assert_eq!(functions[0].flow.locals.len(), 1);
+    assert_eq!(stored_places(&functions[1]), ["result.0", "zero result.1"]);
+    assert_eq!(returned(&functions[1]), "Load(Result)");
+    assert_eq!(stored_places(&functions[2]), ["result[0]", "result[1..]"]);
+    assert_eq!(returned(&functions[2]), "Load(Result)");
+    assert_eq!(returned(&functions[3]), "Load(Constant(ConstantId(0)))");
+    assert_eq!(returned(&functions[4]), "Load(Local(LocalId(2)))");
+}

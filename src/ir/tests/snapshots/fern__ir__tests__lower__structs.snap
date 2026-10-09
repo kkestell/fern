@@ -167,7 +167,7 @@ Program {
                     kind: Load(
                         Local(
                             LocalId(
-                                2,
+                                1,
                             ),
                         ),
                     ),
@@ -183,11 +183,7 @@ Program {
                         },
                     ),
                     kind: Load(
-                        Local(
-                            LocalId(
-                                1,
-                            ),
-                        ),
+                        Result,
                     ),
                 },
             ],
@@ -197,14 +193,6 @@ Program {
                     0,
                 ),
                 locals: [
-                    Struct(
-                        StructType {
-                            id: StructId(
-                                1,
-                            ),
-                            name: "Cell",
-                        },
-                    ),
                     Struct(
                         StructType {
                             id: StructId(
@@ -239,7 +227,7 @@ Program {
                                 place: Field {
                                     base: Local(
                                         LocalId(
-                                            2,
+                                            1,
                                         ),
                                     ),
                                     ordinal: 0,
@@ -259,7 +247,7 @@ Program {
                                 place: Field {
                                     base: Local(
                                         LocalId(
-                                            2,
+                                            1,
                                         ),
                                     ),
                                     ordinal: 1,
@@ -277,11 +265,7 @@ Program {
                             ),
                             Store {
                                 place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
+                                    base: Result,
                                     ordinal: 0,
                                 },
                                 operand: Value(
@@ -292,11 +276,7 @@ Program {
                             },
                             Zero {
                                 place: Field {
-                                    base: Local(
-                                        LocalId(
-                                            1,
-                                        ),
-                                    ),
+                                    base: Result,
                                     ordinal: 1,
                                 },
                             },

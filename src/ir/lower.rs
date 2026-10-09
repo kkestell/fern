@@ -174,7 +174,7 @@ impl<'a> Places<'a> {
         match place.root() {
             Place::Constant(_) => true,
             Place::Local(local) => !self.addressed_locals.contains(local),
-            Place::Global(_) | Place::Indirect { .. } => false,
+            Place::Global(_) | Place::Indirect { .. } | Place::Result => false,
             Place::Element { .. } | Place::Field { .. } => {
                 unreachable!("a place's root is not a step")
             }
@@ -575,7 +575,20 @@ fn lower_flow_statement(
             false
         }
         StatementKind::Return { value } => {
-            let value = value.map(|value| lower_flow_operand(checked, value, bindings, builder));
+            let value = value.map(|value| match returned_literal(checked, value) {
+                // The result storage aliases nothing the literal reads, so the
+                // literal is built there rather than in a local it would be
+                // copied out of.
+                Some(literal) => {
+                    store_literal(checked, &Place::Result, literal, bindings, builder);
+                    load_place(
+                        builder,
+                        Place::Result,
+                        checked.expressions[value].ty.clone(),
+                    )
+                }
+                None => lower_flow_operand(checked, value, bindings, builder),
+            });
             builder.terminate(Terminator::Return { value });
             true
         }
@@ -773,6 +786,41 @@ fn lower_argument(
         ty,
         kind,
     })
+}
+
+/// The unfolded array or struct literal a `return` of `id` returns, looking
+/// through any parentheses around it.
+fn returned_literal(checked: &CheckedProgram<'_>, id: Idx<Expression>) -> Option<Idx<Expression>> {
+    let expression = &checked.expressions[id];
+    if expression.constant.is_some() {
+        return None;
+    }
+    match &expression.value {
+        ExpressionValue::Array { .. } | ExpressionValue::Struct { .. } => Some(id),
+        ExpressionValue::Grouping { expression } => returned_literal(checked, *expression),
+        _ => None,
+    }
+}
+
+/// Stores the array or struct literal `id` into `place`.
+fn store_literal(
+    checked: &CheckedProgram<'_>,
+    place: &Place,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) {
+    match &checked.expressions[id].value {
+        ExpressionValue::Array { elements, fill } => {
+            store_elements(checked, place, id, elements, *fill, bindings, builder);
+        }
+        ExpressionValue::Struct {
+            initializers,
+            filled,
+            ..
+        } => store_fields(checked, place, id, initializers, filled, bindings, builder),
+        _ => unreachable!("only an array or struct literal is stored as a literal"),
+    }
 }
 
 /// The unfolded call `id` evaluates, looking through any parentheses around
@@ -1607,7 +1655,7 @@ struct HeldPlace {
 
 fn hold_place(builder: &FlowBuilder, place: Place) -> HeldPlace {
     match place {
-        Place::Local(_) | Place::Global(_) | Place::Constant(_) => HeldPlace {
+        Place::Local(_) | Place::Global(_) | Place::Constant(_) | Place::Result => HeldPlace {
             root: HeldRoot::Place(place),
             steps: Vec::new(),
         },

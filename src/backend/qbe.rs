@@ -344,9 +344,9 @@ pub(super) struct Emitter<'a> {
     /// The return type of the signature being emitted, absent for a function
     /// that returns nothing.
     pub(super) qbe_result: Option<char>,
-    /// The aggregate call results a `return` of the function being emitted
-    /// returns. Each call writes its result straight into `%result`.
-    pub(super) returned_calls: Vec<ValueId>,
+    /// The aggregate values a `return` of the function being emitted returns
+    /// that already sit in `%result`.
+    pub(super) returned_in_place: Vec<ValueId>,
     /// How many element and field places the program has materialized, which
     /// names their address temporaries and their bounds-check symbols.
     pub(super) accesses: usize,

@@ -186,6 +186,7 @@ pub(super) fn describe(place: &Place) -> String {
         }
         Place::Field { base, ordinal } => format!("{}.{ordinal}", describe(base)),
         Place::Indirect { pointer } => format!("*({})", describe_operand(pointer)),
+        Place::Result => "result".to_owned(),
     }
 }
 

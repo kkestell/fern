@@ -286,3 +286,44 @@ fn native_returned_calls_chain_their_results() {
         Some(42)
     );
 }
+
+#[test]
+fn returned_literals_are_built_where_the_caller_reads_them() {
+    let source = "fn pair(x: int) -> [2]int { return [x, x + 1]; }
+fn main() -> void { exit(pair(20)[1]); }";
+    let qbe = emit(&lowered(source), None);
+    let body = qbe
+        .split("function $fn0(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap();
+    assert!(body.contains("%result"), "{body}");
+    assert!(!body.contains("blit") && !body.contains("memcpy"), "{body}");
+    assert_eq!(native_program_status(source), Some(21));
+}
+
+#[test]
+fn native_returned_literals_read_their_inputs_before_returning() {
+    assert_eq!(
+        native_program_status(
+            "type Point struct { x: int, y: int }
+             fn swap(point: Point) -> Point { return Point { x = point.y, y = point.x }; }
+             fn count(n: int) -> [2]int {
+                 if n == 0 { return [0, 0]; }
+                 return [count(n - 1)[0] + 1, count(n - 1)[1] + n];
+             }
+             fn twice(x: int) -> int { return x * 2; }
+             fn wrap(x: int) -> Point { return Point { x = twice(x), y = twice(x + 1) }; }
+             fn main() -> void {
+                 const swapped = swap(Point { x = 1, y = 2 });
+                 if swapped.x != 2 || swapped.y != 1 { exit(1); }
+                 const counted = count(4);
+                 if counted[0] != 4 || counted[1] != 10 { exit(2); }
+                 const wrapped = wrap(3);
+                 if wrapped.x != 6 || wrapped.y != 8 { exit(3); }
+                 exit(42);
+             }"
+        ),
+        Some(42)
+    );
+}

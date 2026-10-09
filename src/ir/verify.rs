@@ -69,11 +69,15 @@ fn valid_value(
 ) -> Result<bool, CompileError> {
     Ok(match &value.kind {
         ValueKind::Load(place) => fits(&place_type(place)?, &value.ty) && value.span.is_none(),
-        // A called function can write a global or a pointer target, so an
-        // argument read from one is copied.
+        // A called function can write a global or a pointer target, and a
+        // returned call writes the result storage, so an argument read from
+        // one is copied.
         ValueKind::Borrow(place) => {
             value.ty.is_aggregate()
-                && !matches!(place.root(), Place::Global(_) | Place::Indirect { .. })
+                && !matches!(
+                    place.root(),
+                    Place::Global(_) | Place::Indirect { .. } | Place::Result
+                )
                 && place_type(place)? == value.ty
                 && value.span.is_none()
         }
@@ -297,6 +301,15 @@ impl Program {
                         ))
                     })
             }
+            Place::Result => function
+                .result
+                .clone()
+                .filter(Type::is_aggregate)
+                .ok_or_else(|| {
+                    CompileError::new(
+                        "internal compiler error: IR uses result storage in a function without an aggregate result",
+                    )
+                }),
             Place::Indirect { pointer } => match operand_type(pointer.clone())? {
                 Type::Pointer {
                     nullable: false,
@@ -448,10 +461,13 @@ impl Program {
             Instruction::Value(ValueId(id)) => {
                 let value = &function.values[*id];
                 // A pointer may be written through, so an addressed place is
-                // checked as a destination: no constant or parameter.
+                // checked as a destination: no constant or parameter. No
+                // pointer reaches the result storage, so a returned call or
+                // literal writes it without any read observing the write.
                 let valid = if let ValueKind::Address(place) = &value.kind {
                     let target = self.destination_type(function, place, &operand_type)?;
                     value.span.is_none()
+                        && !matches!(place.root(), Place::Result)
                         && value.ty
                             == Type::Pointer {
                                 nullable: false,

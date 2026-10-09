@@ -66,7 +66,7 @@
   `out of memory` and `null pointer` traps, and the compile-time rejections.
   Add `examples/pointers.fern` to the tour and document it in `README.md`.
 
-- [ ] Build returned aggregate literals in the result storage
+- [x] Build returned aggregate literals in the result storage
 
   A `return` whose value is an array or struct literal builds the literal in a
   temporary local, copies it into the load's storage, and copies that into the

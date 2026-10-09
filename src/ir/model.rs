@@ -46,15 +46,22 @@ pub(crate) enum Place {
     Indirect {
         pointer: Operand,
     },
+    /// The storage a function returning an aggregate writes its result into,
+    /// which its caller provides.
+    Result,
 }
 
 impl Place {
-    /// The local, global, constant, or pointer target beneath every element
-    /// and field step.
+    /// The local, global, constant, pointer target, or result storage beneath
+    /// every element and field step.
     pub(crate) fn root(&self) -> &Place {
         match self {
             Self::Element { base, .. } | Self::Field { base, .. } => base.root(),
-            Self::Local(_) | Self::Global(_) | Self::Constant(_) | Self::Indirect { .. } => self,
+            Self::Local(_)
+            | Self::Global(_)
+            | Self::Constant(_)
+            | Self::Indirect { .. }
+            | Self::Result => self,
         }
     }
 }

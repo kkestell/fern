@@ -1713,3 +1713,87 @@ fn verification_rejects_the_address_of_a_parameter() {
         "{error}"
     );
 }
+
+#[test]
+fn verification_rejects_result_storage_without_an_aggregate_result() {
+    let int = || Type::Scalar(Scalar::Int);
+    let message = "IR uses result storage in a function without an aggregate result";
+    let store = Instruction::Store {
+        place: Place::Result,
+        operand: integer(1, Scalar::Int),
+    };
+    let error = one_function(main_function(
+        vec![],
+        vec![],
+        vec![Block {
+            instructions: vec![store.clone()],
+            terminator: Terminator::Exit {
+                status: integer(0, Scalar::Int),
+            },
+        }],
+    ))
+    .verify()
+    .unwrap_err();
+    assert!(error.to_string().contains(message), "{error}");
+    let program = two_functions(
+        Function {
+            parameters: 0,
+            result: Some(int()),
+            values: vec![],
+            constants: vec![],
+            flow: ControlFlow {
+                entry: BlockId(0),
+                locals: vec![],
+                blocks: vec![Block {
+                    instructions: vec![store],
+                    terminator: Terminator::Return {
+                        value: Some(integer(1, Scalar::Int)),
+                    },
+                }],
+            },
+        },
+        vec![],
+        vec![],
+    );
+    let error = program.verify().unwrap_err();
+    assert!(error.to_string().contains(message), "{error}");
+}
+
+#[test]
+fn verification_rejects_borrowing_or_addressing_result_storage() {
+    let row = Type::Array {
+        length: 2,
+        element: Box::new(Type::Scalar(Scalar::Int)),
+    };
+    for value in [
+        pointer_value(row.clone(), ValueKind::Borrow(Place::Result), None),
+        pointer_value(
+            pointer(false, row.clone()),
+            ValueKind::Address(Place::Result),
+            None,
+        ),
+    ] {
+        let program = two_functions(
+            Function {
+                parameters: 0,
+                result: Some(row.clone()),
+                values: vec![value],
+                constants: vec![],
+                flow: ControlFlow {
+                    entry: BlockId(0),
+                    locals: vec![],
+                    blocks: vec![Block {
+                        instructions: vec![Instruction::Value(ValueId(0))],
+                        terminator: Terminator::Return {
+                            value: Some(Operand::Value(ValueId(0))),
+                        },
+                    }],
+                },
+            },
+            vec![],
+            vec![],
+        );
+        let error = program.verify().unwrap_err();
+        assert!(error.to_string().contains("invalid IR value"), "{error}");
+    }
+}

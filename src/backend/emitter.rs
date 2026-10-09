@@ -208,6 +208,13 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
             .unwrap();
             (format!("%access{access}_address"), field)
         }
+        Place::Result => (
+            "%result".to_owned(),
+            function
+                .result
+                .clone()
+                .expect("verified result storage belongs to a function with a result"),
+        ),
         // A pointer's value is the address of its target.
         Place::Indirect { pointer } => {
             let Type::Pointer { target, .. } = operand_type(function, pointer.clone()) else {
@@ -237,7 +244,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         stack_checks: 0,
         function: 0,
         qbe_result: None,
-        returned_calls: Vec::new(),
+        returned_in_place: Vec::new(),
         accesses: 0,
         comparisons: 0,
         fills: 0,
@@ -270,7 +277,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
                 .filter(|ty| !ty.is_aggregate())
                 .map(value_class)
         };
-        emitter.returned_calls = returned_calls(function);
+        emitter.returned_in_place = returned_in_place(function);
         let result = function
             .result
             .as_ref()
@@ -302,10 +309,12 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
     emitter.data + &emitter.text
 }
 
-/// The aggregate call results the function's `return`s return. A value is
-/// used only in the block defining it, so each call shares its block with the
+/// The aggregate values the function's `return`s return that already sit in
+/// `%result`: call results, which each call writes straight into `%result`,
+/// and loads of the result storage a returned literal was built in. A value
+/// is used only in the block defining it, so each shares its block with the
 /// `return`, and nothing reads `%result` before the function returns.
-fn returned_calls(function: &Function) -> Vec<ValueId> {
+fn returned_in_place(function: &Function) -> Vec<ValueId> {
     function
         .flow
         .blocks
@@ -313,8 +322,11 @@ fn returned_calls(function: &Function) -> Vec<ValueId> {
         .filter_map(|block| match &block.terminator {
             Terminator::Return {
                 value: Some(Operand::Value(id)),
-            } if function.values[id.0].kind == ValueKind::CallResult
-                && function.values[id.0].ty.is_aggregate() =>
+            } if function.values[id.0].ty.is_aggregate()
+                && matches!(
+                    function.values[id.0].kind,
+                    ValueKind::CallResult | ValueKind::Load(Place::Result)
+                ) =>
             {
                 Some(*id)
             }
@@ -338,7 +350,7 @@ fn allocations(_layout: &Layout<'_>, function: &Function) -> Vec<(String, Type)>
             allocations.push((format!("%local{id}"), ty.clone()));
         }
     }
-    let returned = returned_calls(function);
+    let returned = returned_in_place(function);
     for (id, value) in function.values.iter().enumerate() {
         if matches!(value.kind, ValueKind::Load(_) | ValueKind::CallResult)
             && value.ty.is_aggregate()
@@ -622,7 +634,7 @@ fn emit_call(
     // The callee's leading locals hold its parameters, so they give each
     // argument its type.
     let storage = |id: ValueId| {
-        if emitter.returned_calls.contains(&id) {
+        if emitter.returned_in_place.contains(&id) {
             "%result".to_owned()
         } else {
             format!("%v{}_storage", id.0)
@@ -711,9 +723,8 @@ fn emit_terminator(
         Terminator::Return { value } => match value {
             Some(value) => match function.result.as_ref().filter(|ty| ty.is_aggregate()) {
                 Some(ty) => {
-                    // A returned call already wrote its result into `%result`.
-                    let written =
-                        matches!(value, Operand::Value(id) if emitter.returned_calls.contains(id));
+                    // A returned call or literal already sits in `%result`.
+                    let written = matches!(value, Operand::Value(id) if emitter.returned_in_place.contains(id));
                     if !written {
                         let size = emitter.layout.size(ty);
                         emit_copy(&mut emitter.text, &operand(value.clone()), "%result", size);
@@ -742,8 +753,11 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
         ValueKind::Load(source) => {
             let (address, _) = place_address(emitter, function, source);
             // Loading an aggregate copies it, so a later call in the same
-            // expression cannot change what the value holds.
-            if value.ty.is_aggregate() {
+            // expression cannot change what the value holds. A returned load
+            // of the result storage is already where the caller reads it.
+            if emitter.returned_in_place.contains(&ValueId(id)) {
+                writeln!(emitter.text, "    %v{id} =l copy {address}")
+            } else if value.ty.is_aggregate() {
                 let size = emitter.layout.size(&value.ty);
                 emit_copy(
                     &mut emitter.text,

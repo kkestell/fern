@@ -367,6 +367,20 @@ impl CheckedProgram<'_> {
                 ),
             ));
         }
+        if let Some(&ordinal) = omitted
+            .iter()
+            .find(|&&ordinal| !self.has_zero_value(&self.structs[declared.0].fields[ordinal].ty))
+        {
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "omitted field `{}` has no zero value",
+                    syntax
+                        .names
+                        .resolve(&self.structs[declared.0].fields[ordinal].name)
+                ),
+            ));
+        }
         // The fill expands every omitted field, so the bound covers them
         // together rather than one field at a time.
         let total = omitted.iter().try_fold(0u64, |count, &ordinal| {

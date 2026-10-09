@@ -200,6 +200,7 @@ fn emit_aggregate_equal(emitter: &mut Emitter<'_>, left: &str, right: &str, ty: 
             emit_aggregate_result_blocks(emitter, comparison);
             format!("%aggregate{comparison}_result")
         }
+        Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
     }
 }
 

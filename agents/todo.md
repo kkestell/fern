@@ -10,7 +10,7 @@
   cover it with parser snapshots; temporary semantic guards reject the syntax
   until the checking tasks land.
 
-- [ ] Represent pointer types across the compiler
+- [x] Represent pointer types across the compiler
 
   Add a pointer type with a target type and nullability to `src/types.rs`,
   with its spelling and sameness rule. Resolve pointer annotations to that

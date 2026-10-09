@@ -296,3 +296,142 @@ fn a_binary_struct_tree_derives_each_layout_once() {
     let checked = check_root(&syntax).unwrap();
     assert_eq!(checked.structs.len(), 41);
 }
+
+#[test]
+fn pointer_annotations_resolve_to_pointer_types() {
+    let int = || value_type(Scalar::Int);
+    let source = "fn f(
+    a: *int,
+    b: nullable *int,
+    c: **int,
+    d: *nullable *int,
+    e: *[3]int,
+    f: [2]*int,
+) -> nullable *[2]int { return g(); }
+fn g() -> nullable *[2]int { return f(h(), i(), j(), k(), l(), m()); }
+fn h() -> *int { return h(); }
+fn i() -> nullable *int { return i(); }
+fn j() -> **int { return j(); }
+fn k() -> *nullable *int { return k(); }
+fn l() -> *[3]int { return l(); }
+fn m() -> [2]*int { return m(); }
+fn main() -> void {}";
+    let syntax = parse(source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let types = checked
+        .bindings
+        .iter()
+        .map(|(_, binding)| binding.ty.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        [
+            pointer_type(false, int()),
+            pointer_type(true, int()),
+            pointer_type(false, pointer_type(false, int())),
+            pointer_type(false, pointer_type(true, int())),
+            pointer_type(false, array_type(3, int())),
+            array_type(2, pointer_type(false, int())),
+        ]
+    );
+    let results = checked
+        .functions
+        .iter()
+        .map(|(_, signature)| signature.result.clone().unwrap_or(int()))
+        .collect::<Vec<_>>();
+    assert_eq!(results[0], pointer_type(true, array_type(2, int())));
+    assert_eq!(results[2], pointer_type(false, int()));
+}
+
+#[test]
+fn a_pointer_target_names_a_struct_from_another_module() {
+    let (_dir, program) = load_tree([
+        (
+            "app/main.fern",
+            "use geometry;
+             fn f(p: nullable *geometry::Point) -> void {}
+             fn main() -> void {}",
+        ),
+        ("geometry/geometry.fern", GEOMETRY),
+    ]);
+    let checked = check(&program.syntax, &program.modules, &program.files).unwrap();
+    let pointers = checked
+        .bindings
+        .iter()
+        .filter(|(_, binding)| matches!(binding.ty, Type::Pointer { .. }))
+        .map(|(_, binding)| binding.ty.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(pointers, [pointer_type(true, struct_type(0, "Point"))]);
+}
+
+#[test]
+fn a_struct_may_hold_a_pointer_to_itself() {
+    let syntax = parse(
+        "type Node struct { value: int, next: nullable *Node }
+         type Tree struct { children: nullable *[2]Tree }
+         type A struct { b: *B }
+         type B struct { a: A }
+         fn main() -> void {}",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    assert_eq!(
+        struct_fields(&checked, 0),
+        [
+            ("value".to_owned(), value_type(Scalar::Int)),
+            (
+                "next".to_owned(),
+                pointer_type(true, struct_type(0, "Node"))
+            ),
+        ]
+    );
+    assert_eq!(
+        struct_fields(&checked, 1),
+        [(
+            "children".to_owned(),
+            pointer_type(true, array_type(2, struct_type(1, "Tree")))
+        )]
+    );
+    assert_eq!(
+        struct_fields(&checked, 2),
+        [("b".to_owned(), pointer_type(false, struct_type(3, "B")))]
+    );
+    assert_eq!(
+        struct_fields(&checked, 3),
+        [("a".to_owned(), struct_type(2, "A"))]
+    );
+    rejects_source(
+        "type Node struct { next: Node } fn main() -> void {}",
+        "Node",
+        "recursive struct type `Node`",
+    );
+}
+
+#[test]
+fn a_pointer_target_layout_must_fit_the_target_address_space() {
+    let message = "aggregate layout exceeds compiler limit of 1 PiB";
+    for marked in [
+        "fn f(p: *«[1 << 48]int») -> void {} fn main() -> void {}",
+        "type S struct { p: *«[1 << 48]int» } fn main() -> void {}",
+        "var p: nullable *«[4]Half»;
+         type Half struct { cells: [1 << 46]int }
+         fn main() -> void {}",
+        "type Holder struct { p: nullable *«[4]Half» }
+         type Half struct { cells: [1 << 46]int }
+         fn main() -> void {}",
+    ] {
+        rejects_root(marked, message);
+    }
+}
+
+#[test]
+fn a_pointer_target_resolves_like_any_other_annotation() {
+    rejects_root(
+        "fn main() -> void { var p: *«[_]int» = [1]; }",
+        "`[_]` requires an array-literal initializer",
+    );
+    rejects_root(
+        "fn f(p: *«Missing») -> void {} fn main() -> void {}",
+        "unknown type `Missing`",
+    );
+}

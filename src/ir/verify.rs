@@ -297,6 +297,7 @@ impl Program {
                     self.scalar_types(field, types);
                 }
             }
+            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
         }
     }
 
@@ -339,6 +340,7 @@ impl Program {
                 .try_fold(0u64, |count, field| {
                     count.checked_add(self.scalar_count(field)?)
                 }),
+            Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
         }
     }
 

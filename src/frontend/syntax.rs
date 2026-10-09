@@ -198,7 +198,6 @@ pub(crate) enum AnnotationKind {
     },
     /// `*T`, or `nullable *T` when `nullable` is set.
     Pointer {
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         nullable: bool,
         target: Idx<TypeAnnotation>,
     },

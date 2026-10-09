@@ -179,6 +179,7 @@ pub(crate) fn check<'a>(
         file: FileId(0),
         struct_containment_depth: 0,
         layouts: Layouts::default(),
+        pending_targets: Vec::new(),
     };
     // Dependencies come before dependents, so an imported module's namespace is
     // built and its bindings are ordered before any module that imports it.
@@ -331,6 +332,7 @@ impl CheckedProgram<'_> {
                         fields: Vec::new(),
                         ordinals: HashMap::new(),
                         state: FieldState::Unresolved,
+                        has_zero_value: false,
                     });
                     self.struct_names.insert(declared.name, id);
                 }
@@ -426,7 +428,8 @@ impl CheckedProgram<'_> {
     }
 
     /// Resolves the fields of every struct the module declares, so a
-    /// declaration nothing names is still checked.
+    /// declaration nothing names is still checked, then validates the pointer
+    /// targets that waited on those fields.
     fn resolve_module_structs(
         &mut self,
         items: &[(FileId, TopLevelItem)],
@@ -442,7 +445,7 @@ impl CheckedProgram<'_> {
             let span = declared.name_span.clone();
             self.resolve_struct_fields(id, &span, &scopes)?;
         }
-        Ok(())
+        self.validate_pending_targets()
     }
 
     /// Resolves every function's parameter and result types, so a call can be
@@ -636,10 +639,11 @@ impl CheckedProgram<'_> {
             let annotation = annotation.expect("a declaration without an initializer is annotated");
             let ty = self.resolve_annotation(annotation, &scopes, None)?;
             let binding = self.declarations[statement];
+            let span = syntax.statements[statement].span.clone();
+            self.require_zero_value(&ty, &span)?;
             // Only a `const` folds its zero value into every use; a `var` is
             // zeroed static data.
             if !mutable {
-                let span = syntax.statements[statement].span.clone();
                 self.bindings[binding].constant = Some(self.zero_value(&ty, &span)?);
             }
             self.bindings[binding].ty = ty;

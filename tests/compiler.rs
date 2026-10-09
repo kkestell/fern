@@ -176,6 +176,10 @@ fn source_failures_preserve_output() {
             "aggregate layout exceeds compiler limit of 1 PiB",
         ),
         (
+            "fn f(p: *int) -> void {} fn main() -> void {}",
+            "pointers are not yet implemented",
+        ),
+        (
             "fn main() -> void { { var x = 1; } x = 2; }",
             "unknown binding `x`",
         ),

@@ -1316,8 +1316,6 @@ fn a_struct_value_passes_through_bindings_calls_returns_and_iteration() {
 fn pointer_syntax_reports_that_pointers_are_not_yet_implemented() {
     let message = "pointers are not yet implemented";
     for (body, offending) in [
-        ("var p: *int;", "*int"),
-        ("var p: [2]nullable *int;", "nullable *int"),
         ("var x = 1; var p = null;", "null"),
         ("var x = 1; const p = &x;", "&x"),
         ("var x = 1; exit(*x);", "*x"),
@@ -1337,24 +1335,38 @@ fn pointer_syntax_reports_that_pointers_are_not_yet_implemented() {
         rejects(body, offending, message);
     }
     rejects_source(
-        "fn f(p: *int) -> void {} fn main() -> void {}",
-        "*int",
-        message,
-    );
-    rejects_source(
-        "fn f() -> *int { return f(); } fn main() -> void {}",
-        "*int",
-        message,
-    );
-    rejects_source(
-        "type Node struct { value: int, next: nullable *Node }
-         fn main() -> void { var n: Node; }",
-        "nullable *Node",
-        message,
-    );
-    rejects_source(
         "const p: *int = new(0); fn main() -> void {}",
-        "*int",
+        "new(0)",
         message,
+    );
+}
+
+#[test]
+fn a_fill_cannot_omit_a_field_without_a_zero_value() {
+    rejects_source(
+        "type Holder struct { value: int, p: *int }
+         fn main() -> void { const h = Holder { value = 1, ... }; }",
+        "Holder { value = 1, ... }",
+        "omitted field `p` has no zero value",
+    );
+    accepts_source(
+        "type Holder struct { value: int, p: *int }
+         fn make(q: *int) -> Holder { return Holder { p = q, ... }; }
+         fn main() -> void {}",
+    );
+    let syntax = parse(
+        "type Holder struct { value: int, p: nullable *int }
+         const h = Holder { value = 1, ... };
+         fn main() -> void {}",
+    )
+    .unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let (_, binding) = checked.bindings.iter().next().unwrap();
+    assert_eq!(
+        binding.constant,
+        Some(Constant::Struct(vec![
+            Constant::Integer(BigInt::from(1)),
+            Constant::Null,
+        ]))
     );
 }

@@ -42,6 +42,8 @@ pub(crate) enum Constant {
     Array(Vec<Constant>),
     /// One value per field, in declaration order.
     Struct(Vec<Constant>),
+    /// The `null` value of a nullable pointer type.
+    Null,
 }
 
 impl Constant {
@@ -50,7 +52,9 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
+            Self::Rational(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => {
+                None
+            }
         }
     }
 
@@ -58,7 +62,9 @@ impl Constant {
     pub(crate) fn rational(&self) -> Option<&BigRational> {
         match self {
             Self::Rational(value) => Some(value),
-            Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) => None,
+            Self::Integer(_) | Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => {
+                None
+            }
         }
     }
 
@@ -66,7 +72,11 @@ impl Constant {
     pub(crate) fn float(&self) -> Option<Float> {
         match self {
             Self::Float(value) => Some(*value),
-            Self::Integer(_) | Self::Rational(_) | Self::Array(_) | Self::Struct(_) => None,
+            Self::Integer(_)
+            | Self::Rational(_)
+            | Self::Array(_)
+            | Self::Struct(_)
+            | Self::Null => None,
         }
     }
 }
@@ -249,8 +259,8 @@ pub(crate) struct CheckedField {
 }
 
 /// How far a struct's fields have been resolved. Fields resolve the first time
-/// a program names the type, so a struct reached again while it is resolving
-/// is one that would contain itself.
+/// a program uses the type by value, outside a pointer target, so a struct
+/// reached again while it is resolving is one that would contain itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FieldState {
     Unresolved,
@@ -269,6 +279,8 @@ pub(crate) struct CheckedStruct {
     pub fields: Vec<CheckedField>,
     pub ordinals: HashMap<Spur, usize>,
     pub(super) state: FieldState,
+    /// Whether every field has a zero value, set once the fields resolve.
+    pub(super) has_zero_value: bool,
 }
 
 /// The bindings a `for … in` statement introduces. They belong to the
@@ -316,6 +328,9 @@ pub(crate) struct CheckedProgram<'a> {
     /// The memoized layout of every struct whose size or alignment the checker
     /// has derived. A struct is only derived once its fields have resolved.
     pub(super) layouts: Layouts,
+    /// Checking state: pointer target types, with their annotation spans,
+    /// whose layouts wait on structs that have not resolved yet.
+    pub(super) pending_targets: Vec<(Type, std::ops::Range<usize>)>,
 }
 
 impl StructFields for CheckedProgram<'_> {
@@ -342,9 +357,37 @@ impl CheckedProgram<'_> {
         })
     }
 
+    /// Whether this type has a zero value. A non-nullable pointer has none,
+    /// and neither does an array or struct that holds one.
+    pub(super) fn has_zero_value(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Scalar(_) => true,
+            Type::Array { element, .. } => self.has_zero_value(element),
+            Type::Struct(ty) => self.structs[ty.id.0].has_zero_value,
+            Type::Pointer { nullable, .. } => *nullable,
+        }
+    }
+
+    /// Rejects a declaration without an initializer whose type has no zero
+    /// value to start from.
+    pub(super) fn require_zero_value(
+        &self,
+        ty: &Type,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), Diagnostic> {
+        if self.has_zero_value(ty) {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(
+                span.clone(),
+                format!("`{ty}` has no zero value"),
+            ))
+        }
+    }
+
     /// The value a binding or field of this type holds before anything is
-    /// stored into it: `0` for a number, `false` for a `bool`, and zero values
-    /// throughout an array or struct.
+    /// stored into it: `0` for a number, `false` for a `bool`, `null` for a
+    /// nullable pointer, and zero values throughout an array or struct.
     pub(super) fn zero_value(
         &self,
         ty: &Type,
@@ -381,6 +424,12 @@ impl CheckedProgram<'_> {
                     .map(|field| self.zero_value_unchecked(&field.ty))
                     .collect(),
             ),
+            Type::Pointer { nullable: true, .. } => Constant::Null,
+            Type::Pointer {
+                nullable: false, ..
+            } => {
+                unreachable!("a type without a zero value is rejected before one is built")
+            }
         }
     }
 
@@ -396,6 +445,7 @@ impl CheckedProgram<'_> {
                 .try_fold(0u64, |count, field| {
                     count.checked_add(self.aggregate_value_count(&field.ty)?)
                 }),
+            Type::Pointer { .. } => Some(1),
         }
     }
 }

@@ -19,6 +19,29 @@ pub(super) fn pointers_not_implemented(span: &std::ops::Range<usize>) -> Diagnos
     Diagnostic::new(span.clone(), "pointers are not yet implemented")
 }
 
+/// Rejects a program that writes a pointer type, which checking resolves but
+/// IR lowering does not yet represent.
+pub(crate) fn reject_pointer_annotations(syntax: &Syntax) -> Result<(), Diagnostic> {
+    match syntax
+        .annotations
+        .values()
+        .find(|annotation| matches!(annotation.kind, AnnotationKind::Pointer { .. }))
+    {
+        Some(annotation) => Err(pointers_not_implemented(&annotation.span)),
+        None => Ok(()),
+    }
+}
+
+/// Where an annotation's type is used. A pointer's target is only referred
+/// to, so resolving it neither resolves struct fields nor validates its
+/// layout; a struct may therefore hold a pointer to itself. The enclosing
+/// pointer validates the target's layout once it is final.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    Value,
+    PointerTarget,
+}
+
 /// The length `[_]` takes from the declaration's initializer, which must be an
 /// array literal that states its own length.
 pub(super) fn inferred_length(
@@ -50,13 +73,25 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
         initializer: Option<Idx<Expression>>,
     ) -> Result<Type, Diagnostic> {
+        self.resolve_written(annotation, scopes, initializer, Placement::Value)
+    }
+
+    fn resolve_written(
+        &mut self,
+        annotation: Idx<TypeAnnotation>,
+        scopes: &ScopeStack<'_>,
+        initializer: Option<Idx<Expression>>,
+        placement: Placement,
+    ) -> Result<Type, Diagnostic> {
         let syntax = self.syntax;
         let written = &syntax.annotations[annotation];
         let ty = match &written.kind {
             AnnotationKind::Scalar(scalar) => Ok(Type::Scalar(*scalar)),
             AnnotationKind::Named(name) => {
                 let id = self.resolve_type_name(name, scopes)?;
-                self.resolve_struct_fields(id, &written.span, scopes)?;
+                if placement == Placement::Value {
+                    self.resolve_struct_fields(id, &written.span, scopes)?;
+                }
                 Ok(self.struct_type(id))
             }
             AnnotationKind::Array { length, element } => {
@@ -67,16 +102,55 @@ impl CheckedProgram<'_> {
                 };
                 // Only the declaration's own annotation has an initializer, so
                 // a nested `[_]` has nothing to take a length from.
-                let element = self.resolve_annotation(element, scopes, None)?;
+                let element = self.resolve_written(element, scopes, None, placement)?;
                 Ok(Type::Array {
                     length,
                     element: Box::new(element),
                 })
             }
-            AnnotationKind::Pointer { .. } => Err(pointers_not_implemented(&written.span)),
+            AnnotationKind::Pointer { nullable, target } => {
+                let (nullable, target) = (*nullable, *target);
+                let target_span = syntax.annotations[target].span.clone();
+                let target =
+                    self.resolve_written(target, scopes, None, Placement::PointerTarget)?;
+                // A target's layout is final once every struct it holds by
+                // value has resolved; until then it waits for the module's
+                // structs, so no partial struct layout is cached.
+                if self.layout_final(&target) {
+                    self.validate_aggregate_layout(&target, &target_span)?;
+                } else {
+                    self.pending_targets.push((target.clone(), target_span));
+                }
+                Ok(Type::Pointer {
+                    nullable,
+                    target: Box::new(target),
+                })
+            }
         }?;
-        self.validate_aggregate_layout(&ty, &written.span)?;
+        if placement == Placement::Value {
+            self.validate_aggregate_layout(&ty, &written.span)?;
+        }
         Ok(ty)
+    }
+
+    /// Whether every struct this type holds by value has resolved fields, so
+    /// that its layout no longer changes.
+    fn layout_final(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Scalar(_) | Type::Pointer { .. } => true,
+            Type::Array { element, .. } => self.layout_final(element),
+            Type::Struct(declared) => self.structs[declared.id.0].state == FieldState::Resolved,
+        }
+    }
+
+    /// Validates the layouts of pointer targets that waited on the module's
+    /// structs, which have all resolved by the time this runs.
+    pub(super) fn validate_pending_targets(&mut self) -> Result<(), Diagnostic> {
+        for (target, span) in std::mem::take(&mut self.pending_targets) {
+            debug_assert!(self.layout_final(&target), "the module's structs resolved");
+            self.validate_aggregate_layout(&target, &span)?;
+        }
+        Ok(())
     }
 
     /// Rejects layouts that native emission cannot address before they reach
@@ -100,8 +174,8 @@ impl CheckedProgram<'_> {
     }
 
     /// Resolves one struct's field types, which happens the first time the
-    /// program names the type. A struct reached again while it is resolving
-    /// would contain itself and so would have no finite size.
+    /// program uses the type by value. A struct reached again while it is
+    /// resolving would contain itself and so would have no finite size.
     pub(super) fn resolve_struct_fields(
         &mut self,
         id: StructId,
@@ -138,6 +212,10 @@ impl CheckedProgram<'_> {
         self.file = outer;
         if result.is_ok() {
             self.structs[id.0].state = FieldState::Resolved;
+            self.structs[id.0].has_zero_value = self.structs[id.0]
+                .fields
+                .iter()
+                .all(|field| self.has_zero_value(&field.ty));
         } else {
             // A struct that failed to resolve holds only the fields the walk
             // reached, so it returns to the state it had before the attempt.

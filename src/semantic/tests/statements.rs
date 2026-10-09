@@ -780,6 +780,65 @@ fn a_declaration_without_an_initializer_takes_its_type_s_zero_value() {
 }
 
 #[test]
+fn a_nullable_pointer_s_zero_value_is_null() {
+    let int = || value_type(Scalar::Int);
+    assert_eq!(
+        checked_bindings(
+            "type Node struct { value: int, next: nullable *Node }
+             fn main() -> void {
+                 var p: nullable *int;
+                 const q: nullable *int;
+                 const n: Node;
+             }"
+        ),
+        [
+            (pointer_type(true, int()), None),
+            (pointer_type(true, int()), Some(Constant::Null)),
+            (
+                struct_type(0, "Node"),
+                Some(Constant::Struct(vec![
+                    Constant::Integer(BigInt::ZERO),
+                    Constant::Null,
+                ]))
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_declaration_without_a_zero_value_requires_an_initializer() {
+    for (body, ty) in [
+        ("var p: *int;", "*int"),
+        ("const p: *int;", "*int"),
+        ("var a: [2]*int;", "[2]*int"),
+        (
+            "var p: nullable **int; var q: *nullable *int;",
+            "*nullable *int",
+        ),
+    ] {
+        let statement = body.rsplit_once("; ").map_or(body, |(_, last)| last);
+        rejects(body, statement, &format!("`{ty}` has no zero value"));
+    }
+    rejects_source(
+        "type Holder struct { p: *int } fn main() -> void { var h: Holder; }",
+        "var h: Holder;",
+        "`Holder` has no zero value",
+    );
+    rejects_source(
+        "type Inner struct { p: *int }
+         type Outer struct { inner: [2]Inner }
+         fn main() -> void { const o: Outer; }",
+        "const o: Outer;",
+        "`Outer` has no zero value",
+    );
+    rejects_source(
+        "var p: *int; fn main() -> void {}",
+        "var p: *int;",
+        "`*int` has no zero value",
+    );
+}
+
+#[test]
 fn a_declaration_without_an_initializer_is_still_a_const_or_a_typed_binding() {
     rejects(
         "const x: int; x = 1;",

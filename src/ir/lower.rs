@@ -164,6 +164,7 @@ fn scalar_literal(constant: &Constant, ty: Scalar) -> Literal {
         Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("an aggregate constant is not a scalar")
         }
+        Constant::Null => unreachable!("pointer types are rejected before lowering"),
     }
 }
 

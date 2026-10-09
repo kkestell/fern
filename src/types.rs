@@ -207,23 +207,24 @@ impl PartialEq for StructType {
     }
 }
 
-/// The type of a value. Array types compare structurally, while two
-/// struct types are the same type only when they name one declaration.
+/// The type of a value. Array and pointer types compare structurally, while
+/// two struct types are the same type only when they name one declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Type {
     Scalar(Scalar),
     Array { length: u64, element: Box<Type> },
     Struct(StructType),
+    Pointer { nullable: bool, target: Box<Type> },
 }
 
 impl Type {
-    /// The scalar this type is, or `None` for an array or a struct. Callers
-    /// that go on to do arithmetic use this to state that aggregates do not
-    /// reach them.
+    /// The scalar this type is, or `None` for an array, a struct, or a
+    /// pointer. Callers that go on to do arithmetic use this to state that
+    /// those types do not reach them.
     pub(crate) fn scalar(&self) -> Option<Scalar> {
         match self {
             Self::Scalar(scalar) => Some(*scalar),
-            Self::Array { .. } | Self::Struct(_) => None,
+            Self::Array { .. } | Self::Struct(_) | Self::Pointer { .. } => None,
         }
     }
 }
@@ -234,6 +235,12 @@ impl fmt::Display for Type {
             Self::Scalar(scalar) => write!(f, "{scalar}"),
             Self::Array { length, element } => write!(f, "[{length}]{element}"),
             Self::Struct(ty) => f.write_str(&ty.name),
+            Self::Pointer { nullable, target } => {
+                if *nullable {
+                    f.write_str("nullable ")?;
+                }
+                write!(f, "*{target}")
+            }
         }
     }
 }
@@ -346,6 +353,13 @@ mod tests {
         }
     }
 
+    fn pointer(nullable: bool, target: Type) -> Type {
+        Type::Pointer {
+            nullable,
+            target: Box::new(target),
+        }
+    }
+
     #[test]
     fn array_types_compare_structurally() {
         let two_by_three = array(2, array(3, Scalar::Int.into()));
@@ -373,6 +387,45 @@ mod tests {
         );
         assert_eq!(declared(0, "Point").to_string(), "Point");
         assert_eq!(array(2, declared(0, "Point")).to_string(), "[2]Point");
+    }
+
+    #[test]
+    fn pointer_types_compare_by_target_and_nullability() {
+        let int = || Type::Scalar(Scalar::Int);
+        assert_eq!(pointer(false, int()), pointer(false, int()));
+        assert_eq!(
+            pointer(true, declared(0, "Point")),
+            pointer(true, declared(0, "Point"))
+        );
+        assert_ne!(pointer(false, int()), pointer(true, int()));
+        assert_ne!(pointer(false, int()), pointer(false, Scalar::I64.into()));
+        assert_ne!(
+            pointer(false, declared(0, "Point")),
+            pointer(false, declared(1, "Point"))
+        );
+        assert_ne!(pointer(false, int()), int());
+    }
+
+    #[test]
+    fn pointer_types_are_spelled_the_way_they_are_written() {
+        let int = || Type::Scalar(Scalar::Int);
+        assert_eq!(pointer(false, int()).to_string(), "*int");
+        assert_eq!(
+            pointer(true, declared(0, "Point")).to_string(),
+            "nullable *Point"
+        );
+        assert_eq!(
+            pointer(false, pointer(true, int())).to_string(),
+            "*nullable *int"
+        );
+        assert_eq!(pointer(false, pointer(false, int())).to_string(), "**int");
+        assert_eq!(array(2, pointer(false, int())).to_string(), "[2]*int");
+        assert_eq!(pointer(false, array(2, int())).to_string(), "*[2]int");
+    }
+
+    #[test]
+    fn a_pointer_type_has_no_scalar() {
+        assert_eq!(pointer(false, Scalar::Int.into()).scalar(), None);
     }
 
     #[test]

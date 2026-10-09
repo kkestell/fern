@@ -545,6 +545,7 @@ fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type)
         Type::Array { .. } | Type::Struct(_) => {
             emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
         }
+        Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
     }
 }
 
@@ -750,6 +751,7 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
                     );
                     writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
                 }
+                Type::Pointer { .. } => unreachable!("pointer types are rejected before lowering"),
             }
             .unwrap();
         }

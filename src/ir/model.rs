@@ -248,4 +248,6 @@ pub(crate) struct Program {
     // Each position defines the corresponding function ID.
     pub functions: Vec<Function>,
     pub main: FunctionId,
+    /// The source span of the entry function's name.
+    pub main_span: std::ops::Range<usize>,
 }

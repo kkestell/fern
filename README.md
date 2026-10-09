@@ -86,6 +86,10 @@ array fills and struct-literal zero fills expand to at most 1,000,000 scalar
 values in total, and so does the zero value of a `const` declared without an
 initializer.
 
+A compiled program runs on the main thread's stack. Calls check the available
+stack against their storage requirements with a 64 KiB reserve and trap with
+`stack overflow` when there is insufficient room.
+
 ## Development
 
 See [AGENTS.md](AGENTS.md#development-commands) for development commands. Native

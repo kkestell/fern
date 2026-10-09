@@ -471,4 +471,5 @@ Program {
     main: FunctionId(
         1,
     ),
+    main_span: 131..135,
 }

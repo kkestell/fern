@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::layout::Layout;
 
 #[test]
 fn aggregates_pass_and_return_through_addresses() {
@@ -230,7 +231,7 @@ fn only_the_root_modules_main_is_exported() {
     ]);
     let qbe = emit(&program, None);
     let definitions = definitions(&qbe);
-    assert_eq!(definitions.len(), program.program().functions.len());
+    assert_eq!(definitions.len(), program.program().functions.len() + 1);
     let exported: Vec<&str> = definitions
         .iter()
         .filter(|(_, exported)| *exported)
@@ -265,7 +266,7 @@ fn same_named_declarations_in_two_modules_take_distinct_symbols() {
 
     // `main` and the two same-named `bump` functions.
     let definitions = definitions(&qbe);
-    assert_eq!(definitions.len(), 3);
+    assert_eq!(definitions.len(), 4);
     let functions: BTreeSet<&str> = definitions.iter().map(|(symbol, _)| *symbol).collect();
     assert_eq!(functions.len(), definitions.len(), "{definitions:?}");
 
@@ -293,7 +294,7 @@ fn same_named_declarations_in_two_modules_take_distinct_symbols() {
                 .0
         })
         .collect();
-    assert_eq!(owners.len(), 3, "{data:?}");
+    assert_eq!(owners.len(), 4, "{data:?}");
 
     // The two same-named `pub var`s are separate storage.
     let stores: BTreeSet<&str> = qbe
@@ -302,5 +303,81 @@ fn same_named_declarations_in_two_modules_take_distinct_symbols() {
         .filter_map(|line| line.rsplit(", ").next())
         .filter(|target| target.starts_with('$'))
         .collect();
-    assert_eq!(stores.len(), 2, "{qbe}");
+    assert_eq!(stores.len(), 3, "{qbe}");
+}
+
+#[test]
+fn fern_calls_check_stack_before_entering_the_callee() {
+    let program = lowered(
+        "fn helper() -> void { var data: [1000]u64; }
+         fn main() -> void { helper(); }",
+    );
+    let qbe = emit(&program, None);
+    assert_eq!(
+        definitions(&qbe)
+            .iter()
+            .filter(|(_, export)| *export)
+            .count(),
+        1
+    );
+    assert!(qbe.contains("data $fern_stack_limit = { l 0 }"), "{qbe}");
+    let wrapper = function_text(&qbe, "$main");
+    assert!(wrapper.contains("call $fn1()"), "{wrapper}");
+    let main = function_text(&qbe, "$fn1");
+    let check = main.find("cultl %stack_position").unwrap();
+    let call = main.find("call $fn0()").unwrap();
+    assert!(check < call, "{main}");
+    assert!(main.contains("cultl %stack1_available, 8016"), "{main}");
+}
+
+#[test]
+fn stack_storage_excludes_borrowed_parameters_and_forwarded_results() {
+    let program = lowered(
+        "fn first(values: [1000]u64) -> u64 { return values[0]; }
+         fn build() -> [1000]u64 { var values: [1000]u64; return values; }
+         fn relay() -> [1000]u64 { return build(); }
+         fn main() -> void { var values: [1000]u64; exit(int(first(relay()))); }",
+    );
+    let program = program.program();
+    let layout = Layout::new(&program.structs);
+    assert_eq!(storage_bytes(&layout, &program.functions[0]), 8);
+    assert_eq!(storage_bytes(&layout, &program.functions[2]), 8);
+    let build = &program.functions[1];
+    assert_eq!(storage_bytes(&layout, build), 16008);
+}
+
+#[test]
+fn recursion_and_oversized_frames_abort_with_stack_overflow() {
+    use std::os::unix::process::ExitStatusExt;
+    for source in [
+        "fn down(n: int) -> int { return down(n + 1); }
+         fn main() -> void { exit(down(0)); }",
+        "fn down(n: int) -> int { var data: [1000]u64; return down(n + 1); }
+         fn main() -> void { exit(down(0)); }",
+        "fn huge() -> void { var data: [16000000]u64; }
+         fn main() -> void { huge(); }",
+        "fn main() -> void { var data: [16000000]u64; }",
+    ] {
+        let program = lowered(source);
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("program");
+        build_text(&emit(&program, None), &output).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert_eq!(result.status.signal(), Some(6), "{source}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("stack overflow"),
+            "{source}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn deep_recursion_with_available_stack_returns_its_sum() {
+    assert_eq!(
+        native_program_status(
+            "fn sum(n: int) -> int { if n == 0 { return 0; } return n + sum(n - 1); }
+         fn main() -> void { exit(sum(10000) % 256); }"
+        ),
+        Some((10000 * 10001 / 2) % 256)
+    );
 }

@@ -824,4 +824,5 @@ Program {
     main: FunctionId(
         1,
     ),
+    main_span: 370..374,
 }

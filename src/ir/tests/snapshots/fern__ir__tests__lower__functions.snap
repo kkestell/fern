@@ -963,4 +963,5 @@ Program {
     main: FunctionId(
         5,
     ),
+    main_span: 750..754,
 }

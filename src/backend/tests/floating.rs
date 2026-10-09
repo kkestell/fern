@@ -74,7 +74,14 @@ fn emitted_floating_values_use_floating_classes_and_operations() {
     // Nothing reaches an integer word class or operation.
     assert!(!qbe.contains("=w mul"), "{qbe}");
     // Floating-point arithmetic and comparison never trap.
-    assert!(!qbe.contains("$abort"), "{qbe}");
+    assert!(
+        data_symbols(&qbe)
+            .iter()
+            .filter(|symbol| symbol.ends_with("_message"))
+            .all(|symbol| symbol.ends_with("_stack_message")
+                || symbol.ends_with("_stack_bounds_message")),
+        "{qbe}"
+    );
 }
 
 #[test]

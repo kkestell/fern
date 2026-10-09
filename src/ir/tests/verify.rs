@@ -562,6 +562,7 @@ fn two_functions(callee: Function, values: Vec<Value>, instructions: Vec<Instruc
             callee,
         ],
         main: FunctionId(0),
+        main_span: 0..0,
     }
 }
 
@@ -867,6 +868,7 @@ fn verification_checks_main_globals_and_global_places() {
             }],
         )],
         main: FunctionId(0),
+        main_span: 0..0,
     };
     stores_to_global(vec![Global {
         ty: Scalar::Int.into(),
@@ -903,6 +905,7 @@ fn verification_checks_main_globals_and_global_places() {
             }],
         )],
         main: FunctionId(0),
+        main_span: 0..0,
     }
     .verify()
     .unwrap_err();
@@ -1245,6 +1248,7 @@ fn verification_checks_a_struct_global_against_its_scalar_types_in_field_order()
             }],
         )],
         main: FunctionId(0),
+        main_span: 0..0,
     };
     let x = Literal::Integer {
         value: 1,

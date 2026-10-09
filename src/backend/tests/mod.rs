@@ -30,6 +30,7 @@ fn program(values: Vec<Value>, exit: Operand) -> Program {
         structs: vec![],
         globals: vec![],
         main: FunctionId(0),
+        main_span: 0..0,
         functions: vec![Function {
             parameters: 0,
             result: None,
@@ -101,7 +102,9 @@ fn assert_native_values(verified: &VerifiedProgram, expected: &[i128]) {
     let mut text = emit(verified, None);
     // These programs define `main` alone, which ends either in an explicit
     // `exit` or in the `ret 0` of a body that reaches its end.
-    let start = text.find("export function").expect("main is exported");
+    let start = text
+        .find(&format!("function w $fn{}(", verified.program().main.0))
+        .expect("Fern main is defined");
     let end = start
         + text[start..]
             .find("    %block0_status =")

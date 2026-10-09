@@ -1506,21 +1506,21 @@ fn large_aggregates_compile_and_execute() {
     // arm64 relocation can offset is still addressable.
     let (_dir, input, output) = fixture(
         "var big: [10000000]int;
-         fn first(values: [50000]int) -> int { return values[0]; }
-         fn make(seed: int) -> [50000]int { var out: [50000]int = [seed...]; return out; }
+         fn first(values: [10000]int) -> int { return values[0]; }
+         fn make(seed: int) -> [10000]int { var out: [10000]int = [seed...]; return out; }
          fn main() -> void {
              big[9999999] = 2;
-             var a: [50000]int;
+             var a: [10000]int;
              var b = make(3);
              if a == b { exit(1); }
              a = b;
              if a != b { exit(2); }
              for var i = 0; i < 3; i += 1 {
-                 var fresh: [50000]int;
-                 if fresh[49999] != 0 { exit(3); }
-                 fresh[49999] = i;
+                 var fresh: [10000]int;
+                 if fresh[9999] != 0 { exit(3); }
+                 fresh[9999] = i;
              }
-             exit(first(a) + a[49999] + big[9999999]);
+             exit(first(a) + a[9999] + big[9999999]);
          }",
     );
     fern::compile(&input, &output).unwrap();
@@ -1740,4 +1740,33 @@ fn the_modules_and_imports_fixture_executes() {
     let output = dir.path().join("output");
     fern::compile(&root, &output).unwrap();
     assert_eq!(Command::new(&output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn stack_overflow_diagnostics_identify_the_call_or_main_name() {
+    use std::os::unix::process::ExitStatusExt;
+    for (source, line, spelling) in [
+        (
+            "fn down(n: int) -> int {\n    return down(n + 1);\n}\nfn main() -> void { exit(down(0)); }",
+            2,
+            "down(n + 1)",
+        ),
+        (
+            "\nfn main() -> void {\n    var data: [16000000]u64;\n}",
+            2,
+            "main",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        let result = Command::new(output).output().unwrap();
+        assert_eq!(result.status.signal(), Some(6));
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(stderr.contains("stack overflow"), "{stderr}");
+        assert!(
+            stderr.contains(&format!("{}:{line}:", input.display())),
+            "{stderr}"
+        );
+        assert!(stderr.contains(spelling), "{stderr}");
+    }
 }

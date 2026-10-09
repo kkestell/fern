@@ -318,6 +318,10 @@ pub(super) struct Emitter<'a> {
     pub(super) globals: &'a [Global],
     pub(super) functions: &'a [Function],
     pub(super) main: FunctionId,
+    /// Allocation bytes for each function, rounded to QBE stack slots.
+    pub(super) storage_bytes: Vec<u64>,
+    /// Unique IDs for stack checks and their trap messages.
+    pub(super) stack_checks: usize,
     /// The index of the function being emitted, which distinguishes its
     /// module-global trap message symbols from every other function's.
     pub(super) function: usize,

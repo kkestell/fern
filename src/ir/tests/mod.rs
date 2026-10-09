@@ -77,6 +77,7 @@ pub(super) fn with_structs(structs: Vec<Struct>, main: Function) -> Program {
         globals: vec![],
         functions: vec![main],
         main: FunctionId(0),
+        main_span: 0..0,
     }
 }
 

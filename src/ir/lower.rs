@@ -78,6 +78,7 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
         globals,
         functions,
         main: function_id(checked.main),
+        main_span: checked.syntax.functions[checked.main].name_span.clone(),
     }
 }
 

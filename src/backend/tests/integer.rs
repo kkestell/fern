@@ -395,10 +395,19 @@ fn infallible_conversions_do_not_emit_trap_blocks_or_messages() {
             .verify()
             .unwrap();
     let text = emit(&program, None);
-    assert!(!text.contains("$abort"));
-    assert!(!text.contains("$write"));
-    assert!(data_symbols(&text).is_empty());
-    assert!(!text.contains("jnz"));
+    assert!(!text.contains("_conversion_"), "{text}");
+    assert!(
+        data_symbols(&text)
+            .iter()
+            .all(|symbol| *symbol == "fern_stack_limit"
+                || symbol.ends_with("_stack_message")
+                || symbol.ends_with("_stack_bounds_message")),
+        "{text}"
+    );
+    let main = text.split("function w $fn0(").nth(1).unwrap();
+    assert!(!main.contains("$abort"));
+    assert!(!main.contains("$write"));
+    assert!(!main.contains("jnz"));
 }
 
 #[test]

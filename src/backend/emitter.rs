@@ -4,7 +4,8 @@
 //! passed and returned through addresses rather than QBE aggregate types, and
 //! are copied, zeroed, and filled with C library calls or loops. A callee reads
 //! an aggregate parameter from the storage its caller passed, which is copied
-//! only when lowering loaded the argument rather than borrowing it.
+//! only when lowering loaded the argument rather than borrowing it. Every Fern
+//! call checks the available stack before entering the callee.
 
 use crate::{
     diagnostic::DiagnosticRenderer,
@@ -107,12 +108,8 @@ fn static_address(emitter: &mut Emitter<'_>, symbol: String, ty: Type) -> (Strin
 /// Names the QBE symbol defining or calling function `id`. Fern source names
 /// never reach the object file, so a function named `write` or `exit` cannot
 /// collide with libc.
-fn function_symbol(main: FunctionId, id: FunctionId) -> String {
-    if id == main {
-        "main".to_owned()
-    } else {
-        format!("fn{}", id.0)
-    }
+fn function_symbol(id: FunctionId) -> String {
+    format!("fn{}", id.0)
 }
 
 /// The address of a place and the type stored there. An element place emits
@@ -216,13 +213,21 @@ fn place_address(emitter: &mut Emitter<'_>, function: &Function, place: &Place) 
 
 pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> String {
     let program = verified.program();
+    let layout = Layout::new(&program.structs);
+    let storage_bytes = program
+        .functions
+        .iter()
+        .map(|function| storage_bytes(&layout, function))
+        .collect();
     let mut emitter = Emitter {
         text: String::new(),
         data: String::new(),
-        layout: Layout::new(&program.structs),
+        layout,
         globals: &program.globals,
         functions: &program.functions,
         main: program.main,
+        storage_bytes,
+        stack_checks: 0,
         function: 0,
         qbe_result: None,
         returned_calls: Vec::new(),
@@ -231,6 +236,7 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
         fills: 0,
         diagnostics: sources.map(DiagnosticRenderer::new),
     };
+    emit_entry(&mut emitter, &program.main_span);
     for (id, global) in program.globals.iter().enumerate() {
         emit_data(&mut emitter, &format!("global{id}"), global);
     }
@@ -275,13 +281,12 @@ pub(super) fn emit(verified: &VerifiedProgram, sources: Option<&SourceMap>) -> S
             .join(", ");
         writeln!(
             emitter.text,
-            "{}function {}${}({parameters}) {{\n@start",
-            if entry { "export " } else { "" },
+            "function {}${}({parameters}) {{\n@start",
             match &emitter.qbe_result {
                 Some(result) => format!("{result} "),
                 None => String::new(),
             },
-            function_symbol(program.main, id)
+            function_symbol(id)
         )
         .unwrap();
         emit_control_flow(&mut emitter, function, &function.flow);
@@ -315,36 +320,157 @@ fn is_aggregate(ty: &Type) -> bool {
     ty.scalar().is_none()
 }
 
-fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
-    for (id, ty) in flow.locals.iter().enumerate() {
-        // An aggregate parameter is read from the caller's storage.
-        if id < function.parameters && is_aggregate(ty) {
-            continue;
+/// Leaves room for QBE spills, saved registers, alignment, libc calls, and
+/// the trap's own diagnostic and abort below the checked stack limit.
+const STACK_RESERVE_BYTES: u64 = 64 * 1024;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+compile_error!("stack bounds discovery requires macOS or Linux");
+
+/// The entry allocations shared by emission and stack accounting.
+fn allocations(_layout: &Layout<'_>, function: &Function) -> Vec<(String, Type)> {
+    let mut allocations = vec![("%stack_position".to_owned(), Scalar::U32.into())];
+    for (id, ty) in function.flow.locals.iter().enumerate() {
+        if id >= function.parameters || !is_aggregate(ty) {
+            allocations.push((format!("%local{id}"), ty.clone()));
         }
-        writeln!(
-            emitter.text,
-            "    %local{id} =l {} {}",
-            allocation(&emitter.layout, ty),
-            emitter.layout.size(ty)
-        )
-        .unwrap();
     }
-    // An aggregate value holds its own copy of the aggregate. QBE allocates
-    // once per `alloc` it executes, so the storage is allocated here rather
-    // than where the load or call runs, which may be inside a loop.
+    let returned = returned_calls(function);
     for (id, value) in function.values.iter().enumerate() {
         if matches!(value.kind, ValueKind::Load(_) | ValueKind::CallResult)
             && is_aggregate(&value.ty)
-            && !emitter.returned_calls.contains(&ValueId(id))
+            && !returned.contains(&ValueId(id))
         {
-            writeln!(
-                emitter.text,
-                "    %v{id}_storage =l {} {}",
-                allocation(&emitter.layout, &value.ty),
-                emitter.layout.size(&value.ty)
-            )
-            .unwrap();
+            allocations.push((format!("%v{id}_storage"), value.ty.clone()));
         }
+    }
+    allocations
+}
+
+pub(super) fn storage_bytes(layout: &Layout<'_>, function: &Function) -> u64 {
+    allocations(layout, function)
+        .iter()
+        .fold(0u64, |bytes, (_, ty)| {
+            bytes
+                .saturating_add(layout.size(ty).saturating_add(7) & !7)
+                .min(i64::MAX as u64)
+        })
+}
+
+fn emit_stack_check(
+    emitter: &mut Emitter<'_>,
+    caller_bytes: u64,
+    callee_bytes: u64,
+    arguments: usize,
+    message: String,
+) {
+    let id = emitter.stack_checks;
+    emitter.stack_checks += 1;
+    let needed = caller_bytes
+        .saturating_add(callee_bytes)
+        .saturating_add((arguments as u64).saturating_mul(8))
+        .min(i64::MAX as u64);
+    writeln!(
+        emitter.text,
+        "    %stack{id}_limit =l loadl $fern_stack_limit"
+    )
+    .unwrap();
+    writeln!(
+        emitter.text,
+        "    %stack{id}_below =w cultl %stack_position, %stack{id}_limit"
+    )
+    .unwrap();
+    writeln!(
+        emitter.text,
+        "    %stack{id}_available =l sub %stack_position, %stack{id}_limit"
+    )
+    .unwrap();
+    writeln!(
+        emitter.text,
+        "    %stack{id}_short =w cultl %stack{id}_available, {needed}"
+    )
+    .unwrap();
+    writeln!(
+        emitter.text,
+        "    %stack{id}_failed =w or %stack{id}_below, %stack{id}_short"
+    )
+    .unwrap();
+    emit_conditional_trap(
+        &mut emitter.text,
+        &mut emitter.data,
+        emitter.function,
+        id,
+        "stack",
+        &format!("%stack{id}_failed"),
+        message,
+    );
+}
+
+fn emit_entry(emitter: &mut Emitter<'_>, main_span: &std::ops::Range<usize>) {
+    // Keep wrapper message ownership separate from every Fern function.
+    emitter.function = emitter.functions.len();
+    emitter.data.push_str("data $fern_stack_limit = { l 0 }\n");
+    emitter
+        .text
+        .push_str("export function w $main() {\n@start\n    %stack_position =l alloc4 4\n");
+    if cfg!(target_os = "macos") {
+        emitter.text.push_str("    %thread =l call $pthread_self()\n    %stack_top =l call $pthread_get_stackaddr_np(l %thread)\n    %stack_size =l call $pthread_get_stacksize_np(l %thread)\n    %stack_bottom =l sub %stack_top, %stack_size\n");
+    } else {
+        emitter.text.push_str("    %attr =l alloc8 128\n    %address =l alloc8 8\n    %size =l alloc8 8\n    %thread =l call $pthread_self()\n    %attr_status =w call $pthread_getattr_np(l %thread, l %attr)\n");
+        emit_conditional_trap(
+            &mut emitter.text,
+            &mut emitter.data,
+            emitter.function,
+            0,
+            "stack_bounds",
+            "%attr_status",
+            "cannot find the stack bounds\n".to_owned(),
+        );
+        emitter.text.push_str("    %bounds_status =w call $pthread_attr_getstack(l %attr, l %address, l %size)\n    call $pthread_attr_destroy(l %attr)\n");
+        emit_conditional_trap(
+            &mut emitter.text,
+            &mut emitter.data,
+            emitter.function,
+            1,
+            "stack_bounds",
+            "%bounds_status",
+            "cannot find the stack bounds\n".to_owned(),
+        );
+        emitter
+            .text
+            .push_str("    %stack_bottom =l loadl %address\n");
+    }
+    writeln!(emitter.text, "    %stack_limit =l add %stack_bottom, {STACK_RESERVE_BYTES}\n    storel %stack_limit, $fern_stack_limit").unwrap();
+    let message = operation_message(
+        Some(main_span),
+        emitter.diagnostics.as_ref(),
+        "stack overflow",
+    );
+    // The wrapper's fixed allocations occupy at most 160 bytes.
+    emit_stack_check(
+        emitter,
+        160,
+        emitter.storage_bytes[emitter.main.0],
+        0,
+        message,
+    );
+    writeln!(
+        emitter.text,
+        "    %status =w call ${}()\n    ret %status\n}}",
+        function_symbol(emitter.main)
+    )
+    .unwrap();
+}
+
+fn emit_control_flow(emitter: &mut Emitter<'_>, function: &Function, flow: &ControlFlow) {
+    for (name, ty) in allocations(&emitter.layout, function) {
+        writeln!(
+            emitter.text,
+            "    {name} =l {} {}",
+            allocation(&emitter.layout, &ty),
+            emitter.layout.size(&ty)
+        )
+        .unwrap();
     }
     // The parameters are the leading locals, so the loop above allocated the
     // scalar ones. An aggregate parameter needs no entry copy.
@@ -401,8 +527,8 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             result,
             function: callee,
             arguments,
-            ..
-        } => emit_call(emitter, *callee, arguments, *result),
+            span,
+        } => emit_call(emitter, *callee, arguments, *result, span),
     }
 }
 
@@ -474,6 +600,7 @@ fn emit_call(
     callee: FunctionId,
     arguments: &[Operand],
     result: Option<ValueId>,
+    span: &std::ops::Range<usize>,
 ) {
     let target = &emitter.functions[callee.0];
     // An aggregate result is written into the storage its value owns, whose
@@ -505,12 +632,22 @@ fn emit_call(
         }))
         .collect::<Vec<_>>()
         .join(", ");
-    let symbol = function_symbol(emitter.main, callee);
+    let result_storage = aggregate_result.map(storage);
+    let argument_count = target.parameters + usize::from(aggregate_result.is_some());
+    let message = operation_message(Some(span), emitter.diagnostics.as_ref(), "stack overflow");
+    emit_stack_check(
+        emitter,
+        emitter.storage_bytes[emitter.function],
+        emitter.storage_bytes[callee.0],
+        argument_count,
+        message,
+    );
+    let symbol = function_symbol(callee);
     match (result, aggregate_result) {
-        (Some(ValueId(id)), Some(result)) => writeln!(
+        (Some(ValueId(id)), Some(_)) => writeln!(
             emitter.text,
             "    call ${symbol}({arguments})\n    %v{id} =l copy {}",
-            storage(result)
+            result_storage.as_ref().unwrap()
         ),
         (Some(ValueId(id)), None) => writeln!(
             emitter.text,

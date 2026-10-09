@@ -130,6 +130,9 @@ Function names participate in the namespace described under
 visible throughout its module regardless of declaration order. Functions are
 not overloaded. A function may call itself or participate in mutual recursion.
 
+A call traps with `stack overflow` when the stack has no room for the called
+function. This also applies to entering the root module's `main`.
+
 An executable build designates one module as its root module. The program entry
 point is the root module's sole top-level function named `main`, with no
 parameters and the explicit return annotation `void`:
@@ -771,9 +774,11 @@ There are no `++` or `--` operators.
 
 ### Portability notes
 
-The only platform-dependent behavior in this specification is the width of `int`
-and `uint`. Its consequences are:
+The amount of stack available to a program and the width of `int` and `uint`
+are platform-dependent. Their consequences are:
 
+- The amount of stack available to a program is platform-defined; a call may
+  succeed on one platform and trap on another (Functions).
 - Untyped constants assigned to `int`/`uint` may fit on one platform and be rejected at compile time on another (Typing by context).
 - Checked conversions to `int`/`uint` may succeed on one platform and trap on another (Checked conversion).
 - Arithmetic on `int`/`uint` may succeed on one platform and trap on another (Overflow).
@@ -800,6 +805,7 @@ specific width should use fixed-width types; their distinctness from `int` and
 | Checked conversion would discard information | Trap |
 | Negative shift count | Trap |
 | Out-of-range index | Trap |
+| Stack has no room for the called function, including entry into `main` | Trap |
 | Runtime shift count ≥ width | Defined, no trap |
 | Untyped constant shift result does not fit its target type | Compile error |
 | Wrapping operators | Defined, no trap |

@@ -213,3 +213,22 @@ fn heap_operations_call_the_c_library() {
         assert!(qbe.contains(expected), "{expected} missing from:\n{qbe}");
     }
 }
+
+#[test]
+fn native_allocation_failure_traps_with_out_of_memory() {
+    // No portable program exhausts memory, so the allocation calls a
+    // stand-in that always fails, which runs the real trap path.
+    let qbe = emit(
+        &lowered("fn main() -> void { const p = new(1); exit(*p); }"),
+        None,
+    )
+    .replace("call $malloc(", "call $fern_test_failing_malloc(")
+        + "function l $fern_test_failing_malloc(l %size) {\n@start\n    ret 0\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("program");
+    build_text(&qbe, &output).unwrap();
+    let result = Command::new(output).output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("out of memory"), "{stderr}");
+}

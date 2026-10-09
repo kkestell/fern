@@ -348,6 +348,80 @@ fn struct_source_failures_preserve_output() {
 }
 
 #[test]
+fn pointer_programs_execute() {
+    for (source, expected) in [
+        (include_str!("fixtures/programs/pointers.fern"), 42),
+        (
+            "fn main() -> void {
+                 const p = new(1);
+                 free(p);
+                 var q: nullable *int;
+                 free(q);
+             }",
+            0,
+        ),
+        (
+            "fn main() -> void {
+                 var q: nullable *int = new(17);
+                 const p = *int(q);
+                 exit(*p);
+             }",
+            17,
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fern::compile(&input, &output).unwrap();
+        assert_eq!(
+            Command::new(output).status().unwrap().code(),
+            Some(expected),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn pointer_programs_report_compile_time_errors() {
+    for (source, expected) in [
+        (
+            "fn main() -> void { const q = 1; const b = &q; }",
+            "cannot take the address of immutable binding `q`",
+        ),
+        (
+            "fn main() -> void { var p = null; }",
+            "`null` requires a nullable pointer type from context",
+        ),
+        (
+            "fn f(x: int) -> int { return x; }
+             fn main() -> void { var x = 1; const p = *f(x); }",
+            "cannot use function `f` as a type",
+        ),
+        ("fn main() -> void { var x: *void; }", "expected a type"),
+        (
+            "fn main() -> void { var q: nullable *int; exit(*q); }",
+            "cannot dereference `nullable *int`",
+        ),
+        (
+            "fn main() -> void { var x = 1; const p = &x; if p < p { exit(1); } }",
+            "only `==` and `!=` are defined on `*int`",
+        ),
+        (
+            "fn main() -> void { var x = 1; const p = &x; exit(int(p)); }",
+            "cannot convert `*int` to `int`",
+        ),
+        (
+            "fn main() -> void { var p: *int; }",
+            "`*int` has no zero value",
+        ),
+    ] {
+        let (_dir, input, output) = fixture(source);
+        fs::write(&output, "old executable").unwrap();
+        let error = fern::compile(&input, &output).unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(fs::read_to_string(output).unwrap(), "old executable");
+    }
+}
+
+#[test]
 fn oversized_integer_diagnostics_are_bounded() {
     let digits = "9".repeat(200_000);
     let (_dir, input, output) = fixture(format!("fn main() -> void {{ const value = {digits}; }}"));

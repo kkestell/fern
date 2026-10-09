@@ -59,7 +59,7 @@
   `null pointer` on `*T(p)` when `p` is `null`. Route both traps through the
   existing failure reporting.
 
-- [ ] Compile and execute pointer programs and failures
+- [x] Compile and execute pointer programs and failures
 
   Add program fixtures and native integration tests for every example in the
   pointer section of the specification, including the linked-list sum, the

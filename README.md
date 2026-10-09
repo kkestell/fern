@@ -22,6 +22,9 @@ The examples form a tour of the currently supported language, grouped by topic:
   forms.
 - [Structs](examples/structs.fern) covers declarations, literals and fill,
   field selection and assignment, copying, and equality.
+- [Pointers](examples/pointers.fern) covers heap allocation with `new` and
+  `free`, addresses, access through pointers, nullable pointers and `*T(p)`,
+  and pointer comparison.
 - [Modules and imports](examples/modules_and_imports/) covers module
   directories, `pub` declarations, whole-module, nested-path, and selective
   imports, and qualified references. Its root module is

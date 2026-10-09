@@ -1,0 +1,63 @@
+type Point struct {
+    x: int,
+    y: int,
+}
+
+type Node struct {
+    value: int,
+    next: nullable *Node,
+}
+
+// Moves a point through a pointer, so the caller's point changes.
+fn shift(point: *Point, by: int) -> void {
+    point.x += by;
+    point.y += by;
+}
+
+// Adds the values of a list that ends at `null`.
+fn total(list: nullable *Node) -> int {
+    var sum = 0;
+    var cursor = list;
+    for cursor != null {
+        // `*Node(cursor)` checks that `cursor` is not `null`.
+        const node = *Node(cursor);
+        sum += node.value;
+        cursor = node.next;
+    }
+    return sum;
+}
+
+fn main() -> void {
+    // `&` takes the address of a local; `*` reads and writes its target.
+    var count = 1;
+    const counter = &count;
+    *counter += 1;
+
+    // `new` copies a value into a heap target and yields a pointer to it.
+    // Field selection and indexing look through the pointer.
+    const origin = new(Point { x = 1, y = 2 });
+    shift(origin, 10);
+    const row = new([1, 2, 3]);
+    row[2] = count;
+
+    // A `nullable *T` holds a pointer or `null`, and a `*T` converts to it.
+    const tail = new(Node { value = row[2], next = null });
+    const head = new(Node { value = origin.x, next = tail });
+    if total(head) != 13 {
+        exit(1);
+    }
+
+    // Pointers are equal when they refer to the same target.
+    const alias = origin;
+    const other = new(Point { x = 11, y = 12 });
+    if alias != origin || other == origin {
+        exit(2);
+    }
+
+    free(other);
+    free(head);
+    free(tail);
+    free(row);
+    free(origin);
+    exit(0);
+}

@@ -201,6 +201,7 @@ pub(crate) fn check<'a>(
                 .iter()
                 .map(|p| checked.bindings[*p].ty.clone())
                 .collect::<Vec<_>>(),
+            signature.variadic,
             signature.result.clone(),
         );
         if let Some(previous) = externals.insert(function.name, types.clone())
@@ -525,8 +526,14 @@ impl CheckedProgram<'_> {
                     }
                 }
             }
-            self.functions
-                .insert(function, FunctionSignature { parameters, result });
+            self.functions.insert(
+                function,
+                FunctionSignature {
+                    parameters,
+                    variadic: function_syntax.variadic,
+                    result,
+                },
+            );
         }
         Ok(())
     }

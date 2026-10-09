@@ -222,6 +222,17 @@ impl Type {
         !matches!(self, Self::Array { .. }) && self.stores_no_bool(table)
     }
 
+    /// Whether a value of this type may be an extra argument to a variadic
+    /// external function: a number other than `f32`, which C never receives
+    /// through `...`, or a pointer.
+    pub(crate) fn passes_as_variadic_argument(&self) -> bool {
+        match self {
+            Self::Scalar(scalar) => scalar.is_numeric() && *scalar != Scalar::F32,
+            Self::Pointer { .. } => true,
+            Self::Array { .. } | Self::Struct(_) => false,
+        }
+    }
+
     /// Whether no scalar this type stores by value is a `bool`. A pointer's
     /// target is not stored in the pointer.
     fn stores_no_bool(&self, table: &dyn StructFields) -> bool {

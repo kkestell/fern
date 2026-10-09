@@ -312,3 +312,22 @@ fn malformed_string_and_character_literals_are_rejected() {
         assert_eq!(error.span, prefix.len()..source.len(), "{literal}");
     }
 }
+
+#[test]
+fn an_ellipsis_is_one_token() {
+    use crate::frontend::lexer::Token;
+    use logos::Logos;
+    let tokens: Vec<_> = Token::lexer("... x.y .5")
+        .map(|token| token.unwrap())
+        .collect();
+    assert_eq!(
+        tokens,
+        [
+            Token::Ellipsis,
+            Token::Name,
+            Token::Dot,
+            Token::Name,
+            Token::Number
+        ]
+    );
+}

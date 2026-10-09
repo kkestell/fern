@@ -164,10 +164,28 @@ and corresponding element. A struct passed across the interface cannot contain
 The programmer must supply a declaration matching the actual C function.
 Declaring one symbol with inconsistent signatures, or calling it with an
 incorrect signature, is invalid. External symbol `main` is reserved for program
-startup. Variadic calls, callbacks, external globals, and arrays passed
-directly across the external interface are not part of this core. Values may
-be exchanged through pointers.
+startup. Callbacks, external globals, and arrays passed directly across the
+external interface are not part of this core. Values may be exchanged through
+pointers.
 The implementation documents which libraries it links.
+
+```fern
+extern fn printf(format: *u8, ...) -> i32;
+
+fn main() -> void {
+    printf("%d %s %.1f\n", i32(42), "apples", 2.5);
+}
+```
+
+An external declaration may end its parameter list with `...`, with no
+trailing comma, to declare a C variadic function; `...` may also be the whole
+list. Only external functions may be variadic. Whether a declaration ends in
+`...` is part of its signature. A call passes an argument for every declared
+parameter, then any number of extra arguments. An extra argument has no
+expected type, so an untyped literal takes its default type and `null` is
+invalid. Each extra argument must have a numeric type other than `f32`, or a
+pointer type, and passes as C passes a variadic argument of the corresponding C
+type. Structs passed as extra arguments are not part of this core.
 
 An executable's root module must define `fn main() -> void`. A dependency's
 `main` is ordinary. Returning from the root `main` exits successfully.
@@ -352,6 +370,7 @@ entries replace CLI defaults, and an empty list preserves defaults. Unresolved
 imports report the path and all searched roots. Module dependencies must be
 acyclic; cycle diagnostics show the chain. Each module is included once.
 
-A string type, slices, function values, generics, variadic functions, and implicit
-numeric conversions are not part of this core. Stack exhaustion and allocation
-failure follow the platform and library contracts; no trap runtime is required.
+A string type, slices, function values, generics, variadic Fern functions, and
+implicit numeric conversions are not part of this core. Stack exhaustion and
+allocation failure follow the platform and library contracts; no trap runtime
+is required.

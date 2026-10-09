@@ -72,6 +72,8 @@ pub(super) enum Token {
     Comma,
     #[token(".")]
     Dot,
+    #[token("...")]
+    Ellipsis,
     #[token("+=")]
     PlusEquals,
     #[token("-=")]

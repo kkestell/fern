@@ -464,14 +464,29 @@ fn emit_call(
         .filter(|_| target.external.is_none())
         .map(|storage| format!("l {storage}"))
         .into_iter()
-        .chain(arguments.iter().enumerate().map(|(index, argument)| {
+        .chain(
+            arguments[..target.parameters]
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    format!(
+                        "{} {}",
+                        if target.external.is_some() {
+                            abi_class(&target.flow.locals[index])
+                        } else {
+                            emitter.layout.class(&target.flow.locals[index]).to_string()
+                        },
+                        operand(argument.clone())
+                    )
+                }),
+        )
+        // A variadic call marks where its extra arguments begin, even when it
+        // passes none, and each extra argument's own type names it.
+        .chain(target.variadic.then(|| "...".to_owned()))
+        .chain(arguments[target.parameters..].iter().map(|argument| {
             format!(
                 "{} {}",
-                if target.external.is_some() {
-                    abi_class(&target.flow.locals[index])
-                } else {
-                    emitter.layout.class(&target.flow.locals[index]).to_string()
-                },
+                abi_class(&operand_type(function, argument.clone())),
                 operand(argument.clone())
             )
         }))

@@ -180,6 +180,10 @@ fn invalid_programs_preserve_outputs() {
             "type S struct {b:bool} extern fn x(s:S)->void;fn main()->void {}",
             "cannot contain bool",
         ),
+        (
+            "extern fn x(n:i32,...)->void;fn main()->void {x(1,f32(1.0));}",
+            "converted to f64",
+        ),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("main.fern");
@@ -327,6 +331,83 @@ fn c_abi_floating_point() {
     ));
     let status = Command::new(output).status().unwrap();
     assert!(status.success(), "{status}");
+}
+#[test]
+fn c_variadic_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = dir.path().join("helper.c");
+    let object = dir.path().join("helper.o");
+    fs::write(
+        &c,
+        r#"
+ #include <stdarg.h>
+ #include <stdint.h>
+ #include <string.h>
+ int64_t take(int32_t count,...){
+ va_list ap;va_start(ap,count);
+ int a=va_arg(ap,int);int64_t b=va_arg(ap,int64_t);double c=va_arg(ap,double);
+ char *d=va_arg(ap,char *);int e=va_arg(ap,int);unsigned f=va_arg(ap,unsigned);
+ intptr_t g=va_arg(ap,intptr_t);double h=va_arg(ap,double);int i=va_arg(ap,int);
+ int64_t j=va_arg(ap,int64_t);int k=va_arg(ap,int);
+ va_end(ap);
+ if(count!=11)return 1;if(a!=7)return 2;if(b!=-9000000000LL)return 3;if(c!=0.25)return 4;
+ if(strcmp(d,"ok"))return 5;if(e!=-3)return 6;if(f!=65535)return 7;if(g!=5)return 8;
+ if(h!=1.5)return 9;if(i!='a')return 10;if(j!=123)return 11;if(k!=200)return 12;
+ return 0;
+ }
+ int32_t none(int32_t x,...){return x+1;}"#,
+    )
+    .unwrap();
+    compile_c(&c, &object);
+    let input = dir.path().join("main.fern");
+    let output = dir.path().join("program");
+    fs::write(
+        &input,
+        format!(
+            r#"{EXIT}
+ extern fn take(count:i32,...)->i64;
+ extern fn none(x:i32,...)->i32;
+ extern fn snprintf(buffer:*u8,size:uint,format:*u8,...)->i32;
+ extern fn strcmp(a:*u8,b:*u8)->i32;
+ extern fn malloc(bytes:uint)->*u8;
+ fn main()->void {{
+ var small:i8=-3;var wide:u16=65535;var byte:u8=200;
+ var result=take(11,i32(7),i64(-9000000000),0.25,"ok",small,wide,5,1.5,'a',i64(123),byte);
+ if result!=0 {{exit(i32(result));}}
+ if none(41)!=42 {{exit(20);}}
+ var buffer=malloc(32);
+ if snprintf(buffer,32,"%d %s %.1f",i32(42),"x",2.5)!=8 {{exit(21);}}
+ if strcmp(buffer,"42 x 2.5")!=0 {{exit(22);}}
+ }}"#
+        ),
+    )
+    .unwrap();
+    succeeds(&mut fern_cli(
+        &input,
+        &output,
+        &["--link".as_ref(), object.as_os_str()],
+    ));
+    let status = Command::new(output).status().unwrap();
+    assert!(status.success(), "{status}");
+}
+#[test]
+fn variadic_is_part_of_an_external_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, source) in [
+        ("lib/a.fern", "pub extern fn printf(f:*u8,...)->i32;"),
+        (
+            "app/main.fern",
+            "use lib;extern fn printf(f:*u8)->i32;fn main()->void {lib::printf(\"\");}",
+        ),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, source).unwrap();
+    }
+    let error = fern::compile(&dir.path().join("app"), &dir.path().join("output"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("inconsistent declarations"), "{error}");
 }
 #[test]
 fn c_abi_structs() {

@@ -42,6 +42,9 @@ pub(crate) struct Function {
     pub name: Spur,
     pub name_span: Range<usize>,
     pub parameters: Vec<TypedName>,
+    /// Whether the parameter list ends in `...`, which only an external
+    /// function declares.
+    pub variadic: bool,
     pub result: FunctionResult,
     pub external: bool,
     #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]

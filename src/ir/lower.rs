@@ -127,6 +127,7 @@ fn lower_function(
                 .resolve(&checked.syntax.functions[id].name)
                 .to_owned(),
         );
+        function.variadic = signature.variadic;
         return function;
     }
     bindings.returned = returned_local(checked, id, addressed);
@@ -489,6 +490,7 @@ impl FlowBuilder {
     fn finish(self, parameters: usize, result: Option<Type>) -> Function {
         Function {
             external: None,
+            variadic: false,
             parameters,
             result,
             values: self.values,

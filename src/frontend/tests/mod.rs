@@ -17,6 +17,34 @@ fn core_syntax() {
     );
 }
 #[test]
+fn variadic_parameter_lists() {
+    let syntax = parse("extern fn f(...)->void; extern fn g(x:int,...)->void;").unwrap();
+    assert!(syntax.functions.iter().all(|(_, f)| f.variadic));
+    assert_eq!(
+        syntax.functions.iter().nth(1).unwrap().1.parameters.len(),
+        1
+    );
+    assert!(
+        !parse("extern fn f(x:int)->void;")
+            .unwrap()
+            .functions
+            .iter()
+            .next()
+            .unwrap()
+            .1
+            .variadic
+    );
+    for source in [
+        "fn f(x:int,...)->void {}",
+        "extern fn f(...,x:int)->void;",
+        "extern fn f(x:int,...,)->void;",
+        "extern fn f(x:int ...)->void;",
+        "type S struct {x:int,...}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+}
+#[test]
 fn removed_syntax_is_rejected() {
     for body in [
         "var x:int;",

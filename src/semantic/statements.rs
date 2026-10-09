@@ -349,12 +349,15 @@ impl CheckedProgram<'_> {
     ) -> Result<(Idx<Function>, Option<Type>), Diagnostic> {
         let function = self.resolve_call(call, scopes)?;
         let signature = self.functions[function].clone();
-        if call.arguments.len() != signature.parameters.len() {
+        if call.arguments.len() < signature.parameters.len()
+            || (!signature.variadic && call.arguments.len() > signature.parameters.len())
+        {
             return Err(Diagnostic::new(
                 call.target.span.clone(),
                 format!(
-                    "function `{}` expects {} argument{}, found {}",
+                    "function `{}` expects {}{} argument{}, found {}",
                     self.syntax.names.resolve(&call.target.name),
+                    if signature.variadic { "at least " } else { "" },
                     signature.parameters.len(),
                     if signature.parameters.len() == 1 {
                         ""
@@ -368,6 +371,21 @@ impl CheckedProgram<'_> {
         for (&argument, &parameter) in call.arguments.iter().zip(&signature.parameters) {
             let expression =
                 self.check_expression(argument, scopes, Some(self.bindings[parameter].ty.clone()))?;
+            self.expressions.insert(argument, expression);
+        }
+        // An extra argument has no parameter to give it a type.
+        for &argument in &call.arguments[signature.parameters.len()..] {
+            let expression = self.check_expression(argument, scopes, None)?;
+            if !expression.ty.passes_as_variadic_argument() {
+                return Err(Diagnostic::new(
+                    self.syntax.expressions[argument].span.clone(),
+                    if expression.ty == Scalar::F32.into() {
+                        "an f32 variadic argument must be converted to f64"
+                    } else {
+                        "variadic arguments accept only numeric and pointer types"
+                    },
+                ));
+            }
             self.expressions.insert(argument, expression);
         }
         if value_context && signature.result.is_none() {

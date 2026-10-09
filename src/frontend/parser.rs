@@ -363,7 +363,7 @@ impl Parser<'_> {
         }
         let start = self.expect(Token::Fn, "expected `fn`")?.start;
         let (name, name_span) = self.name("expected a function name")?;
-        let parameters = self.parameters()?;
+        let (parameters, variadic) = self.parameters(external)?;
         self.expect(Token::Arrow, "expected `->`")?;
         let result = if self.current == Some(Token::Void) {
             self.advance()?;
@@ -384,6 +384,7 @@ impl Parser<'_> {
             name,
             name_span,
             parameters,
+            variadic,
             result,
             external,
             span: start..end,
@@ -391,20 +392,38 @@ impl Parser<'_> {
         }))
     }
 
-    fn parameters(&mut self) -> Result<Vec<TypedName>, Diagnostic> {
+    /// Parses a parenthesized parameter list and whether it ends in `...`,
+    /// which only an external function may declare.
+    fn parameters(&mut self, external: bool) -> Result<(Vec<TypedName>, bool), Diagnostic> {
         self.expect(Token::LeftParen, "expected `(`")?;
-        let parameters = if self.current == Some(Token::RightParen) {
-            Vec::new()
-        } else {
-            self.typed_names("parameter", Token::RightParen)?
+        let (parameters, ellipsis) = match self.current {
+            Some(Token::RightParen) => (Vec::new(), None),
+            Some(Token::Ellipsis) => {
+                let span = self.expect(Token::Ellipsis, "expected `...`")?;
+                (Vec::new(), Some(span))
+            }
+            _ => self.typed_names("parameter", Token::RightParen, true)?,
         };
+        if let Some(span) = ellipsis.clone().filter(|_| !external) {
+            return Err(Diagnostic::new(
+                span,
+                "only external functions can be variadic",
+            ));
+        }
         self.expect(Token::RightParen, "expected `)` after parameter list")?;
-        Ok(parameters)
+        Ok((parameters, ellipsis.is_some()))
     }
 
     /// Parses a comma-separated `name: T` list up to `close`, which a trailing
     /// comma may precede. Parameter lists and struct field lists share it.
-    fn typed_names(&mut self, noun: &str, close: Token) -> Result<Vec<TypedName>, Diagnostic> {
+    /// When `ellipsis` allows it, a `...` after a comma ends the list instead,
+    /// and its span is returned.
+    fn typed_names(
+        &mut self,
+        noun: &str,
+        close: Token,
+        ellipsis: bool,
+    ) -> Result<(Vec<TypedName>, Option<Range<usize>>), Diagnostic> {
         let mut names = Vec::new();
         loop {
             let (name, name_span) = self.name(&format!("expected a {noun} name"))?;
@@ -419,11 +438,15 @@ impl Parser<'_> {
                 break;
             }
             self.advance()?;
+            if ellipsis && self.current == Some(Token::Ellipsis) {
+                let span = self.expect(Token::Ellipsis, "expected `...`")?;
+                return Ok((names, Some(span)));
+            }
             if self.current == Some(close) {
                 break;
             }
         }
-        Ok(names)
+        Ok((names, None))
     }
 
     /// Parses `type Name struct { field: T, }`, which has at least one field
@@ -439,7 +462,7 @@ impl Parser<'_> {
         if self.current == Some(Token::RightBrace) {
             return Err(self.error("expected a field declaration"));
         }
-        let fields = self.typed_names("field", Token::RightBrace)?;
+        let (fields, _) = self.typed_names("field", Token::RightBrace, false)?;
         let end = self
             .expect(Token::RightBrace, "expected `}` after struct fields")?
             .end;

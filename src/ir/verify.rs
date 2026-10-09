@@ -403,6 +403,11 @@ impl Program {
             }
             return Ok(());
         }
+        if function.variadic {
+            return Err(CompileError::new(
+                "internal compiler error: IR function with a body is variadic",
+            ));
+        }
         let flow = &function.flow;
         verify_target(flow.entry, flow)?;
         let definitions = value_definitions(function)?;
@@ -548,7 +553,9 @@ impl Program {
         operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     ) -> Result<(), CompileError> {
         let target = self.function(callee)?;
-        if arguments.len() != target.parameters {
+        if arguments.len() < target.parameters
+            || (!target.variadic && arguments.len() > target.parameters)
+        {
             return Err(CompileError::new(format!(
                 "internal compiler error: IR call passes {} arguments to function {} taking {}",
                 arguments.len(),
@@ -556,7 +563,15 @@ impl Program {
                 target.parameters
             )));
         }
-        for (index, argument) in arguments.iter().enumerate() {
+        for (index, argument) in arguments.iter().enumerate().skip(target.parameters) {
+            let source = operand_type(argument.clone())?;
+            if !source.passes_as_variadic_argument() {
+                return Err(CompileError::new(format!(
+                    "internal compiler error: IR call passes a `{source}` variadic argument {index}"
+                )));
+            }
+        }
+        for (index, argument) in arguments.iter().enumerate().take(target.parameters) {
             let source = operand_type(argument.clone())?;
             let parameter = &target.flow.locals[index];
             if !fits(&source, parameter) {

@@ -38,6 +38,12 @@ fn external_structs_use_qbe_aggregate_types() {
     assert!(inner < outer);
     assert!(qbe.contains("=:fern.struct1 call $f(:fern.struct0 "));
 }
+#[test]
+fn variadic_calls_mark_their_extra_arguments() {
+    let qbe = emitted("extern fn f(x:i32,...)->void;fn main()->void {var b:i8=1;f(1,b,2.5);f(2);}");
+    assert!(qbe.contains("call $f(w 1, ..., sb %"));
+    assert!(qbe.contains("call $f(w 2, ...)"));
+}
 
 #[test]
 fn core_qbe_snapshot() {

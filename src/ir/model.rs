@@ -235,6 +235,9 @@ pub(crate) struct Global {
 pub(crate) struct Function {
     /// A C ABI symbol with no Fern body.
     pub external: Option<String>,
+    /// Whether calls pass extra arguments after the parameters, which only an
+    /// external function takes.
+    pub variadic: bool,
     /// The first `parameters` entries of `flow.locals` are the parameters, in
     /// source order, and hold their arguments on entry.
     pub parameters: usize,

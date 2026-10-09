@@ -96,7 +96,7 @@
   that take or return small structs by value. Specify which field types a
   struct may contain to cross the interface.
 
-- [ ] Call variadic external functions
+- [x] Call variadic external functions
 
   Let an external declaration end its parameter list with a variadic marker,
   and pass extra arguments at the call with the host C ABI's variadic

@@ -186,6 +186,8 @@ pub(super) struct CheckedBinaryOperand {
 #[derive(Debug, Clone)]
 pub(crate) struct FunctionSignature {
     pub parameters: Vec<Idx<Binding>>,
+    /// Whether calls pass extra arguments after the parameters.
+    pub variadic: bool,
     pub result: Option<Type>,
 }
 

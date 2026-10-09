@@ -91,6 +91,25 @@ fn external_signatures_and_returns() {
     ))
     .unwrap();
     check_root(&syntax).unwrap();
+    for call in [
+        "f();",
+        "f(1,f32(1.0));",
+        "f(1,true);",
+        "f(1,null);",
+        "f(1,[1,2]);",
+        "f(1,S {x=1});",
+    ] {
+        let source = format!(
+            "type S struct {{x:int}} extern fn f(x:i32,...)->void;fn main()->void {{{call}}}"
+        );
+        let syntax = parser::parse(&SourceMap::from_text(&source)).unwrap();
+        assert!(check_root(&syntax).is_err(), "{call}");
+    }
+    let syntax = parser::parse(&SourceMap::from_text(
+        "extern fn f(x:i32,...)->void;fn main()->void {var x=1;f(1);f(1,2,2.5,\"s\",u8(3),&x);}",
+    ))
+    .unwrap();
+    check_root(&syntax).unwrap();
     let syntax = parser::parse(&SourceMap::from_text(
         "type N struct {x:f32} type S struct {x:f32,a:[3]u8,p:*S,n:[2]N}
          extern fn foo(s:S)->S;fn main()->void {}",

@@ -49,6 +49,14 @@ fn rejects_invalid_control_flow_and_types() {
     program("type S struct {x:i32} extern fn f(s:S)->S;fn main()->void {}")
         .verify()
         .unwrap();
+    let source = "extern fn f(x:i32,...)->void;fn main()->void {f(1,2.5);}";
+    program(source).verify().unwrap();
+    let mut p = program(source);
+    p.functions[0].variadic = false;
+    assert!(p.verify().is_err());
+    let mut p = program(source);
+    p.functions[1].variadic = true;
+    assert!(p.verify().is_err());
     let mut p = program("type S struct {x:i32} extern fn f(s:S)->S;fn main()->void {}");
     p.structs[0].fields[0] = Scalar::Bool.into();
     assert!(p.verify().is_err());

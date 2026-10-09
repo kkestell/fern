@@ -588,6 +588,7 @@ fn callee(parameters: Vec<Scalar>, result: Option<Scalar>) -> Function {
 fn call(result: Option<ValueId>, function: usize, arguments: Vec<Operand>) -> Instruction {
     Instruction::Call {
         result,
+        destination: None,
         function: FunctionId(function),
         arguments,
         span: 0..1,
@@ -1795,5 +1796,125 @@ fn verification_rejects_borrowing_or_addressing_result_storage() {
         );
         let error = program.verify().unwrap_err();
         assert!(error.to_string().contains("invalid IR value"), "{error}");
+    }
+}
+
+#[test]
+fn verification_checks_call_destinations() {
+    let pair = || array(2, Type::Scalar(Scalar::Int));
+    // `callee` returns `[2]int`; `main` holds a `[2]int` local and an `int`
+    // local, a `[2]int` global, and a `[2]int` constant.
+    let program = |instruction: Instruction, values: Vec<Value>| {
+        let mut program = two_functions(
+            Function {
+                parameters: 0,
+                result: Some(pair()),
+                values: vec![],
+                constants: vec![Global {
+                    ty: pair(),
+                    values: None,
+                }],
+                flow: ControlFlow {
+                    entry: BlockId(0),
+                    locals: vec![],
+                    blocks: vec![Block {
+                        instructions: vec![],
+                        terminator: Terminator::Return {
+                            value: Some(Operand::Value(ValueId(0))),
+                        },
+                    }],
+                },
+            },
+            values,
+            vec![instruction],
+        );
+        let callee = &mut program.functions[1];
+        callee.values.push(Value {
+            span: None,
+            ty: pair(),
+            kind: ValueKind::Load(Place::Constant(ConstantId(0))),
+        });
+        callee.flow.blocks[0]
+            .instructions
+            .push(Instruction::Value(ValueId(0)));
+        let main = &mut program.functions[0];
+        main.flow.locals = vec![pair(), Type::Scalar(Scalar::Int)];
+        main.constants.push(Global {
+            ty: pair(),
+            values: None,
+        });
+        program.globals.push(Global {
+            ty: pair(),
+            values: None,
+        });
+        program
+    };
+    let into = |destination: Place| Instruction::Call {
+        result: None,
+        destination: Some(destination),
+        function: FunctionId(1),
+        arguments: vec![],
+        span: 0..1,
+    };
+    program(into(Place::Local(LocalId(0))), vec![])
+        .verify()
+        .unwrap();
+    // The callee returns `[2]int`, so a call inside it may write its own
+    // result storage.
+    let mut in_result = program(into(Place::Local(LocalId(0))), vec![]);
+    in_result.functions[1].flow.blocks[0]
+        .instructions
+        .insert(0, into(Place::Result));
+    in_result.verify().unwrap();
+    // A callee returning a scalar has no result to write into a destination,
+    // even one of its own type.
+    let mut scalar = two_functions(
+        callee(vec![], Some(Scalar::Int)),
+        vec![],
+        vec![into(Place::Local(LocalId(0)))],
+    );
+    scalar.functions[0].flow.locals = vec![Type::Scalar(Scalar::Int)];
+    let error = scalar.verify().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("IR call writes a `int` result into a `int` destination"),
+        "{error}"
+    );
+    let both = Instruction::Call {
+        result: Some(ValueId(0)),
+        destination: Some(Place::Local(LocalId(0))),
+        function: FunctionId(1),
+        arguments: vec![],
+        span: 0..1,
+    };
+    for (instruction, values, expected) in [
+        (
+            both,
+            vec![Value {
+                span: None,
+                ty: pair(),
+                kind: ValueKind::CallResult,
+            }],
+            "IR call both defines a result and writes a destination",
+        ),
+        (
+            into(Place::Local(LocalId(1))),
+            vec![],
+            "IR call writes a `[2]int` result into a `int` destination",
+        ),
+        (
+            into(Place::Global(GlobalId(0))),
+            vec![],
+            "IR call writes its result into `Global(GlobalId(0))`",
+        ),
+        (
+            into(Place::Constant(ConstantId(0))),
+            vec![],
+            "IR call writes its result into `Constant(ConstantId(0))`",
+        ),
+    ] {
+        let error = program(instruction, values).verify().unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
     }
 }

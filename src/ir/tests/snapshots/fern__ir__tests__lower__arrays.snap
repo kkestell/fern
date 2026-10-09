@@ -814,6 +814,7 @@ Program {
                                         7,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     0,
                                 ),
@@ -1439,6 +1440,7 @@ Program {
                                         6,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     1,
                                 ),

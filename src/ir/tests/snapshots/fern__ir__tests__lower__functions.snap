@@ -474,6 +474,7 @@ Program {
                                         5,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     2,
                                 ),
@@ -782,6 +783,7 @@ Program {
                                         0,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     0,
                                 ),
@@ -801,6 +803,7 @@ Program {
                                         1,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     0,
                                 ),
@@ -820,6 +823,7 @@ Program {
                                         2,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     1,
                                 ),
@@ -843,6 +847,7 @@ Program {
                                         3,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     2,
                                 ),
@@ -870,6 +875,7 @@ Program {
                             },
                             Call {
                                 result: None,
+                                destination: None,
                                 function: FunctionId(
                                     4,
                                 ),
@@ -894,6 +900,7 @@ Program {
                                         5,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     3,
                                 ),

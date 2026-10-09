@@ -401,3 +401,53 @@ fn native_returned_locals_keep_local_semantics() {
         Some(42)
     );
 }
+
+#[test]
+fn a_binding_initialized_from_a_call_is_written_by_the_callee() {
+    let source = "type S struct { a: int, b: int }
+fn make(x: int) -> S { return S { a = x, b = x + 1 }; }
+fn main() -> void { const b = make(20); exit(b.a + b.b); }";
+    let qbe = emit(&lowered(source), None);
+    let main = qbe
+        .split("function w $fn1(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap();
+    assert!(main.contains("call $fn0(l %local0, l 20)"), "{main}");
+    assert!(!main.contains("blit") && !main.contains("memcpy"), "{main}");
+    assert_eq!(native_program_status(source), Some(41));
+}
+
+#[test]
+fn native_bindings_initialized_from_calls_keep_their_values() {
+    assert_eq!(
+        native_program_status(
+            "type Point struct { x: int, y: int }
+             fn swap(point: Point) -> Point { return Point { x = point.y, y = point.x }; }
+             fn row(n: int) -> [3]int { return [n, n * 2, n * 3]; }
+             fn shifted(n: int) -> Point { var p = swap(Point { x = n, y = n + 1 }); p.x += 10; return p; }
+             fn depth(n: int) -> [3]int {
+                 if n == 0 { return row(1); }
+                 const below = depth(n - 1);
+                 return [below[0] + 1, below[1], below[2] + n];
+             }
+             fn main() -> void {
+                 const q = Point { x = 1, y = 2 };
+                 const s = swap(q);
+                 if s.x != 2 || s.y != 1 || q.x != 1 { exit(1); }
+                 var total = 0;
+                 for var i = 1; i <= 3; i += 1 {
+                     const r = row(i);
+                     total += r[2];
+                 }
+                 if total != 18 { exit(2); }
+                 const p = shifted(5);
+                 if p.x != 16 || p.y != 5 { exit(3); }
+                 const d = depth(3);
+                 if d[0] != 4 || d[1] != 2 || d[2] != 9 { exit(4); }
+                 exit(42);
+             }"
+        ),
+        Some(42)
+    );
+}

@@ -78,7 +78,7 @@
   local into the caller's result storage. Allocate the local in the result
   storage instead, so the `return` needs no copy.
 
-- [ ] Initialize bindings from calls without a copy
+- [x] Initialize bindings from calls without a copy
 
   `const b = make();` writes the result into the call's own storage and then
   copies it into `b`. Pass `b`'s storage as the result address instead.

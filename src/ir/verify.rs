@@ -529,10 +529,17 @@ impl Program {
             }
             Instruction::Call {
                 result,
+                destination,
                 function: callee,
                 arguments,
                 ..
-            } => self.verify_call(function, *callee, arguments, *result, &operand_type),
+            } => self.verify_call(
+                function,
+                *callee,
+                arguments,
+                (*result, destination.as_ref()),
+                &operand_type,
+            ),
             Instruction::Free { operand } => {
                 let ty = operand_type(operand.clone())?;
                 if !matches!(ty, Type::Pointer { .. }) {
@@ -589,7 +596,7 @@ impl Program {
         caller: &Function,
         callee: FunctionId,
         arguments: &[Operand],
-        result: Option<ValueId>,
+        (result, destination): (Option<ValueId>, Option<&Place>),
         operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
     ) -> Result<(), CompileError> {
         let target = self.function(callee)?;
@@ -609,6 +616,9 @@ impl Program {
                     "internal compiler error: IR call argument {index} has type `{source}`, expected `{parameter}`"
                 )));
             }
+        }
+        if let Some(destination) = destination {
+            return self.verify_call_destination(caller, target, result, destination, operand_type);
         }
         match (target.result.as_ref(), result) {
             (None, None) => {}
@@ -630,6 +640,41 @@ impl Program {
             }
         }
         Ok(())
+    }
+}
+
+impl Program {
+    /// Checks a call that writes its aggregate result straight into
+    /// `destination`. The callee may build its result there while it reads
+    /// its arguments and any global or pointer target, so the destination is
+    /// rooted in a local or the caller's own result storage, which no
+    /// argument shares.
+    fn verify_call_destination(
+        &self,
+        caller: &Function,
+        target: &Function,
+        result: Option<ValueId>,
+        destination: &Place,
+        operand_type: &impl Fn(Operand) -> Result<Type, CompileError>,
+    ) -> Result<(), CompileError> {
+        if result.is_some() {
+            return Err(CompileError::new(
+                "internal compiler error: IR call both defines a result and writes a destination",
+            ));
+        }
+        if !matches!(destination.root(), Place::Local(_) | Place::Result) {
+            return Err(CompileError::new(format!(
+                "internal compiler error: IR call writes its result into `{destination:?}`"
+            )));
+        }
+        let expected = self.destination_type(caller, destination, operand_type)?;
+        match target.result.as_ref() {
+            Some(result) if result.is_aggregate() && *result == expected => Ok(()),
+            result => Err(CompileError::new(format!(
+                "internal compiler error: IR call writes a `{}` result into a `{expected}` destination",
+                result.map_or_else(|| "void".to_owned(), ToString::to_string)
+            ))),
+        }
     }
 }
 

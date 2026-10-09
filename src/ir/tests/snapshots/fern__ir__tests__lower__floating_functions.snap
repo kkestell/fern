@@ -345,6 +345,7 @@ Program {
                                         2,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     0,
                                 ),
@@ -374,6 +375,7 @@ Program {
                                         4,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     0,
                                 ),

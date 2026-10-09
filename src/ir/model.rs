@@ -184,9 +184,12 @@ pub(crate) enum Instruction {
         operand: Operand,
     },
     /// Calls `function` with `arguments` in source order. `result` names the
-    /// defined value exactly when the callee returns one.
+    /// defined value when the callee returns one, unless `destination` names
+    /// the place the callee writes its aggregate result into, in which case
+    /// the call defines no value.
     Call {
         result: Option<ValueId>,
+        destination: Option<Place>,
         function: FunctionId,
         arguments: Vec<Operand>,
         span: std::ops::Range<usize>,

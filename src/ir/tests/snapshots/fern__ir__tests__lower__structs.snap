@@ -378,18 +378,6 @@ Program {
                     ty: Struct(
                         StructType {
                             id: StructId(
-                                1,
-                            ),
-                            name: "Cell",
-                        },
-                    ),
-                    kind: CallResult,
-                },
-                Value {
-                    span: None,
-                    ty: Struct(
-                        StructType {
-                            id: StructId(
                                 0,
                             ),
                             name: "Point",
@@ -433,12 +421,12 @@ Program {
                         operator: Equal,
                         left: Value(
                             ValueId(
-                                5,
+                                4,
                             ),
                         ),
                         right: Value(
                             ValueId(
-                                6,
+                                5,
                             ),
                         ),
                     },
@@ -491,7 +479,7 @@ Program {
                     kind: Convert {
                         operand: Value(
                             ValueId(
-                                9,
+                                8,
                             ),
                         ),
                         truncating: false,
@@ -509,12 +497,12 @@ Program {
                         form: Infix,
                         left: Value(
                             ValueId(
-                                8,
+                                7,
                             ),
                         ),
                         right: Value(
                             ValueId(
-                                10,
+                                9,
                             ),
                         ),
                     },
@@ -688,9 +676,12 @@ Program {
                                 ),
                             ),
                             Call {
-                                result: Some(
-                                    ValueId(
-                                        4,
+                                result: None,
+                                destination: Some(
+                                    Local(
+                                        LocalId(
+                                            2,
+                                        ),
                                     ),
                                 ),
                                 function: FunctionId(
@@ -705,18 +696,11 @@ Program {
                                 ],
                                 span: 518..531,
                             },
-                            Store {
-                                place: Local(
-                                    LocalId(
-                                        2,
-                                    ),
+                            Value(
+                                ValueId(
+                                    4,
                                 ),
-                                operand: Value(
-                                    ValueId(
-                                        4,
-                                    ),
-                                ),
-                            },
+                            ),
                             Value(
                                 ValueId(
                                     5,
@@ -727,16 +711,11 @@ Program {
                                     6,
                                 ),
                             ),
-                            Value(
-                                ValueId(
-                                    7,
-                                ),
-                            ),
                         ],
                         terminator: Branch {
                             condition: Value(
                                 ValueId(
-                                    7,
+                                    6,
                                 ),
                             ),
                             then_target: BlockId(
@@ -749,6 +728,11 @@ Program {
                     },
                     Block {
                         instructions: [
+                            Value(
+                                ValueId(
+                                    7,
+                                ),
+                            ),
                             Value(
                                 ValueId(
                                     8,
@@ -764,16 +748,11 @@ Program {
                                     10,
                                 ),
                             ),
-                            Value(
-                                ValueId(
-                                    11,
-                                ),
-                            ),
                         ],
                         terminator: Exit {
                             status: Value(
                                 ValueId(
-                                    11,
+                                    10,
                                 ),
                             ),
                         },

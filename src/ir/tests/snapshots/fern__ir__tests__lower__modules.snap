@@ -119,6 +119,7 @@ Program {
                                         0,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     1,
                                 ),
@@ -131,6 +132,7 @@ Program {
                                         1,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     2,
                                 ),
@@ -307,6 +309,7 @@ Program {
                                         2,
                                     ),
                                 ),
+                                destination: None,
                                 function: FunctionId(
                                     4,
                                 ),

@@ -542,10 +542,18 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
         }
         Instruction::Call {
             result,
+            destination,
             function: callee,
             arguments,
             span,
-        } => emit_call(emitter, *callee, arguments, *result, span),
+        } => emit_call(
+            emitter,
+            function,
+            *callee,
+            arguments,
+            (*result, destination.as_ref()),
+            span,
+        ),
         // `free` ignores a null pointer, which is what freeing `null` does.
         Instruction::Free { operand: pointer } => {
             writeln!(
@@ -622,27 +630,32 @@ fn emit_fill(emitter: &mut Emitter<'_>, address: &str, ty: &Type, start: u64, so
 
 fn emit_call(
     emitter: &mut Emitter<'_>,
+    function: &Function,
     callee: FunctionId,
     arguments: &[Operand],
-    result: Option<ValueId>,
+    (result, destination): (Option<ValueId>, Option<&Place>),
     span: &std::ops::Range<usize>,
 ) {
     let target = &emitter.functions[callee.0];
-    // An aggregate result is written into the storage its value owns, whose
-    // address the callee takes first.
-    let aggregate_result =
-        result.filter(|_| target.result.as_ref().is_some_and(|ty| ty.is_aggregate()));
+    // An aggregate result is written into the call's destination, or into the
+    // storage its value owns, whose address the callee takes first.
+    let result_storage = match destination {
+        Some(destination) => Some(place_address(emitter, function, destination).0),
+        None => result
+            .filter(|_| target.result.as_ref().is_some_and(|ty| ty.is_aggregate()))
+            .map(|id| {
+                if emitter.returned_in_place.contains(&id) {
+                    "%result".to_owned()
+                } else {
+                    format!("%v{}_storage", id.0)
+                }
+            }),
+    };
     // The callee's leading locals hold its parameters, so they give each
     // argument its type.
-    let storage = |id: ValueId| {
-        if emitter.returned_in_place.contains(&id) {
-            "%result".to_owned()
-        } else {
-            format!("%v{}_storage", id.0)
-        }
-    };
-    let arguments = aggregate_result
-        .map(|id| format!("l {}", storage(id)))
+    let arguments = result_storage
+        .as_ref()
+        .map(|storage| format!("l {storage}"))
         .into_iter()
         .chain(arguments.iter().enumerate().map(|(index, argument)| {
             format!(
@@ -653,8 +666,7 @@ fn emit_call(
         }))
         .collect::<Vec<_>>()
         .join(", ");
-    let result_storage = aggregate_result.map(storage);
-    let argument_count = target.parameters + usize::from(aggregate_result.is_some());
+    let argument_count = target.parameters + usize::from(result_storage.is_some());
     let message = operation_message(Some(span), emitter.diagnostics.as_ref(), "stack overflow");
     emit_stack_check(
         emitter,
@@ -664,11 +676,10 @@ fn emit_call(
         message,
     );
     let symbol = function_symbol(callee);
-    match (result, aggregate_result) {
-        (Some(ValueId(id)), Some(_)) => writeln!(
+    match (result, &result_storage) {
+        (Some(ValueId(id)), Some(storage)) => writeln!(
             emitter.text,
-            "    call ${symbol}({arguments})\n    %v{id} =l copy {}",
-            result_storage.as_ref().unwrap()
+            "    call ${symbol}({arguments})\n    %v{id} =l copy {storage}"
         ),
         (Some(ValueId(id)), None) => writeln!(
             emitter.text,

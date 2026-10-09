@@ -2178,3 +2178,56 @@ fn main() -> void {}",
     );
     assert_eq!(returned_kinds(&functions[7]), ["Load(Result)"]);
 }
+
+/// Each call of `function` spelled by where its result goes: `value` for a
+/// result value, `into <place>` for a destination, and `none` for a call
+/// whose callee returns nothing.
+fn call_results(function: &Function) -> Vec<String> {
+    instructions(function)
+        .filter_map(|instruction| match instruction {
+            Instruction::Call {
+                result,
+                destination,
+                ..
+            } => Some(match (result, destination) {
+                (_, Some(place)) => format!("into {}", describe(place)),
+                (Some(_), None) => "value".to_owned(),
+                (None, None) => "none".to_owned(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_binding_initialized_from_a_call_receives_the_result_directly() {
+    let program = lowered(
+        "type S struct { a: int, b: int }
+fn make(x: int) -> S { return S { a = x, b = x + 1 }; }
+fn direct() -> int { const b = make(1); var c = (make(2)); return b.a + c.b; }
+fn returned() -> S { var r = make(3); r.a += 1; return r; }
+fn kept() -> int {
+    var r = make(4);
+    const p = &r;
+    var s = 5;
+    const t = [s, s];
+    return p.a + count() + t[0];
+}
+fn count() -> int { return 1; }
+fn main() -> void {}",
+    );
+    let functions = &program.program().functions;
+    assert_eq!(call_results(&functions[1]), ["into local0", "into local1"]);
+    assert!(
+        !functions[1]
+            .values
+            .iter()
+            .any(|value| value.kind == ValueKind::CallResult)
+    );
+    assert_eq!(stored_places(&functions[1]), Vec::<String>::new());
+    assert_eq!(call_results(&functions[2]), ["into result"]);
+    // An addressed binding still copies the call's own result in, and a
+    // scalar call still defines a value.
+    assert_eq!(call_results(&functions[3]), ["value", "value"]);
+    assert_eq!(stored_places(&functions[3])[0], "local0");
+}

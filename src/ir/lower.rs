@@ -517,9 +517,12 @@ impl FlowBuilder {
         function: FunctionId,
         arguments: Vec<Operand>,
         result: Option<Type>,
+        destination: Option<Place>,
         span: std::ops::Range<usize>,
     ) -> Option<Operand> {
-        let result = result.map(|ty| {
+        // A call with a destination writes its result there and defines no
+        // value.
+        let result = result.filter(|_| destination.is_none()).map(|ty| {
             let id = ValueId(self.values.len());
             self.values.push(Value {
                 span: None,
@@ -532,6 +535,7 @@ impl FlowBuilder {
             .instructions
             .push(Instruction::Call {
                 result,
+                destination,
                 function,
                 arguments,
                 span,
@@ -598,6 +602,18 @@ fn lower_flow_binding(
         bindings.insert(binding, place);
         return;
     };
+    // A binding is not in scope in its own initializer and no pointer reaches
+    // an unaddressed one, so a call can write its result straight into the
+    // binding's storage without any argument seeing the write.
+    if ty.is_aggregate()
+        && !bindings.addressed.contains(&binding)
+        && let Some(call) = unwrapped_call(checked, *initializer)
+    {
+        let place = binding_place(binding, &ty, bindings, builder);
+        lower_call_into(checked, call, place.clone(), bindings, builder);
+        bindings.insert(binding, place);
+        return;
+    }
     let operand = lower_flow_operand(checked, *initializer, bindings, builder);
     let place = binding_place(binding, &ty, bindings, builder);
     builder.store(place.clone(), operand);
@@ -869,22 +885,58 @@ fn lower_call(
     bindings: &Places<'_>,
     builder: &mut FlowBuilder,
 ) -> Option<Operand> {
+    let arguments = lower_arguments(checked, arguments, bindings, builder);
+    builder.call(
+        function_id(function),
+        arguments,
+        checked.functions[function].result.clone(),
+        None,
+        span,
+    )
+}
+
+/// Lowers the call `id`, whose callee writes its aggregate result straight
+/// into `destination` rather than into storage the call owns.
+fn lower_call_into(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    destination: Place,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) {
+    let ExpressionValue::Call { function } = &checked.expressions[id].value else {
+        unreachable!("a call expression is lowered from its own value")
+    };
+    let ExpressionKind::Call(call) = &checked.syntax.expressions[id].kind else {
+        unreachable!("a checked call expression is a call")
+    };
+    let arguments = lower_arguments(checked, &call.arguments, bindings, builder);
+    builder.call(
+        function_id(*function),
+        arguments,
+        checked.functions[*function].result.clone(),
+        Some(destination),
+        checked.syntax.expressions[id].span.clone(),
+    );
+}
+
+/// Lowers arguments left to right, holding each so a later argument that
+/// splits blocks cannot leave an earlier one unreadable in the call's block.
+fn lower_arguments(
+    checked: &CheckedProgram<'_>,
+    arguments: &[Idx<Expression>],
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) -> Vec<Operand> {
     let mut held = Vec::with_capacity(arguments.len());
     for &argument in arguments {
         let ty = checked.expressions[argument].ty.clone();
         let operand = lower_argument(checked, argument, bindings, builder);
         held.push(hold_operand(builder, operand, ty));
     }
-    let arguments = held
-        .iter_mut()
+    held.iter_mut()
         .map(|operand| operand.read(builder))
-        .collect();
-    builder.call(
-        function_id(function),
-        arguments,
-        checked.functions[function].result.clone(),
-        span,
-    )
+        .collect()
 }
 
 /// An argument's operand. An aggregate whose place `Places::borrowable`

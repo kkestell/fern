@@ -1147,8 +1147,25 @@ fn lower_length(
     let Type::Array { length, .. } = &checked.expressions[operand].ty else {
         unreachable!("checking requires an array operand for `len`")
     };
-    lower_flow_operand(checked, operand, bindings, builder);
+    lower_aggregate_effects(checked, operand, bindings, builder);
     integer(i128::from(*length), Scalar::Int)
+}
+
+/// Lowers the evaluation an aggregate operand owes without loading its value,
+/// as `len` needs.
+fn lower_aggregate_effects(
+    checked: &CheckedProgram<'_>,
+    id: Idx<Expression>,
+    bindings: &Places<'_>,
+    builder: &mut FlowBuilder,
+) {
+    if checked.expressions[id].constant.is_some() {
+        lower_folded_effects(checked, id, bindings, builder);
+    } else if let Some(call) = unwrapped_call(checked, id) {
+        lower_call_expression(checked, call, bindings, builder);
+    } else {
+        lower_aggregate_place(checked, id, bindings, builder);
+    }
 }
 
 /// Lowers the evaluation a folded expression still owes. `len` reads its
@@ -1164,7 +1181,7 @@ fn lower_folded_effects(
     let mut operands = Vec::new();
     match &checked.expressions[id].value {
         ExpressionValue::Length { operand } => {
-            lower_flow_operand(checked, *operand, bindings, builder);
+            lower_aggregate_effects(checked, *operand, bindings, builder);
             return;
         }
         ExpressionValue::Grouping { expression } => operands.push(*expression),

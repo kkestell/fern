@@ -286,3 +286,25 @@ fn examples_execute() {
         }
     }
 }
+#[test]
+fn len_of_an_array_larger_than_the_stack_executes() {
+    run(r#"extern fn malloc(bytes:uint)->*u8;
+fn main()->void {
+    var raw = malloc(sizeof([1200000]i64));
+    if raw == null { exit(2); }
+    var big = *[1200000]i64(raw);
+    if len(*big) != 1200000 { exit(1); }
+}"#);
+}
+#[test]
+fn len_runs_the_effects_of_its_operand() {
+    run(r#"var calls=0;
+var grid:[2][3]i64=[[1,2,3],[4,5,6]];
+fn make()->[5]i64 {calls+=1;return [1,2,3,4,5];}
+fn one()->int {calls+=1;return 1;}
+fn at()->*[3]i64 {calls+=1;return &grid[0];}
+fn main()->void {
+ if len(make())!=5 || len(grid[one()])!=3 || len(*(at()))!=3 {exit(1);}
+ if calls!=3 {exit(2);}
+}"#);
+}

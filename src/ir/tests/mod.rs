@@ -58,3 +58,13 @@ fn rejects_values_used_before_definition() {
     );
     assert!(p.verify().is_err());
 }
+#[test]
+fn len_does_not_load_its_operand() {
+    let p = program(
+        "fn count(a:[4]i64)->void {var p=&a;var n=len(*p);var m=len(a);}fn main()->void {}",
+    );
+    assert!(!p.functions.iter().flat_map(|f| &f.values).any(|v| {
+        matches!(v.kind, ValueKind::Load(_)) && matches!(v.ty, crate::types::Type::Array { .. })
+    }));
+    p.verify().unwrap();
+}

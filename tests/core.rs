@@ -206,10 +206,34 @@ fn inconsistent_external_signatures_across_modules() {
         .to_string();
     assert!(error.contains("inconsistent declarations"), "{error}");
 }
-#[cfg(unix)]
+fn compile_c(source: &Path, object: &Path) {
+    assert!(
+        Command::new("cc")
+            .arg("-c")
+            .arg(source)
+            .arg("-o")
+            .arg(object)
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+fn fern_cli(input: &Path, output: &Path, links: &[&std::ffi::OsStr]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fern"));
+    command.arg(input).arg("-o").arg(output).args(links);
+    command
+}
+fn succeeds(command: &mut Command) -> std::process::Output {
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    result
+}
 #[test]
 fn c_abi_small_integers_and_struct_memory() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let c = dir.path().join("helper.c");
     let object = dir.path().join("helper.o");
@@ -229,20 +253,7 @@ fn c_abi_small_integers_and_struct_memory() {
  }"#,
     )
     .unwrap();
-    assert!(
-        Command::new("cc")
-            .arg("-c")
-            .arg(&c)
-            .arg("-o")
-            .arg(&object)
-            .status()
-            .unwrap()
-            .success()
-    );
-    let wrapper = dir.path().join("cc-wrapper");
-    let quoted = object.to_string_lossy().replace('\'', "'\\''");
-    fs::write(&wrapper, format!("#!/bin/sh\nexec cc \"$@\" '{quoted}'\n")).unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    compile_c(&c, &object);
     let input = dir.path().join("main.fern");
     let output = dir.path().join("program");
     fs::write(&input,format!(r#"{EXIT}
@@ -256,19 +267,103 @@ fn c_abi_small_integers_and_struct_memory() {
  var r=Record {{tag=255,count=-123,value=1.25,other=2.5}};
  if sizeof(Record)!=record_size() || check_record(&r)!=0 || r.tag!=7 || r.count!=-321 || r.value!=3.75 {{exit(2);}}
  }}"#)).unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_fern"))
-        .arg(&input)
-        .arg("-o")
-        .arg(&output)
-        .env("CC", &wrapper)
-        .output()
-        .unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    succeeds(&mut fern_cli(
+        &input,
+        &output,
+        &["--link".as_ref(), object.as_os_str()],
+    ));
     assert!(Command::new(output).status().unwrap().success());
+}
+#[cfg(unix)]
+#[test]
+fn named_static_libraries_link_in_command_line_order() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (helper, scale) = (dir.path().join("helper.c"), dir.path().join("scale.c"));
+    fs::write(
+        &helper,
+        "int scale(int); int helper(int x){return scale(x)+2;}",
+    )
+    .unwrap();
+    fs::write(&scale, "int scale(int x){return x*10;}").unwrap();
+    let (helper_object, scale_object) = (dir.path().join("helper.o"), dir.path().join("scale.o"));
+    compile_c(&helper, &helper_object);
+    compile_c(&scale, &scale_object);
+    let archive = dir.path().join("libhelper.a");
+    assert!(
+        Command::new("ar")
+            .arg("rcs")
+            .arg(&archive)
+            .arg(&helper_object)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let log = dir.path().join("cc-arguments");
+    let wrapper = dir.path().join("cc-wrapper");
+    let quoted = log.to_string_lossy().replace('\'', "'\\''");
+    fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{quoted}'\nexec cc \"$@\"\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let input = dir.path().join("main.fern");
+    let output = dir.path().join("program");
+    fs::write(
+        &input,
+        format!("{EXIT}\nextern fn helper(x:i32)->i32;\nfn main()->void {{if helper(4)!=42 {{exit(1);}}}}"),
+    )
+    .unwrap();
+    let links = [
+        "-L".as_ref(),
+        dir.path().as_os_str(),
+        "-l".as_ref(),
+        "helper".as_ref(),
+        "--link".as_ref(),
+        scale_object.as_os_str(),
+    ];
+    succeeds(fern_cli(&input, &output, &links).env("CC", &wrapper));
+    assert!(Command::new(&output).status().unwrap().success());
+    let arguments = fs::read_to_string(&log).unwrap();
+    let arguments: Vec<_> = arguments.lines().collect();
+    assert!(arguments[0].ends_with("program.s"), "{arguments:?}");
+    let (search, scale) = (dir.path().to_str().unwrap(), scale_object.to_str().unwrap());
+    assert_eq!(arguments[1..6], ["-L", search, "-l", "helper", scale]);
+    assert_eq!(arguments[6], "-o");
+}
+#[test]
+fn system_libraries_link_by_name() {
+    // FE_TONEAREST is 0 on every supported host; FE_UPWARD differs by architecture.
+    let upward = if cfg!(target_arch = "aarch64") {
+        0x0040_0000
+    } else {
+        0x0800
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.fern");
+    let output = dir.path().join("program");
+    fs::write(
+        &input,
+        format!(
+            r#"{EXIT}
+extern fn fegetround()->i32;extern fn fesetround(mode:i32)->i32;extern fn puts(text:*u8)->i32;
+fn main()->void {{
+if fegetround()!=0 {{exit(1);}}
+if fesetround({upward})!=0 || fegetround()!={upward} {{exit(2);}}
+if fesetround(0)!=0 || fegetround()!=0 {{exit(3);}}
+if puts("rounding restored")<0 {{exit(4);}}
+}}"#
+        ),
+    )
+    .unwrap();
+    succeeds(&mut fern_cli(
+        &input,
+        &output,
+        &["-l".as_ref(), "m".as_ref()],
+    ));
+    let result = succeeds(&mut Command::new(&output));
+    assert_eq!(result.stdout, b"rounding restored\n");
 }
 #[test]
 fn examples_execute() {

@@ -131,6 +131,13 @@ fn malformed_cli_arguments_fail() {
         vec!["-x", "-o", "out"],
         vec!["input", "-o", ""],
         vec!["input", "-o", "-o"],
+        vec!["input", "-o", "out", "--link"],
+        vec!["input", "-o", "out", "-L"],
+        vec!["input", "-o", "out", "-l"],
+        vec!["input", "-o", "out", "-l", ""],
+        vec!["input", "-o", "out", "--link", "-l", "m"],
+        vec!["input", "-o", "out", "--library", "m"],
+        vec!["input", "-o", "out", "-lm"],
     ] {
         failure(
             Command::new(env!("CARGO_BIN_EXE_fern"))
@@ -220,6 +227,21 @@ fn failing_tools_report_stderr_and_preserve_output() {
             );
         }
     }
+}
+
+#[test]
+fn a_missing_named_library_preserves_output_and_removes_intermediates() {
+    let (dir, input, output) = fixture(INTEGER);
+    fs::write(&output, "keep me").unwrap();
+    failure(
+        cli(&input, &output)
+            .args(["-l", "fern-missing-library"])
+            .output()
+            .unwrap(),
+        "fern-missing-library",
+    );
+    assert_eq!(fs::read_to_string(&output).unwrap(), "keep me");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
 }
 
 #[test]

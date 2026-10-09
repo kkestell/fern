@@ -9,7 +9,11 @@ mod semantic;
 mod source;
 mod types;
 
-use std::{fmt, fs, path::Path};
+use std::{
+    ffi::OsString,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
 
 /// A source diagnostic or a file, compiler, or native tool failure.
 #[derive(Debug)]
@@ -31,6 +35,17 @@ impl fmt::Display for CompileError {
 }
 impl std::error::Error for CompileError {}
 
+/// An input the C toolchain links after Fern's generated code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkInput {
+    /// An object file or static archive.
+    File(PathBuf),
+    /// A directory searched for named libraries, passed as `-L`.
+    SearchPath(PathBuf),
+    /// A named library, passed as `-l`.
+    Library(OsString),
+}
+
 /// Compile a Fern root module to a native executable, replacing `output` on success.
 ///
 /// `root` is either a directory whose `.fern` files form one module or a single
@@ -44,6 +59,20 @@ impl std::error::Error for CompileError {}
 /// dependency cycle, an output aliasing a source file, file failures, or
 /// failed native tools. Compilation failures preserve an existing output.
 pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
+    compile_with_links(root, output, &[])
+}
+
+/// Compile like [`compile`], passing `links` to the C toolchain in order after
+/// Fern's generated code.
+///
+/// # Errors
+/// Returns the errors of [`compile`]; the C toolchain reports missing or
+/// unusable link inputs.
+pub fn compile_with_links(
+    root: &Path,
+    output: &Path,
+    links: &[LinkInput],
+) -> Result<(), CompileError> {
     let roots = module::search_roots(root)?;
     let program = module::load(root, &roots).map_err(module::LoadError::into_compile_error)?;
     let (sources, syntax) = (program.sources, program.syntax);
@@ -51,7 +80,7 @@ pub fn compile(root: &Path, output: &Path) -> Result<(), CompileError> {
     let checked = semantic::namespaces::check(&syntax, &program.modules, &program.files)
         .map_err(|e| CompileError::new(e.render(&sources)))?;
     let entry = ir::lower::lower(checked).verify()?;
-    backend::toolchain::build(&entry, output)
+    backend::toolchain::build(&entry, output, links)
 }
 
 fn reject_input_output_alias(

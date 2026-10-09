@@ -32,11 +32,13 @@ target/literals
 echo $?
 ```
 
-The CLI is `fern <root> -o <output>`. The root module argument is either a
-directory, whose `.fern` files together form one module, or a single `.fern`
-file forming a one-file module. Files in nested directories are not part of the
-module, and a directory holding no `.fern` file is rejected. The output
-directory must already exist. Prefix filenames beginning with `-` with `./`.
+The CLI is
+`fern <root> -o <output> [--link <file> | -L <directory> | -l <name>]...`. The
+root module argument is either a directory, whose `.fern` files together form
+one module, or a single `.fern` file forming a one-file module. Files in nested
+directories are not part of the module, and a directory holding no `.fern` file
+is rejected. The output directory must already exist. Prefix filenames beginning
+with `-` with `./`.
 
 Imports resolve against an ordered list of module search roots. The default
 list is one root: the root module directory's parent. `FERNPATH` replaces that
@@ -60,8 +62,17 @@ only after QBE and the C toolchain succeed. A failed compilation preserves an
 existing output, and an output aliasing a source file is rejected.
 
 The compiler uses QBE to emit host assembly, then links it with `cc` and the
-host's default C libraries. There is no language runtime or additional library
-selection interface.
+host's default C libraries. There is no language runtime. Link options add
+inputs to that `cc` command after the generated assembly, in the order written:
+`--link` names an object file or static archive, `-L` adds a library search
+directory, and `-l` names a library. `cc` reports missing or unusable inputs.
+Declare the functions they define with `extern fn`:
+
+```sh
+cc -c helper.c -o helper.o
+fern main.fern -o program --link helper.o
+fern main.fern -o program -L lib -l helper -l m
+```
 
 Compilation limits are 128 levels of recursive source nesting, 128 levels of
 inline struct containment, 4,096 digits in an integer literal, and 1 PiB per
@@ -70,5 +81,6 @@ aggregate layout. Diagnostics excerpt source lines longer than 240 bytes.
 ## Development
 
 See [AGENTS.md](AGENTS.md#development-commands) for development commands. Native
-integration tests require real QBE and C tools and fail if they are unavailable.
+integration tests require real QBE and C tools, including the `ar` archiver,
+and fail if they are unavailable.
 Run tests as an ordinary user so filesystem permission tests are meaningful.

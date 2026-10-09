@@ -1,13 +1,21 @@
 //! Temporary-file and native-tool orchestration.
 
-use crate::{CompileError, ir::verify::VerifiedProgram};
+use crate::{CompileError, LinkInput, ir::verify::VerifiedProgram};
 use std::{env, fs, path::Path, process::Command};
 
-pub(crate) fn build(program: &VerifiedProgram, output: &Path) -> Result<(), CompileError> {
-    build_text(&super::emitter::emit(program), output)
+pub(crate) fn build(
+    program: &VerifiedProgram,
+    output: &Path,
+    links: &[LinkInput],
+) -> Result<(), CompileError> {
+    build_text(&super::emitter::emit(program), output, links)
 }
 
-pub(super) fn build_text(text: &str, output: &Path) -> Result<(), CompileError> {
+pub(super) fn build_text(
+    text: &str,
+    output: &Path,
+    links: &[LinkInput],
+) -> Result<(), CompileError> {
     let parent = output
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -32,12 +40,16 @@ pub(super) fn build_text(text: &str, output: &Path) -> Result<(), CompileError> 
             .arg(&assembly)
             .arg(&qbe),
     )?;
-    run(
-        Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()))
-            .arg(&assembly)
-            .arg("-o")
-            .arg(&executable),
-    )?;
+    let mut cc = Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()));
+    cc.arg(&assembly);
+    for link in links {
+        match link {
+            LinkInput::File(path) => cc.arg(path),
+            LinkInput::SearchPath(directory) => cc.arg("-L").arg(directory),
+            LinkInput::Library(name) => cc.arg("-l").arg(name),
+        };
+    }
+    run(cc.arg("-o").arg(&executable))?;
     fs::rename(&executable, output)
         .map_err(|error| CompileError::new(format!("cannot publish {}: {error}", output.display())))
 }

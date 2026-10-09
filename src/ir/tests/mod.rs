@@ -3,7 +3,7 @@ use crate::{
     ir::{lower::lower, model::*},
     semantic::namespaces,
     source::SourceMap,
-    types::Scalar,
+    types::{Scalar, StringId},
 };
 fn program(source: &str) -> Program {
     let syntax = parser::parse(&SourceMap::from_text(source)).unwrap();
@@ -66,5 +66,17 @@ fn len_does_not_load_its_operand() {
     assert!(!p.functions.iter().flat_map(|f| &f.values).any(|v| {
         matches!(v.kind, ValueKind::Load(_)) && matches!(v.ty, crate::types::Type::Array { .. })
     }));
+    p.verify().unwrap();
+}
+#[test]
+fn equal_string_literals_share_one_entry() {
+    let p = program(
+        "extern fn puts(s:*u8)->i32;var m:*u8=\"hi\";fn f()->void {puts(\"hi\");} fn main()->void {f();puts(\"hi\");}",
+    );
+    assert_eq!(p.strings, [b"hi".to_vec()]);
+    assert_eq!(
+        p.globals[0].values,
+        Some(vec![Literal::String(StringId(0))])
+    );
     p.verify().unwrap();
 }

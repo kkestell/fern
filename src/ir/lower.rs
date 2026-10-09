@@ -83,6 +83,7 @@ pub(crate) fn lower(checked: CheckedProgram<'_>) -> Program {
     Program {
         structs,
         globals,
+        strings: checked.strings,
         functions,
         main: function_id(checked.main),
     }
@@ -311,6 +312,7 @@ fn literal(constant: &Constant, ty: &Type) -> Literal {
         },
         Constant::Float(value) => Literal::Floating(*value),
         Constant::Null => Literal::Null(ty.clone()),
+        Constant::String(id) => Literal::String(*id),
         Constant::Array(_) | Constant::Struct(_) => {
             unreachable!("an aggregate constant is not a scalar")
         }
@@ -332,6 +334,7 @@ fn static_values(
             Literal::Integer { value, .. } => *value != 0,
             Literal::Floating(value) => value.bits() != 0,
             Literal::Null(_) => false,
+            Literal::String(_) => true,
         })
         .then_some(values)
 }
@@ -1205,6 +1208,7 @@ fn lower_folded_effects(
         | ExpressionValue::Floating
         | ExpressionValue::Boolean
         | ExpressionValue::Null
+        | ExpressionValue::String
         | ExpressionValue::Reference(_)
         | ExpressionValue::Call { .. }
         | ExpressionValue::Index { .. }
@@ -1271,7 +1275,8 @@ fn lower_flow_operand(
         | ExpressionValue::CompoundAssignmentTarget
         | ExpressionValue::Floating
         | ExpressionValue::Boolean
-        | ExpressionValue::Null => {
+        | ExpressionValue::Null
+        | ExpressionValue::String => {
             unreachable!("literal expressions are constant")
         }
         ExpressionValue::Array { .. } => unreachable!("an array literal has an array type"),

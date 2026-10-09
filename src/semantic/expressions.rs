@@ -3,7 +3,9 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{Expression, ExpressionKind, Syntax, TypeAnnotation},
-    types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
+    types::{
+        BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, StringId, Type, UnaryOperator,
+    },
 };
 use la_arena::Idx;
 use lasso::Spur;
@@ -213,7 +215,10 @@ impl CheckedProgram<'_> {
                 "pointer conversion requires a pointer operand",
             ));
         }
-        let constant = checked_operand.constant.clone();
+        let constant = checked_operand
+            .constant
+            .clone()
+            .filter(|constant| *constant == Constant::Null);
         self.record_operand(operand, checked_operand, false);
         Ok(CheckedExpression {
             ty,
@@ -242,6 +247,23 @@ impl CheckedProgram<'_> {
                 })
             }
             ExpressionKind::Floating(spelling) => floating_literal(spelling, &expression.span),
+            ExpressionKind::Character(byte) => Ok(CheckedExpression {
+                ty: Scalar::U8.into(),
+                untyped: true,
+                value: ExpressionValue::Integer,
+                constant: Some(BigInt::from(*byte).into()),
+            }),
+            ExpressionKind::String(bytes) => {
+                let id = self.intern_string(bytes);
+                Ok(CheckedExpression {
+                    ty: Type::Pointer {
+                        target: Box::new(Scalar::U8.into()),
+                    },
+                    untyped: false,
+                    value: ExpressionValue::String,
+                    constant: Some(Constant::String(id)),
+                })
+            }
             ExpressionKind::Boolean(value) => Ok(CheckedExpression {
                 ty: Scalar::Bool.into(),
                 untyped: true,
@@ -320,6 +342,18 @@ impl CheckedProgram<'_> {
                 })
             }
         }
+    }
+
+    /// The `StringId` naming these bytes, allocated the first time they are
+    /// seen.
+    fn intern_string(&mut self, bytes: &[u8]) -> StringId {
+        if let Some(&id) = self.string_ids.get(bytes) {
+            return id;
+        }
+        let id = StringId(self.strings.len());
+        self.strings.push(bytes.to_vec());
+        self.string_ids.insert(bytes.to_vec(), id);
+        id
     }
 
     /// Checks an array literal. Every element is checked against the array's
@@ -841,6 +875,8 @@ impl CheckedProgram<'_> {
             .or(hint)
             .unwrap_or(if self.has_float_literal(operand) {
                 Scalar::F64
+            } else if self.has_character_literal(operand) {
+                Scalar::U8
             } else {
                 Scalar::Int
             });
@@ -939,7 +975,10 @@ impl CheckedProgram<'_> {
                 let f = self.resolve_call(call, scopes)?;
                 self.functions[f].result.clone()
             }
-            ExpressionKind::Integer(_) | ExpressionKind::Floating(_) | ExpressionKind::Null => None,
+            ExpressionKind::Integer(_)
+            | ExpressionKind::Floating(_)
+            | ExpressionKind::Character(_)
+            | ExpressionKind::Null => None,
             _ => Some(self.infer_expression(id, scopes)?.ty),
         })
     }
@@ -951,6 +990,18 @@ impl CheckedProgram<'_> {
             ExpressionKind::Unary { operand, .. } => self.has_float_literal(*operand),
             ExpressionKind::Binary { left, right, .. } => {
                 self.has_float_literal(*left) || self.has_float_literal(*right)
+            }
+            _ => false,
+        }
+    }
+
+    fn has_character_literal(&self, id: Idx<Expression>) -> bool {
+        match &self.syntax.expressions[id].kind {
+            ExpressionKind::Character(_) => true,
+            ExpressionKind::Grouping { expression } => self.has_character_literal(*expression),
+            ExpressionKind::Unary { operand, .. } => self.has_character_literal(*operand),
+            ExpressionKind::Binary { left, right, .. } => {
+                self.has_character_literal(*left) || self.has_character_literal(*right)
             }
             _ => false,
         }
@@ -1015,6 +1066,10 @@ impl CheckedProgram<'_> {
                     || (!operator.is_shift() && self.has_float_literal(right))
                 {
                     Scalar::F64
+                } else if self.has_character_literal(left)
+                    || (!operator.is_shift() && self.has_character_literal(right))
+                {
+                    Scalar::U8
                 } else {
                     Scalar::Int
                 },
@@ -1088,6 +1143,14 @@ impl CheckedProgram<'_> {
                 let checked_right = self.check_null(right, Some(&checked_left.ty))?;
                 (checked_left, checked_right)
             }
+            _ if numeric_context.is_none()
+                && (self.has_character_literal(left) || self.has_character_literal(right)) =>
+            {
+                (
+                    self.infer_expression(left, scopes)?,
+                    self.infer_expression(right, scopes)?,
+                )
+            }
             _ => (
                 self.check_expression(left, scopes, numeric_context.map(Type::Scalar))?,
                 self.check_expression(right, scopes, numeric_context.map(Type::Scalar))?,
@@ -1103,7 +1166,9 @@ impl CheckedProgram<'_> {
             checked_left.constant.as_ref(),
             checked_right.constant.as_ref(),
         ) {
-            (Some(left), Some(right)) => Some(compare_constants(operator, left, right)),
+            (Some(left), Some(right)) if !left.has_string() && !right.has_string() => {
+                Some(compare_constants(operator, left, right))
+            }
             _ => None,
         };
         let result = CheckedExpression {
@@ -1142,6 +1207,8 @@ impl CheckedProgram<'_> {
                 b
             } else if a.is_floating() || b.is_floating() {
                 Scalar::F64
+            } else if a == Scalar::U8 || b == Scalar::U8 {
+                Scalar::U8
             } else {
                 a
             };

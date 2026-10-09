@@ -9,7 +9,7 @@ use crate::{
         Place, Terminator, ValueId, ValueKind,
     },
     ir::verify::VerifiedProgram,
-    types::{Scalar, Type},
+    types::{Scalar, StringId, Type},
 };
 use std::fmt::Write;
 
@@ -51,6 +51,15 @@ const MAX_DIRECT_STATIC_BYTES: u64 = 1 << 23;
 /// Names the static data holding constant `id` of function `function`.
 fn constant_symbol(function: usize, ConstantId(id): ConstantId) -> String {
     format!(".fern.function{function}_constant{id}")
+}
+
+/// Writes a string literal's bytes followed by its terminating zero.
+fn emit_string(emitter: &mut Emitter<'_>, id: StringId, bytes: &[u8]) {
+    let mut items = String::from("b");
+    for byte in bytes.iter().chain([&0]) {
+        write!(items, " {byte}").unwrap();
+    }
+    writeln!(emitter.data, "data ${} = {{ {items} }}", string_symbol(id)).unwrap();
 }
 
 /// Writes static data. Its scalars and pointers sit where the layout puts them,
@@ -191,6 +200,9 @@ pub(super) fn emit(verified: &VerifiedProgram) -> String {
     emit_entry(&mut emitter);
     for (id, global) in program.globals.iter().enumerate() {
         emit_data(&mut emitter, &format!(".fern.global{id}"), global);
+    }
+    for (id, bytes) in program.strings.iter().enumerate() {
+        emit_string(&mut emitter, StringId(id), bytes);
     }
     for (index, function) in program.functions.iter().enumerate() {
         if function.external.is_some() {

@@ -13,7 +13,7 @@ use logos::Logos;
 use std::ops::Range;
 
 use super::{
-    lexer::{Token, is_floating, valid_number},
+    lexer::{Token, is_floating, literal_bytes, valid_number},
     syntax::*,
 };
 
@@ -204,10 +204,27 @@ impl Parser<'_> {
                 }
                 Some(Token::Number)
             }
+            Some(Ok(Token::String)) => {
+                if let Err(message) = literal_bytes(self.literal_body()) {
+                    return Err(self.error(message));
+                }
+                Some(Token::String)
+            }
+            Some(Ok(Token::Character)) => {
+                if let Err(message) = self.character_byte() {
+                    return Err(self.error(message));
+                }
+                Some(Token::Character)
+            }
             Some(Ok(token)) => Some(token),
             Some(Err(())) => {
-                return Err(self.error(if self.lexer.slice().starts_with("/*") {
+                let slice = self.lexer.slice();
+                return Err(self.error(if slice.starts_with("/*") {
                     "unterminated block comment"
+                } else if slice.starts_with('"') {
+                    "unterminated string literal"
+                } else if slice.starts_with('\'') {
+                    "unterminated character literal"
                 } else {
                     "invalid token"
                 }));
@@ -215,6 +232,20 @@ impl Parser<'_> {
             None => None,
         };
         Ok(())
+    }
+
+    /// The text between the current string or character token's delimiters.
+    fn literal_body(&self) -> &str {
+        let slice = self.lexer.slice();
+        &slice[1..slice.len() - 1]
+    }
+
+    /// The byte the current character token denotes.
+    fn character_byte(&self) -> Result<u8, String> {
+        match literal_bytes(self.literal_body())?.as_slice() {
+            [byte] => Ok(*byte),
+            _ => Err("character literal must be exactly one byte".to_owned()),
+        }
     }
 
     fn error(&self, message: impl Into<String>) -> Diagnostic {
@@ -1022,6 +1053,14 @@ impl Parser<'_> {
             } else {
                 ExpressionKind::Integer(spelling)
             }
+        } else if self.current == Some(Token::String) {
+            let bytes = literal_bytes(self.literal_body()).expect("validated by advance");
+            self.advance()?;
+            ExpressionKind::String(bytes)
+        } else if self.current == Some(Token::Character) {
+            let byte = self.character_byte().expect("validated by advance");
+            self.advance()?;
+            ExpressionKind::Character(byte)
         } else if self.current == Some(Token::Name)
             && Scalar::named(self.lexer.slice()).is_some_and(Scalar::is_numeric)
         {

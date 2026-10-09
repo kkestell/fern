@@ -1,6 +1,6 @@
 use std::{fs, path::Path, process::Command};
 const EXIT: &str = "extern fn exit(status:i32)->void;";
-fn run(source: &str) {
+fn run(source: &str) -> std::process::Output {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("main.fern");
     let output = dir.path().join("program");
@@ -8,6 +8,7 @@ fn run(source: &str) {
     fern::compile(&input, &output).unwrap_or_else(|error| panic!("{error}\n{source}"));
     let result = Command::new(output).output().unwrap();
     assert!(result.status.success(), "{result:?}\n{source}");
+    result
 }
 #[test]
 fn every_integer_width_wraps_and_converts_like_constants() {
@@ -307,4 +308,26 @@ fn main()->void {
  if len(make())!=5 || len(grid[one()])!=3 || len(*(at()))!=3 {exit(1);}
  if calls!=3 {exit(2);}
 }"#);
+}
+#[test]
+fn string_literals_are_static_terminated_bytes() {
+    run(r#"const shared="shared";
+fn address()->*u8 {return shared;}
+fn main()->void {
+ var s="a\tb\x21\0c";
+ if s[0]!='a' || s[1]!='\t' || s[2]!='b' || *(s+3)!='!' || s[4]!=0 || s[5]!='c' || s[6]!=0 {exit(1);}
+ var e="é";
+ if e[0]!=0xC3 || e[1]!=0xA9 || e[2]!=0 {exit(2);}
+ if address()!=shared || address()!=address() {exit(3);}
+ }"#);
+}
+#[test]
+fn string_literals_reach_c() {
+    let output = run(r#"extern fn puts(text:*u8)->i32;
+var greeting:*u8="hello\tworld\x21";
+fn main()->void {puts(greeting);puts("it's \"quoted\"");}"#);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "hello\tworld!\nit's \"quoted\"\n"
+    );
 }

@@ -198,6 +198,10 @@ pub(crate) enum ExpressionKind {
     Floating(String),
     Boolean(bool),
     Null,
+    /// A string literal's decoded bytes, without the terminating zero.
+    String(Vec<u8>),
+    /// A character literal's byte.
+    Character(u8),
     Reference(QualifiedName),
     Grouping {
         expression: Idx<Expression>,
@@ -316,6 +320,8 @@ pub(crate) fn walk_expression(
         | ExpressionKind::Floating(_)
         | ExpressionKind::Boolean(_)
         | ExpressionKind::Null
+        | ExpressionKind::String(_)
+        | ExpressionKind::Character(_)
         | ExpressionKind::Reference(_) => {}
         ExpressionKind::Grouping { expression }
         | ExpressionKind::Unary {

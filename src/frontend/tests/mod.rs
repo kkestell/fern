@@ -37,7 +37,7 @@ fn removed_syntax_is_rejected() {
 
 #[test]
 fn syntax_spans_and_snapshot() {
-    let source = "use lib; type S struct { x:int } extern fn call(p:*int)->int; fn main()->void {var x=1;var p=&x;*p=call(p);}";
+    let source = "use lib; type S struct { x:int } extern fn call(p:*int)->int; fn main()->void {var x=1;var p=&x;*p=call(p);var s=\"a\\tb\";var c='c';}";
     let syntax = parse(source).unwrap();
     let mut spans = Vec::new();
     for file in &syntax.files {

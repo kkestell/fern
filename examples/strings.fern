@@ -1,0 +1,24 @@
+extern fn puts(text: *u8) -> i32;
+extern fn exit(status: i32) -> void;
+
+const greeting = "hello\tworld\x21";
+
+fn length(text: *u8) -> int {
+    var end = text;
+    for *end != 0 {
+        end = end + 1;
+    }
+    return end - text;
+}
+
+fn main() -> void {
+    if *greeting != 'h' || greeting[5] != '\t' || length(greeting) != 12 {
+        exit(1);
+    }
+    var upper = 'a' - 32;
+    if upper != 'A' {
+        exit(2);
+    }
+    puts(greeting);
+    puts("it's \"quoted\"");
+}

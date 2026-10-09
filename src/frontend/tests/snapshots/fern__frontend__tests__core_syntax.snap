@@ -1,10 +1,10 @@
 ---
 source: src/frontend/tests/mod.rs
-expression: "(syntax.statements,syntax.expressions,syntax.annotations)"
+expression: "(syntax.statements, syntax.expressions, syntax.annotations)"
 ---
 (
     Arena {
-        len: 3,
+        len: 5,
         data: [
             Statement {
                 kind: Binding {
@@ -33,10 +33,30 @@ expression: "(syntax.statements,syntax.expressions,syntax.annotations)"
                 },
                 span: 96..107,
             },
+            Statement {
+                kind: Binding {
+                    mutable: true,
+                    name: Spur(7),
+                    name_span: 111..112,
+                    annotation: None,
+                    initializer: Idx::<Expression>(7),
+                },
+                span: 107..120,
+            },
+            Statement {
+                kind: Binding {
+                    mutable: true,
+                    name: Spur(8),
+                    name_span: 124..125,
+                    annotation: None,
+                    initializer: Idx::<Expression>(8),
+                },
+                span: 120..130,
+            },
         ],
     },
     Arena {
-        len: 7,
+        len: 9,
         data: [
             Expression {
                 kind: Integer(
@@ -115,6 +135,24 @@ expression: "(syntax.statements,syntax.expressions,syntax.annotations)"
                 ),
                 span: 99..106,
                 depth: 1,
+            },
+            Expression {
+                kind: String(
+                    [
+                        97,
+                        9,
+                        98,
+                    ],
+                ),
+                span: 113..119,
+                depth: 0,
+            },
+            Expression {
+                kind: Character(
+                    99,
+                ),
+                span: 126..129,
+                depth: 0,
             },
         ],
     },

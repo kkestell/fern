@@ -24,9 +24,37 @@ Integer literals are decimal, or use `0x`, `0o`, or `0b` prefixes. Leading
 zeros do not select octal. Floating literals use a decimal point or `e`/`E`
 exponent; `.5`, `2.`, and `1e-3` are valid. Neither kind accepts separators or
 type suffixes. A literal receives its numeric type from context, otherwise an
-integer defaults to `int` and a float to `f64`. An integer literal must fit its
-selected type. A floating literal rounds directly to its selected format with
-round-to-nearest, ties-to-even; overflow produces infinity.
+integer defaults to `int`, a character literal to `u8`, and a float to `f64`.
+An integer literal must fit its selected type. A floating literal rounds
+directly to its selected format with round-to-nearest, ties-to-even; overflow
+produces infinity.
+
+A character literal is one byte between single quotes. It is an integer
+literal whose value is that byte; `'é'` is invalid because it is two bytes.
+A string literal is a sequence of bytes between double quotes. Its value is a
+`*u8` to static storage holding those bytes followed by a zero byte, which
+belongs to the sequence for pointer arithmetic. The storage lives for the
+program, and writing to it is undefined. Every evaluation of one string literal
+yields the same address; whether distinct literals share storage is
+unspecified.
+
+Inside either literal, `\n`, `\r`, `\t`, `\0`, `\\`, `\"`, `\'`, and `\x`
+followed by exactly two hexadecimal digits each denote one byte. Every other
+character denotes its UTF-8 bytes. A literal cannot contain a newline, any
+other backslash sequence, or an unescaped copy of its own delimiter. There are
+no raw strings and no concatenation of adjacent literals.
+
+```fern
+extern fn puts(text: *u8) -> i32;
+
+const greeting = "hello\tworld\x21";
+
+fn main() -> void {
+    if *greeting == 'h' {
+        puts(greeting);
+    }
+}
+```
 
 ## Types
 
@@ -162,7 +190,7 @@ distinguish its opening brace from the statement body.
 Numeric binary operands must have the same type, except shift counts.
 An expected numeric type supplies the type of literal arithmetic; otherwise
 concrete operand types supply it, then floating literals select `f64`, then
-integer literals select `int`. Existing concrete values never change type
+character literals select `u8`, then integer literals select `int`. Existing concrete values never change type
 implicitly. Constants follow these same rules: intermediate operations use
 their concrete type, rather than arbitrary-precision arithmetic.
 
@@ -278,7 +306,9 @@ Literals, references to `const` bindings, grouping, numeric conversions,
 unary and binary operators, comparisons, logical operations, aggregate
 literals, constant field selection and indexing, `len` of a constant array,
 and `sizeof` may form constant expressions. Calls, addresses, dereferences,
-and references to mutable bindings are never constant expressions.
+and references to mutable bindings are never constant expressions. A string
+literal is a constant expression, but its address is not a compile-time value:
+comparing, converting, offsetting, indexing, or dereferencing it is not.
 
 Constant evaluation uses the same concrete numeric rules as runtime. Integer
 wrapping, IEEE rounding, infinities, and NaNs are permitted. A constant operation
@@ -317,6 +347,6 @@ entries replace CLI defaults, and an empty list preserves defaults. Unresolved
 imports report the path and all searched roots. Module dependencies must be
 acyclic; cycle diagnostics show the chain. Each module is included once.
 
-Strings, slices, function values, generics, variadic functions, and implicit
+A string type, slices, function values, generics, variadic functions, and implicit
 numeric conversions are not part of this core. Stack exhaustion and allocation
 failure follow the platform and library contracts; no trap runtime is required.

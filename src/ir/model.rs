@@ -1,6 +1,8 @@
 //! Fern IR data model.
 
-use crate::types::{BinaryOperator, ComparisonOperator, Float, Scalar, Type, UnaryOperator};
+use crate::types::{
+    BinaryOperator, ComparisonOperator, Float, Scalar, StringId, Type, UnaryOperator,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ValueId(pub usize);
@@ -74,6 +76,8 @@ pub(crate) enum Literal {
     /// rather than the integer they spell.
     Floating(Float),
     Null(Type),
+    /// The address of a string literal's static, zero-terminated bytes.
+    String(StringId),
 }
 
 impl Literal {
@@ -82,6 +86,9 @@ impl Literal {
             Self::Integer { ty, .. } => (*ty).into(),
             Self::Floating(value) => value.ty().into(),
             Self::Null(ty) => ty.clone(),
+            Self::String(_) => Type::Pointer {
+                target: Box::new(Scalar::U8.into()),
+            },
         }
     }
 }
@@ -249,6 +256,9 @@ pub(crate) struct Program {
     // Each position defines the corresponding StructId.
     pub structs: Vec<Struct>,
     pub globals: Vec<Global>,
+    /// Each position holds the bytes, without the terminator, of the
+    /// corresponding `StringId`.
+    pub strings: Vec<Vec<u8>>,
     // Each position defines the corresponding function ID.
     pub functions: Vec<Function>,
     pub main: FunctionId,

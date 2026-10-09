@@ -104,3 +104,55 @@ fn unreachable_break_after_continuing_branches_does_not_require_a_return() {
     let syntax = parser::parse(&source).unwrap();
     check_root(&syntax).unwrap();
 }
+#[test]
+fn character_literals_are_u8_integers() {
+    assert_eq!(
+        constants("const c='a';const d='a'+1;const e:i32='\\xFF';"),
+        [97, 98, 255].map(|n| Constant::Integer(n.into()))
+    );
+    let source = SourceMap::from_text("fn main()->void {var c='a';var d='a'+1;var e='a'+1.0;}");
+    let syntax = parser::parse(&source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let types: Vec<_> = checked
+        .bindings
+        .iter()
+        .map(|(_, b)| b.ty.to_string())
+        .collect();
+    assert_eq!(types, ["u8", "u8", "f64"]);
+    assert_eq!(
+        constants("const a=97=='a';const b='a'==97;const c='a'==97.0;"),
+        [1, 1, 1].map(|n| Constant::Integer(n.into()))
+    );
+    let source = SourceMap::from_text("fn main()->void {var bad=300=='a';}");
+    let syntax = parser::parse(&source).unwrap();
+    assert!(check_root(&syntax).is_err());
+}
+#[test]
+fn string_literals_are_constant_u8_pointers() {
+    let source = SourceMap::from_text(
+        "var m:*u8=\"hi\"; fn main()->void {const s=\"hi\";var t=s;var u:*u8=\"other\";}",
+    );
+    let syntax = parser::parse(&source).unwrap();
+    let checked = check_root(&syntax).unwrap();
+    assert_eq!(checked.strings, [b"hi".to_vec(), b"other".to_vec()]);
+    for (_, binding) in checked.bindings.iter() {
+        assert_eq!(binding.ty.to_string(), "*u8");
+    }
+}
+#[test]
+fn string_literal_addresses_are_not_compile_time_values() {
+    for body in [
+        "var x:i8='\\xFF';",
+        "var p:*i8=\"x\";",
+        "var p=&\"x\";",
+        "const b=\"a\"==\"a\";",
+        "const p=*i8(\"a\");",
+        "const c=*\"a\";",
+        "const q=\"ab\"+1;",
+        "var n=len(\"a\");",
+    ] {
+        let source = SourceMap::from_text(&format!("fn main()->void {{{body}}}"));
+        let syntax = parser::parse(&source).unwrap();
+        assert!(check_root(&syntax).is_err(), "{body}");
+    }
+}

@@ -23,7 +23,15 @@ fn fits(source: &Type, expected: &Type) -> bool {
     source == expected
 }
 
-fn verify_literal(literal: &Literal) -> Result<Type, CompileError> {
+fn verify_literal(literal: &Literal, strings: &[Vec<u8>]) -> Result<Type, CompileError> {
+    if let Literal::String(id) = literal
+        && id.0 >= strings.len()
+    {
+        return Err(CompileError::new(format!(
+            "internal compiler error: IR references undefined string {}",
+            id.0
+        )));
+    }
     if let Literal::Null(ty) = literal {
         if !matches!(ty, Type::Pointer { .. }) {
             return Err(CompileError::new(format!(
@@ -344,7 +352,7 @@ impl Program {
         let mut expected = Vec::with_capacity(values.len());
         self.scalar_types(&global.ty, &mut expected);
         for (value, expected) in values.iter().zip(&expected) {
-            let ty = verify_literal(value)?;
+            let ty = verify_literal(value, &self.strings)?;
             if ty != *expected {
                 return Err(CompileError::new(format!(
                     "internal compiler error: IR global of type `{}` holds a `{ty}` value where a `{expected}` value belongs",
@@ -436,6 +444,7 @@ impl Program {
         let operand_type = |operand| {
             flow_operand_type(
                 operand,
+                &self.strings,
                 &function.values,
                 definitions,
                 block_index,
@@ -503,8 +512,16 @@ impl Program {
         let block = &flow.blocks[block_index];
         // A terminator reads values defined anywhere in its own block.
         let end = block.instructions.len();
-        let operand_type =
-            |operand| flow_operand_type(operand, &function.values, definitions, block_index, end);
+        let operand_type = |operand| {
+            flow_operand_type(
+                operand,
+                &self.strings,
+                &function.values,
+                definitions,
+                block_index,
+                end,
+            )
+        };
         for target in block.terminator.targets() {
             verify_target(target, flow)?;
         }
@@ -748,13 +765,14 @@ fn verify_return(
 
 fn flow_operand_type(
     operand: Operand,
+    strings: &[Vec<u8>],
     values: &[Value],
     definitions: &[Definition],
     block: usize,
     position: usize,
 ) -> Result<Type, CompileError> {
     match operand {
-        Operand::Literal(literal) => verify_literal(&literal),
+        Operand::Literal(literal) => verify_literal(&literal, strings),
         Operand::Value(ValueId(id)) => {
             let Some(definition) = definitions.get(id) else {
                 return Err(CompileError::new(format!(

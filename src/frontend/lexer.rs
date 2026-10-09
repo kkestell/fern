@@ -138,6 +138,10 @@ pub(super) enum Token {
     LineComment,
     #[token("/*", block_comment)]
     BlockComment,
+    #[token("\"", quoted::<b'"'>)]
+    String,
+    #[token("'", quoted::<b'\''>)]
+    Character,
 }
 
 fn number(lexer: &mut logos::Lexer<'_, Token>) {
@@ -189,6 +193,75 @@ fn block_comment(lexer: &mut logos::Lexer<'_, Token>) -> Result<logos::Skip, ()>
     }
     lexer.bump(bytes.len());
     Err(())
+}
+
+/// Scans a string or character literal to its closing delimiter, skipping the
+/// byte after each backslash. A line break or the end of input comes first in
+/// an unterminated literal.
+fn quoted<const DELIMITER: u8>(lexer: &mut logos::Lexer<'_, Token>) -> Result<(), ()> {
+    let bytes = lexer.remainder().as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' | b'\r' => break,
+            b'\\' if index + 1 < bytes.len() && !matches!(bytes[index + 1], b'\n' | b'\r') => {
+                index += 2;
+            }
+            byte if byte == DELIMITER => {
+                lexer.bump(index + 1);
+                return Ok(());
+            }
+            _ => index += 1,
+        }
+    }
+    lexer.bump(index);
+    Err(())
+}
+
+/// Decodes the text between a string or character literal's delimiters into
+/// the bytes it denotes.
+pub(super) fn literal_bytes(body: &str) -> Result<Vec<u8>, String> {
+    let bytes = body.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let escape = body[index + 1..]
+            .chars()
+            .next()
+            .expect("the lexer keeps a backslash's next character in the literal");
+        let byte = match escape {
+            'n' => b'\n',
+            'r' => b'\r',
+            't' => b'\t',
+            '0' => 0,
+            '\\' => b'\\',
+            '"' => b'"',
+            '\'' => b'\'',
+            'x' => {
+                let digits = bytes[index + 2..]
+                    .iter()
+                    .take(2)
+                    .take_while(|byte| byte.is_ascii_hexdigit())
+                    .count();
+                let digits = &body[index + 2..index + 2 + digits];
+                if digits.len() != 2 {
+                    return Err(format!("invalid escape sequence `\\x{digits}`"));
+                }
+                decoded.push(u8::from_str_radix(digits, 16).expect("hexadecimal digits"));
+                index += 4;
+                continue;
+            }
+            other => return Err(format!("invalid escape sequence `\\{other}`")),
+        };
+        decoded.push(byte);
+        index += 2;
+    }
+    Ok(decoded)
 }
 
 pub(crate) fn integer_parts(spelling: &str) -> (u32, &str, &str) {

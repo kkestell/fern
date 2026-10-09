@@ -158,6 +158,12 @@ impl fmt::Display for Scalar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StructId(pub(crate) usize);
 
+/// Identifies one distinct string literal byte sequence, without its
+/// terminator, in the program being checked. Semantic checking allocates
+/// these, and the IR keeps the bytes each one names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct StringId(pub(crate) usize);
+
 /// The greatest number of inline struct declarations one value may contain.
 /// Semantic checking enforces this bound, so no later phase walks a deeper
 /// struct graph.

@@ -3,7 +3,7 @@
 
 use crate::{
     ir::model::{Function, FunctionId, Global, Literal, Operand, ValueId},
-    types::{ComparisonOperator, Scalar, Type},
+    types::{ComparisonOperator, Scalar, StringId, Type},
 };
 
 use std::fmt::Write;
@@ -17,6 +17,7 @@ pub(super) fn operand(operand: Operand) -> String {
             Literal::Floating(value) => floating::literal(value),
             // `null` is the zero address.
             Literal::Null(_) => "0".to_owned(),
+            Literal::String(id) => format!("${}", string_symbol(id)),
         },
         Operand::Value(ValueId(id)) => format!("%v{id}"),
     }
@@ -35,7 +36,13 @@ pub(super) fn data_item(literal: Literal) -> String {
             value.bits()
         ),
         Literal::Null(ty) => format!("{} 0", value_class(&ty)),
+        Literal::String(id) => format!("l ${}", string_symbol(id)),
     }
+}
+
+/// Names the static data holding string `id`'s bytes and terminator.
+pub(super) fn string_symbol(StringId(id): StringId) -> String {
+    format!(".fern.string{id}")
 }
 
 /// Arithmetic, conversions, and branching are defined on scalars, so the

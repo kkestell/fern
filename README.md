@@ -14,6 +14,7 @@ The [examples](examples/) form a topic-based tour:
 - [Arrays](examples/arrays.fern)
 - [Structs](examples/structs.fern)
 - [Pointers](examples/pointers.fern)
+- [Strings](examples/strings.fern)
 - [Floating-point numbers](examples/floating_point.fern)
 - [Modules and imports](examples/modules_and_imports/), whose root module is
   `examples/modules_and_imports/app`.

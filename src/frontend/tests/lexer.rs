@@ -265,3 +265,50 @@ fn errors_use_byte_spans() {
         assert_eq!(parse(text).unwrap_err().span, span, "{text}");
     }
 }
+
+#[test]
+fn string_and_character_literals_decode_their_bytes() {
+    let source = r#"fn main() -> void { var s = "a\n\r\t\0\\\"\'\x41\xfF'é"; var c = '\x7f'; var d = '"'; }"#;
+    let syntax = parse(source).unwrap();
+    let mut strings = Vec::new();
+    let mut characters = Vec::new();
+    for (_, expression) in syntax.expressions.iter() {
+        match &expression.kind {
+            ExpressionKind::String(bytes) => strings.push(bytes.clone()),
+            ExpressionKind::Character(byte) => characters.push(*byte),
+            _ => {}
+        }
+    }
+    assert_eq!(strings, [b"a\n\r\t\0\\\"'A\xff'\xc3\xa9".to_vec()]);
+    assert_eq!(characters, [0x7f, b'"']);
+}
+
+#[test]
+fn malformed_string_and_character_literals_are_rejected() {
+    let prefix = "fn main() -> void { var x = ";
+    for (literal, message, length) in [
+        ("\"a\nb\"", "unterminated string literal", 2),
+        ("'a\n'", "unterminated character literal", 2),
+        ("\"a\\\nb\"", "unterminated string literal", 3),
+        ("\"\\q\"", "invalid escape sequence `\\q`", 4),
+        ("\"\\x4\"", "invalid escape sequence `\\x4`", 5),
+        ("''", "character literal must be exactly one byte", 2),
+        ("'ab'", "character literal must be exactly one byte", 4),
+        ("'é'", "character literal must be exactly one byte", 4),
+    ] {
+        let source = format!("{prefix}{literal}; }}");
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{literal}");
+        assert_eq!(error.span, prefix.len()..prefix.len() + length, "{literal}");
+    }
+    for (literal, message) in [
+        ("\"abc", "unterminated string literal"),
+        ("'a", "unterminated character literal"),
+        ("\"\\", "unterminated string literal"),
+    ] {
+        let source = format!("{prefix}{literal}");
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{literal}");
+        assert_eq!(error.span, prefix.len()..source.len(), "{literal}");
+    }
+}

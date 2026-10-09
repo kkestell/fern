@@ -172,6 +172,8 @@ pub(crate) fn check<'a>(
         functions: ArenaMap::default(),
         calls: ArenaMap::default(),
         structs: Vec::new(),
+        strings: Vec::new(),
+        string_ids: HashMap::new(),
         struct_names: HashMap::new(),
         function_names: HashMap::new(),
         namespaces: HashMap::new(),

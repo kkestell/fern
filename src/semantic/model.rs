@@ -5,8 +5,8 @@ use crate::{
     layout::{Layouts, StructFields},
     source::FileId,
     types::{
-        BinaryOperator, ComparisonOperator, Float, LogicalOperator, StructId, StructType, Type,
-        UnaryOperator,
+        BinaryOperator, ComparisonOperator, Float, LogicalOperator, StringId, StructId, StructType,
+        Type, UnaryOperator,
     },
 };
 
@@ -30,6 +30,8 @@ pub(crate) enum Constant {
     /// One value per field, in declaration order.
     Struct(Vec<Constant>),
     Null,
+    /// The address of a string literal's static bytes.
+    String(StringId),
 }
 
 impl Constant {
@@ -38,7 +40,19 @@ impl Constant {
     pub(crate) fn integer(&self) -> Option<&BigInt> {
         match self {
             Self::Integer(value) => Some(value),
-            Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null => None,
+            Self::Float(_) | Self::Array(_) | Self::Struct(_) | Self::Null | Self::String(_) => {
+                None
+            }
+        }
+    }
+
+    /// Whether this constant is or contains a string literal's address, which
+    /// is not a compile-time value.
+    pub(crate) fn has_string(&self) -> bool {
+        match self {
+            Self::String(_) => true,
+            Self::Array(values) | Self::Struct(values) => values.iter().any(Self::has_string),
+            Self::Integer(_) | Self::Float(_) | Self::Null => false,
         }
     }
 }
@@ -140,6 +154,8 @@ pub(crate) enum ExpressionValue {
     },
     /// `null`, typed by its context.
     Null,
+    /// A string literal, whose constant names its bytes.
+    String,
     /// A raw pointer reinterpretation.
     PointerConversion {
         operand: Idx<Expression>,
@@ -254,6 +270,11 @@ pub(crate) struct CheckedProgram<'a> {
     pub calls: ArenaMap<Idx<Statement>, Idx<Function>>,
     /// Every struct the program declares, indexed by its `StructId`.
     pub structs: Vec<CheckedStruct>,
+    /// Every distinct string literal's bytes, indexed by its `StringId`.
+    pub strings: Vec<Vec<u8>>,
+    /// Checking state: the `StringId` of each string literal's bytes, so equal
+    /// literals share one.
+    pub(super) string_ids: HashMap<Vec<u8>, StringId>,
     /// Checking state: the module-level structs of the module being checked,
     /// which an unqualified type name resolves against. It is replaced per
     /// module, so it never describes the whole program.

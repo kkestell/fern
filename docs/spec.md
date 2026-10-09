@@ -153,15 +153,16 @@ A call statement may discard a result. A `void` call is only a statement.
 
 External functions have no body and name a linker symbol exactly matching
 their declared name. They use the host C calling convention. Parameters and
-results are integer or pointer types; a result may also be `void`. Integer
+results are numeric or pointer types; a result may also be `void`. Integer
 types correspond to C integers of the same width and signedness; `int` and
-`uint` correspond to `intptr_t` and `uintptr_t`. Pointer types have C pointer
-representation and calling convention. The programmer must supply a declaration
-matching the actual C function. Declaring one symbol with inconsistent
-signatures, or calling it with an incorrect signature, is invalid. External
-symbol `main` is reserved for program startup. Variadic calls, callbacks,
-external globals, and aggregates or floats passed directly across the external
-interface are not part of this core. Values may be exchanged through pointers.
+`uint` correspond to `intptr_t` and `uintptr_t`. `f32` and `f64` correspond to
+C `float` and `double`. Pointer types have C pointer representation and calling
+convention. The programmer must supply a declaration matching the actual C
+function. Declaring one symbol with inconsistent signatures, or calling it with
+an incorrect signature, is invalid. External symbol `main` is reserved for
+program startup. Variadic calls, callbacks, external globals, and aggregates
+passed directly across the external interface are not part of this core.
+Values may be exchanged through pointers.
 The implementation documents which libraries it links.
 
 An executable's root module must define `fn main() -> void`. A dependency's

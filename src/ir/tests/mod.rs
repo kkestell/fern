@@ -40,8 +40,11 @@ fn rejects_invalid_control_flow_and_types() {
             }),
         });
     assert!(p.verify().is_err());
-    let mut p = program("extern fn f()->i32;fn main()->void {f();}");
+    let mut p = program("extern fn f()->i32;fn main()->void {}");
     p.functions[0].result = Some(Scalar::F64.into());
+    p.verify().unwrap();
+    let mut p = program("extern fn f()->i32;fn main()->void {}");
+    p.functions[0].result = Some(Scalar::Bool.into());
     assert!(p.verify().is_err());
 }
 #[test]

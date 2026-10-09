@@ -514,11 +514,11 @@ impl CheckedProgram<'_> {
                     .chain(result.iter())
                 {
                     if !matches!(ty, crate::types::Type::Pointer { .. })
-                        && !ty.scalar().is_some_and(Scalar::is_integer)
+                        && !ty.scalar().is_some_and(Scalar::is_numeric)
                     {
                         return Err(Diagnostic::new(
                             function_syntax.name_span.clone(),
-                            "external functions accept only integers and pointers",
+                            "external functions accept only numeric and pointer types",
                         ));
                     }
                 }

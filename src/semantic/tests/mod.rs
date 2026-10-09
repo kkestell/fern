@@ -68,7 +68,8 @@ fn invalid_core_programs() {
 #[test]
 fn external_signatures_and_returns() {
     for source in [
-        "extern fn foo(x:f64)->void;fn main()->void {}",
+        "extern fn foo(x:bool)->void;fn main()->void {}",
+        "extern fn foo()->bool;fn main()->void {}",
         "extern fn foo()->[2]int;fn main()->void {}",
         "extern fn main()->void;",
         "fn f()->int {for true {}} fn main()->void {}",
@@ -79,6 +80,11 @@ fn external_signatures_and_returns() {
     }
     let syntax = parser::parse(&SourceMap::from_text(
         "fn f()->int {for {continue;break;}} fn main()->void {}",
+    ))
+    .unwrap();
+    check_root(&syntax).unwrap();
+    let syntax = parser::parse(&SourceMap::from_text(
+        "extern fn foo(x:f32,y:f64)->f64;fn main()->void {}",
     ))
     .unwrap();
     check_root(&syntax).unwrap();

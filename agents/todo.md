@@ -82,3 +82,24 @@
 
   `const b = make();` writes the result into the call's own storage and then
   copies it into `b`. Pass `b`'s storage as the result address instead.
+
+- [x] Pass floating-point values across the external interface
+
+  Allow `f32` and `f64` as external function parameter and result types,
+  corresponding to C `float` and `double`, so programs can call libraries such
+  as `libm`. Specify the rule in `docs/spec.md` before implementing it.
+
+- [ ] Pass structs by value across the external interface
+
+  Allow struct parameters and results in external functions, following the
+  host C ABI for a C struct with the same fields, so programs can call C APIs
+  that take or return small structs by value. Specify which field types a
+  struct may contain to cross the interface.
+
+- [ ] Call variadic external functions
+
+  Let an external declaration end its parameter list with a variadic marker,
+  and pass extra arguments at the call with the host C ABI's variadic
+  conventions, so programs can call `printf` and similar functions. Specify
+  which types extra arguments may have and how untyped literals and `f32`
+  arguments are typed and promoted.

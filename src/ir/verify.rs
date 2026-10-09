@@ -380,7 +380,7 @@ impl Program {
     fn verify_function(&self, function: &Function) -> Result<(), CompileError> {
         if let Some(symbol) = &function.external {
             let external_type = |ty: &Type| {
-                matches!(ty, Type::Pointer { .. }) || ty.scalar().is_some_and(Scalar::is_integer)
+                matches!(ty, Type::Pointer { .. }) || ty.scalar().is_some_and(Scalar::is_numeric)
             };
             if symbol == "main"
                 || symbol.is_empty()

@@ -173,8 +173,8 @@ fn invalid_programs_preserve_outputs() {
         ),
         ("fn main()->void {const x=1;var p=&x;}", "immutable"),
         (
-            "extern fn x(n:f32)->void;fn main()->void {}",
-            "integers and pointers",
+            "extern fn x(n:bool)->void;fn main()->void {}",
+            "numeric and pointer",
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -273,6 +273,56 @@ fn c_abi_small_integers_and_struct_memory() {
         &["--link".as_ref(), object.as_os_str()],
     ));
     assert!(Command::new(output).status().unwrap().success());
+}
+#[test]
+fn c_abi_floating_point() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = dir.path().join("helper.c");
+    let object = dir.path().join("helper.o");
+    fs::write(
+        &c,
+        r#"
+ #include <stdint.h>
+ float halve(float x){return x/2;}
+ double mix(int32_t a,float b,double c,int64_t d){return a+(double)b*c+d;}
+ double sum10(double a,double b,double c,double d,double e,double f,double g,double h,double i,double j){
+ return a+b*2+c*3+d*4+e*5+f*6+g*7+h*8+i*9+j*10;
+ }"#,
+    )
+    .unwrap();
+    compile_c(&c, &object);
+    let input = dir.path().join("main.fern");
+    let output = dir.path().join("program");
+    fs::write(
+        &input,
+        format!(
+            r#"{EXIT}
+ extern fn halve(x:f32)->f32;extern fn mix(a:i32,b:f32,c:f64,d:i64)->f64;
+ extern fn sum10(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,h:f64,i:f64,j:f64)->f64;
+ extern fn sqrt(x:f64)->f64;
+ type Pair struct {{small:f32,large:f64}}
+ fn main()->void {{
+ if halve(3.0)!=1.5 {{exit(1);}}
+ if mix(3,0.5,8.0,-10)!=-3.0 {{exit(2);}}
+ if sum10(1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.5)!=50.0 {{exit(3);}}
+ var pair=Pair {{small=5.0,large=2.25}};
+ if halve(pair.small)!=2.5 || sqrt(pair.large)!=1.5 {{exit(4);}}
+ }}"#
+        ),
+    )
+    .unwrap();
+    succeeds(&mut fern_cli(
+        &input,
+        &output,
+        &[
+            "--link".as_ref(),
+            object.as_os_str(),
+            "-l".as_ref(),
+            "m".as_ref(),
+        ],
+    ));
+    let status = Command::new(output).status().unwrap();
+    assert!(status.success(), "{status}");
 }
 #[cfg(unix)]
 #[test]

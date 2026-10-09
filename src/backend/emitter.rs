@@ -533,8 +533,14 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
             arguments,
             span,
         } => emit_call(emitter, *callee, arguments, *result, span),
-        Instruction::Free { .. } => {
-            unreachable!("heap allocation and null checks are rejected before native emission")
+        // `free` ignores a null pointer, which is what freeing `null` does.
+        Instruction::Free { operand: pointer } => {
+            writeln!(
+                emitter.text,
+                "    call $free(l {})",
+                operand(pointer.clone())
+            )
+            .unwrap();
         }
     }
 }
@@ -864,8 +870,52 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             let (address, _) = place_address(emitter, function, place);
             writeln!(emitter.text, "    %v{id} =l copy {address}").unwrap();
         }
-        ValueKind::Allocate | ValueKind::CheckNull { .. } => {
-            unreachable!("heap allocation and null checks are rejected before native emission")
+        // Every Fern type has a nonzero size, so a null result means the
+        // allocation failed.
+        ValueKind::Allocate => {
+            let Type::Pointer { target, .. } = &value.ty else {
+                unreachable!("a verified allocation has a pointer type")
+            };
+            writeln!(
+                emitter.text,
+                "    %v{id} =l call $malloc(l {})",
+                emitter.layout.size(target)
+            )
+            .unwrap();
+            writeln!(emitter.text, "    %v{id}_failed =w ceql %v{id}, 0").unwrap();
+            let message = operation_message(
+                value.span.as_ref(),
+                emitter.diagnostics.as_ref(),
+                "out of memory",
+            );
+            emit_conditional_trap(
+                &mut emitter.text,
+                &mut emitter.data,
+                emitter.function,
+                id,
+                "allocation",
+                &format!("%v{id}_failed"),
+                message,
+            );
+        }
+        ValueKind::CheckNull { operand: pointer } => {
+            let pointer = operand(pointer.clone());
+            writeln!(emitter.text, "    %v{id}_null =w ceql {pointer}, 0").unwrap();
+            let message = operation_message(
+                value.span.as_ref(),
+                emitter.diagnostics.as_ref(),
+                "null pointer",
+            );
+            emit_conditional_trap(
+                &mut emitter.text,
+                &mut emitter.data,
+                emitter.function,
+                id,
+                "null",
+                &format!("%v{id}_null"),
+                message,
+            );
+            writeln!(emitter.text, "    %v{id} =l copy {pointer}").unwrap();
         }
     }
 }

@@ -52,7 +52,7 @@
   scalars in bindings, fields, elements, parameters, and results, and emit
   pointer equality.
 
-- [ ] Emit heap allocation, freeing, and null checks in native code
+- [x] Emit heap allocation, freeing, and null checks in native code
 
   Call `malloc` and `free` for `new` and `free`, copy the operand into the new
   target, trap with `out of memory` on a null return, and trap with

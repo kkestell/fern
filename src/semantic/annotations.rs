@@ -3,8 +3,7 @@
 use crate::{
     diagnostic::Diagnostic,
     frontend::syntax::{
-        AnnotationKind, Expression, ExpressionKind, StatementKind, Syntax, TypeAnnotation,
-        find_call,
+        AnnotationKind, Expression, ExpressionKind, Syntax, TypeAnnotation, find_call,
     },
     types::{MAX_AGGREGATE_LAYOUT_BYTES, MAX_STRUCT_CONTAINMENT_DEPTH, Scalar, StructId, Type},
 };
@@ -14,40 +13,6 @@ use la_arena::Idx;
 use num_traits::ToPrimitive;
 
 use super::model::*;
-
-/// Reports a form native emission does not yet support.
-fn heap_not_implemented(span: &std::ops::Range<usize>) -> Diagnostic {
-    Diagnostic::new(
-        span.clone(),
-        "heap allocation and null checks are not yet implemented",
-    )
-}
-
-/// Rejects a program that calls `new`, converts with `*T(p)`, or frees a
-/// pointer, which Fern IR represents but native emission does not yet.
-pub(crate) fn reject_heap_syntax(syntax: &Syntax) -> Result<(), Diagnostic> {
-    let expression = syntax
-        .expressions
-        .values()
-        .find(|expression| {
-            matches!(
-                expression.kind,
-                ExpressionKind::New { .. } | ExpressionKind::PointerConversion { .. }
-            )
-        })
-        .map(|expression| &expression.span);
-    let statement = || {
-        syntax
-            .statements
-            .values()
-            .find(|statement| matches!(statement.kind, StatementKind::Free { .. }))
-            .map(|statement| &statement.span)
-    };
-    match expression.or_else(statement) {
-        Some(span) => Err(heap_not_implemented(span)),
-        None => Ok(()),
-    }
-}
 
 /// Where an annotation's type is used. A pointer's target is only referred
 /// to, so resolving it neither resolves struct fields nor validates its

@@ -106,3 +106,110 @@ fn main() -> void { var s = S { x = 3 }; exit(pass(&s).x); }";
     assert!(qbe.contains("function l $fn0(l %param0) {"), "{qbe}");
     assert_eq!(native_program_status(source), Some(3));
 }
+
+#[test]
+fn native_specification_pointer_examples_exit_as_specified() {
+    for (source, status) in [
+        (
+            "type Point struct { x: int, y: int }
+fn main() -> void {
+    var p = new(Point { x = 1, y = 2 });
+    var n = new(0);
+    p.x = 5;
+    exit(p.x);
+}",
+            5,
+        ),
+        (
+            "fn main() -> void {
+    var p = new([10, 20, 30]);
+    p[1] = 25;
+    var copy = *p;
+    copy[0] = 0;
+    exit(p[0] + p[1]);
+}",
+            35,
+        ),
+        (
+            "type Node struct {
+    value: int,
+    next: nullable *Node,
+}
+
+fn sum(list: nullable *Node) -> int {
+    var total = 0;
+    var cursor = list;
+    for cursor != null {
+        const node = *Node(cursor);
+        total += node.value;
+        cursor = node.next;
+    }
+    return total;
+}
+
+fn main() -> void {
+    const tail = new(Node { value = 2, next = null });
+    const head = new(Node { value = 1, next = tail });
+    exit(sum(head));
+}",
+            3,
+        ),
+        (
+            "fn main() -> void {
+    var a = new(1);
+    var b = new(1);
+    const c = a;
+    if a == b { exit(1); }
+    if a == c { exit(0); }
+    exit(2);
+}",
+            0,
+        ),
+    ] {
+        assert_eq!(native_program_status(source), Some(status), "{source}");
+    }
+}
+
+#[test]
+fn native_free_releases_targets_and_ignores_null() {
+    assert_eq!(
+        native_status("const p = new(1); free(p); var q: nullable *int; free(q); free(q,);"),
+        Some(0)
+    );
+}
+
+#[test]
+fn native_pointer_conversion_traps_on_null() {
+    assert_native_failure(
+        "var q: nullable *int; const p = *int(q); exit(*p);",
+        "null pointer",
+    );
+    assert_eq!(
+        native_status("var q: nullable *int = new(7); const p = *int(q); exit(*p);"),
+        Some(7)
+    );
+}
+
+#[test]
+fn native_new_stores_its_operand_before_it_is_read() {
+    let status = native_program_status(
+        "type Pair struct { first: int, second: int }
+fn seven() -> int { return 7; }
+fn main() -> void {
+    const p = new(Pair { first = seven(), second = 2 });
+    exit(p.first * 10 + p.second);
+}",
+    );
+    assert_eq!(status, Some(72));
+}
+
+#[test]
+fn heap_operations_call_the_c_library() {
+    let qbe = emit(
+        &lowered("fn main() -> void { const p = new(1); free(p); }"),
+        None,
+    );
+    for expected in ["call $malloc(l 8)", "b \"out of memory\"", "call $free(l "] {
+        assert!(qbe.contains(expected), "{expected} missing from:\n{qbe}");
+    }
+}

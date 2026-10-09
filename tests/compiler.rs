@@ -40,6 +40,7 @@ fn native_programs_exit_zero() {
         "fn helper() -> void { const value = 1; } fn main() -> void {}",
         "fn f(p: *int) -> void {} fn main() -> void {}",
         "fn main() -> void { var x = 1; const p = &x; }",
+        "fn main() -> void { const p = new(1); free(p); }",
         "\t\r\n\x0b\x0c /* 🌿 /* nested */ */ fn/*a*/main( ) -> void { // body\n } // eof",
     ] {
         let (dir, input, output) = fixture(source);
@@ -176,18 +177,6 @@ fn source_failures_preserve_output() {
         (
             "fn consume(values: [9223372036854775807]int) -> void {} fn main() -> void {}",
             "aggregate layout exceeds compiler limit of 1 PiB",
-        ),
-        (
-            "fn main() -> void { const p = new(1); }",
-            "heap allocation and null checks are not yet implemented",
-        ),
-        (
-            "fn main() -> void { var x = 1; free(&x); }",
-            "heap allocation and null checks are not yet implemented",
-        ),
-        (
-            "fn main() -> void { var q: nullable *int; const p = *int(q); }",
-            "heap allocation and null checks are not yet implemented",
         ),
         (
             "fn main() -> void { { var x = 1; } x = 2; }",
@@ -735,6 +724,20 @@ fn exit_inside_a_called_function_does_not_return_to_its_caller() {
     );
     fern::compile(&input, &output).unwrap();
     assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+}
+
+#[test]
+fn a_null_pointer_conversion_reports_its_source_location() {
+    let source = "fn main() -> void {\n    var q: nullable *int;\n    const p = *int(q);\n    exit(*p);\n}\n";
+    let (dir, _, output) = fixture(source);
+    let input = dir.path().join("null.fern");
+    fs::write(&input, source).unwrap();
+    fern::compile(&input, &output).unwrap();
+    let result = Command::new(output).output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("null pointer"), "{stderr}");
+    assert!(stderr.contains("null.fern:3:"), "{stderr}");
 }
 
 #[test]

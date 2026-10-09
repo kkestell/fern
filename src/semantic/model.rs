@@ -186,6 +186,16 @@ pub(crate) enum ExpressionValue {
     Dereference {
         operand: Idx<Expression>,
     },
+    /// `null`, typed by its context.
+    Null,
+    /// `new(e)`, a pointer to a new heap target holding the operand's value.
+    New {
+        operand: Idx<Expression>,
+    },
+    /// `*T(p)`, the pointer `p` holds, which traps when `p` is `null`.
+    PointerConversion {
+        operand: Idx<Expression>,
+    },
 }
 
 #[derive(Debug)]

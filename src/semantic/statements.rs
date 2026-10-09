@@ -12,7 +12,7 @@ use la_arena::Idx;
 use lasso::Spur;
 use std::collections::HashMap;
 
-use super::{annotations::pointers_not_implemented, expressions::LocationUse, model::*};
+use super::{expressions::LocationUse, model::*};
 
 impl CheckedProgram<'_> {
     pub(super) fn check_body(
@@ -104,9 +104,17 @@ impl CheckedProgram<'_> {
                 Ok(())
             }
             StatementKind::Return { value } => self.check_return(statement, result, *value, scopes),
-            StatementKind::Free { .. } => Err(pointers_not_implemented(
-                &self.syntax.statements[statement].span,
-            )),
+            StatementKind::Free { operand } => {
+                let checked = self.infer_expression(*operand, scopes)?;
+                if !matches!(checked.ty, Type::Pointer { .. }) {
+                    return Err(Diagnostic::new(
+                        self.syntax.expressions[*operand].span.clone(),
+                        format!("`free` requires a pointer operand, found `{}`", checked.ty),
+                    ));
+                }
+                self.expressions.insert(*operand, checked);
+                Ok(())
+            }
         }
     }
 

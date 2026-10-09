@@ -121,7 +121,6 @@ pub(crate) enum StatementKind {
     },
     /// `free(p);`, which ends the life of a heap target.
     Free {
-        #[cfg_attr(not(test), expect(dead_code, reason = "preserved in syntax snapshots"))]
         operand: Idx<Expression>,
     },
     Call {

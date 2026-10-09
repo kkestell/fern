@@ -71,7 +71,10 @@ fn nested_scopes_resolve_binding_identity_and_mutability() {
             | ExpressionValue::Field { .. }
             | ExpressionValue::Call { .. }
             | ExpressionValue::AddressOf
-            | ExpressionValue::Dereference { .. } => None,
+            | ExpressionValue::Dereference { .. }
+            | ExpressionValue::Null
+            | ExpressionValue::New { .. }
+            | ExpressionValue::PointerConversion { .. } => None,
         })
         .collect();
     assert_eq!(

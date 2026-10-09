@@ -1313,26 +1313,6 @@ fn a_struct_value_passes_through_bindings_calls_returns_and_iteration() {
 }
 
 #[test]
-fn pointer_syntax_reports_that_pointers_are_not_yet_implemented() {
-    let message = "pointers are not yet implemented";
-    for (body, offending) in [
-        ("var x = 1; var p = null;", "null"),
-        ("const p = new(1);", "new(1)"),
-        ("var x = 1; const p = *int(x);", "*int(x)"),
-        ("var x = 1; free(x);", "free(x);"),
-        ("*new(0) = 0;", "new(0)"),
-        ("var x = 1; for *&x = 0; true; *new(1) = 1 {}", "new(1)"),
-    ] {
-        rejects(body, offending, message);
-    }
-    rejects_source(
-        "const p: *int = new(0); fn main() -> void {}",
-        "new(0)",
-        message,
-    );
-}
-
-#[test]
 fn a_fill_cannot_omit_a_field_without_a_zero_value() {
     rejects_source(
         "type Holder struct { value: int, p: *int }
@@ -1524,5 +1504,311 @@ fn reading_through_a_pointer_requires_a_non_nullable_pointer_to_the_right_type()
             &format!("{POINTER_PRELUDE}fn main() -> void {{ {body} }}"),
             message,
         );
+    }
+}
+
+#[test]
+fn new_points_at_a_copy_of_its_operand() {
+    let int = || value_type(Scalar::Int);
+    let source = format!(
+        "{POINTER_PRELUDE}fn main() -> void {{
+    var x: u8 = 1;
+    const a = new(1);
+    const b = new(1.5);
+    const c = new(true);
+    const d = new(x);
+    const e = new(S {{ x = 1, a = [1, 2, 3] }});
+    const f = new([1, 2]);
+    const g = new(new(0));
+    const h = new(1,);
+}}"
+    );
+    let types = checked_bindings(&source)
+        .into_iter()
+        .skip(2)
+        .map(|(ty, _)| ty)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        [
+            pointer_type(false, int()),
+            pointer_type(false, value_type(Scalar::F64)),
+            pointer_type(false, value_type(Scalar::Bool)),
+            pointer_type(false, value_type(Scalar::U8)),
+            pointer_type(false, struct_type(0, "S")),
+            pointer_type(false, array_type(2, int())),
+            pointer_type(false, pointer_type(false, int())),
+            pointer_type(false, int()),
+        ]
+    );
+    for (marked, message) in [
+        (
+            "fn main() -> void { var p: *u8 = «new(1)»; }",
+            "cannot implicitly convert `*int` to `*u8`",
+        ),
+        (
+            "fn main() -> void { const p = new(«null»); }",
+            "`null` requires a nullable pointer type from context",
+        ),
+        (
+            "fn main() -> void { const p = new([0«...»]); }",
+            "a fill requires a length from context",
+        ),
+    ] {
+        rejects_root(marked, message);
+    }
+}
+
+/// Declarations the nullable-pointer tests share: a `Node` type that links
+/// through a nullable pointer, and functions that take and return one.
+const NULLABLE_PRELUDE: &str = "type Node struct { value: int, next: nullable *Node }
+fn take(q: nullable *int) -> nullable *int { return null; }
+fn widen(p: *int) -> nullable *int { return p; }
+";
+
+/// A `main` that declares `p: *int`, `q: nullable *int`, and `r: *u8` before
+/// `body`.
+fn nullable_body(body: &str) -> String {
+    format!(
+        "{NULLABLE_PRELUDE}fn main() -> void {{ var x = 1; var y: u8 = 1; \
+         const p = &x; var q: nullable *int = null; const r = &y; {body} }}"
+    )
+}
+
+#[test]
+fn null_takes_a_nullable_pointer_type_from_context() {
+    accepts_source(&nullable_body(
+        "var a: nullable *int = (null);
+         q = null;
+         q = take(null);
+         var n = Node { value = 1, next = null };
+         var b: [2]nullable *int = [null, q];
+         var c = [q, null];
+         var d = [null, q];
+         if q == null || null != q { exit(1); }",
+    ));
+    let types = checked_bindings(&nullable_body("var c = [q, null]; var d = [null, q];"))
+        .into_iter()
+        .rev()
+        .take(2)
+        .map(|(ty, _)| ty)
+        .collect::<Vec<_>>();
+    let nullable_int = pointer_type(true, value_type(Scalar::Int));
+    assert_eq!(
+        types,
+        [
+            array_type(2, nullable_int.clone()),
+            array_type(2, nullable_int.clone()),
+        ]
+    );
+    assert_eq!(
+        checked_bindings("const q: nullable *int = null; fn main() -> void {}"),
+        [(nullable_int, Some(Constant::Null))]
+    );
+    assert_eq!(
+        checked_bindings(&format!(
+            "{NULLABLE_PRELUDE}const n = Node {{ value = 1, next = null }}; fn main() -> void {{}}"
+        ))[0]
+            .1,
+        Some(Constant::Struct(vec![
+            Constant::Integer(BigInt::from(1)),
+            Constant::Null,
+        ]))
+    );
+    let syntax =
+        parse("const q: nullable *int = null; const t = q == null; fn main() -> void {}").unwrap();
+    let checked = check_root(&syntax).unwrap();
+    let (_, t) = checked.bindings.iter().nth(1).unwrap();
+    assert_eq!(t.constant, folded(1));
+}
+
+#[test]
+fn null_without_a_nullable_pointer_context_is_rejected() {
+    let no_context = "`null` requires a nullable pointer type from context";
+    for (body, message) in [
+        ("var a = «null»;", no_context),
+        ("var a = [«null», null];", no_context),
+        ("var a = [(«null»), null];", no_context),
+        (
+            "var a: *int = «null»;",
+            "cannot implicitly convert `null` to `*int`",
+        ),
+        (
+            "var a: int = «null»;",
+            "cannot implicitly convert `null` to `int`",
+        ),
+        ("if «null» == null { exit(1); }", no_context),
+        (
+            "if p == «null» { exit(1); }",
+            "cannot implicitly convert `null` to `*int`",
+        ),
+        ("exit(-«null»);", no_context),
+    ] {
+        rejects_root(&nullable_body(body), message);
+    }
+}
+
+#[test]
+fn a_pointer_widens_to_its_nullable_form() {
+    accepts_source(&nullable_body(
+        "var a: nullable *int = p;
+         q = p;
+         q = take(p);
+         var n = Node { value = 1, next = new(Node { value = 2, next = null }) };
+         var b: [1]nullable *int = [p];
+         q = widen(p);",
+    ));
+    let types = checked_bindings(&nullable_body("var a: nullable *int = p;"));
+    assert_eq!(
+        types.last().unwrap().0,
+        pointer_type(true, value_type(Scalar::Int))
+    );
+    for (body, message) in [
+        (
+            "var a: *int = «q»;",
+            "cannot implicitly convert `nullable *int` to `*int`",
+        ),
+        (
+            "var a: [1]*int = [p]; var b: [1]nullable *int = «a»;",
+            "cannot implicitly convert `[1]*int` to `[1]nullable *int`",
+        ),
+    ] {
+        rejects_root(&nullable_body(body), message);
+    }
+}
+
+#[test]
+fn pointers_compare_only_for_equality() {
+    accepts_source(&nullable_body(
+        "if p == q || q == p || p == p || q != q { exit(1); }",
+    ));
+    for (body, message) in [
+        (
+            "if p «==» r { exit(1); }",
+            "comparison operands have different types `*int` and `*u8`",
+        ),
+        (
+            "if p «<» p { exit(1); }",
+            "only `==` and `!=` are defined on `*int`",
+        ),
+        ("exit(p «+» p);", "`+` requires numeric operands"),
+        ("exit(p «&» p);", "integer `&` requires integer operands"),
+        ("exit(«-»p);", "unary `-` requires a numeric operand"),
+        ("exit(«int(p)»);", "cannot convert `*int` to `int`"),
+    ] {
+        rejects_root(&nullable_body(body), message);
+    }
+}
+
+#[test]
+fn a_pointer_conversion_yields_the_pointer_a_nullable_pointer_holds() {
+    let int = || value_type(Scalar::Int);
+    let types = checked_bindings(&nullable_body(
+        "var qq: nullable **int = null; const a = *int(q); const b = *int(p); const c = **int(qq);",
+    ))
+    .into_iter()
+    .rev()
+    .take(3)
+    .map(|(ty, _)| ty)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        types,
+        [
+            pointer_type(false, pointer_type(false, int())),
+            pointer_type(false, int()),
+            pointer_type(false, int()),
+        ]
+    );
+    for (body, message) in [
+        (
+            "const a = «*u8(q)»;",
+            "cannot convert `nullable *int` to `*u8`",
+        ),
+        ("const a = «*int(5)»;", "cannot convert `int` to `*int`"),
+        (
+            "const a = «*int(null)»;",
+            "constant conversion to `*int` would trap",
+        ),
+        (
+            "const c: nullable *int; const a = «*int(c)»;",
+            "constant conversion to `*int` would trap",
+        ),
+    ] {
+        rejects_root(&nullable_body(body), message);
+    }
+}
+
+#[test]
+fn a_nullable_pointer_is_not_indexed_or_measured() {
+    for (body, message) in [
+        (
+            "var n: nullable *[2]int; exit(«n»[0]);",
+            "cannot index `nullable *[2]int`",
+        ),
+        (
+            "var n: nullable *[2]int; exit(len(«n»));",
+            "`len` requires an array operand, found `nullable *[2]int`",
+        ),
+    ] {
+        rejects_root(&nullable_body(body), message);
+    }
+}
+
+#[test]
+fn the_specification_pointer_examples_check() {
+    for source in [
+        "type Point struct {
+    x: int,
+    y: int,
+}
+
+fn main() -> void {
+    var p = new(Point { x = 1, y = 2 });
+    var n = new(0);
+    p.x = 5;
+    exit(p.x);
+}",
+        "fn main() -> void {
+    var p = new([10, 20, 30]);
+    p[1] = 25;
+    var copy = *p;
+    copy[0] = 0;
+    exit(p[0] + p[1]);
+}",
+        "type Node struct {
+    value: int,
+    next: nullable *Node,
+}
+
+fn sum(list: nullable *Node) -> int {
+    var total = 0;
+    var cursor = list;
+    for cursor != null {
+        const node = *Node(cursor);
+        total += node.value;
+        cursor = node.next;
+    }
+    return total;
+}
+
+fn main() -> void {
+    const tail = new(Node { value = 2, next = null });
+    const head = new(Node { value = 1, next = tail });
+    exit(sum(head));
+}",
+        "fn main() -> void {
+    var a = new(1);
+    var b = new(1);
+    const c = a;
+    if a == b {
+        exit(1);
+    }
+    if a == c {
+        exit(0);
+    }
+    exit(2);
+}",
+    ] {
+        accepts_source(source);
     }
 }

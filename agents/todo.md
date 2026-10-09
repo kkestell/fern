@@ -27,7 +27,7 @@
   non-nullable pointers. Index and field steps in an `&` operand check as an
   assignment target does.
 
-- [ ] Check `new`, `free`, nullable pointers, and pointer comparison
+- [x] Check `new`, `free`, nullable pointers, and pointer comparison
 
   Type `new(e)` as a `*T`, giving an untyped constant its default type. Check
   `free(p);` against pointer operands. Type `null` only where context supplies

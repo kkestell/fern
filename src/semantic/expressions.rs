@@ -2,7 +2,7 @@
 
 use crate::{
     diagnostic::Diagnostic,
-    frontend::syntax::{Expression, ExpressionKind, Syntax, find_call},
+    frontend::syntax::{Expression, ExpressionKind, Syntax, TypeAnnotation, find_call},
     types::{BinaryOperator, ComparisonOperator, LogicalOperator, Scalar, Type, UnaryOperator},
 };
 use la_arena::Idx;
@@ -10,11 +10,7 @@ use lasso::Spur;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use super::{
-    annotations::{check_element_count, pointers_not_implemented},
-    constants::*,
-    model::*,
-};
+use super::{annotations::check_element_count, constants::*, model::*};
 
 /// Reports an expression used where a location is required.
 fn not_a_location(span: &std::ops::Range<usize>, use_: LocationUse) -> Diagnostic {
@@ -42,6 +38,14 @@ impl LocationUse {
             Self::Address => "take the address of",
         }
     }
+}
+
+/// Reports a `null` whose context supplies no type.
+fn null_without_context(span: &std::ops::Range<usize>) -> Diagnostic {
+    Diagnostic::new(
+        span.clone(),
+        "`null` requires a nullable pointer type from context",
+    )
 }
 
 /// Reports a field name the struct does not declare.
@@ -76,6 +80,10 @@ impl CheckedProgram<'_> {
         ) {
             return self.check_array_literal(id, scopes, destination);
         }
+        // `null` has no type of its own, so it takes the destination's.
+        if self.is_null(id) {
+            return self.check_null(id, destination.as_ref());
+        }
         let mut checked = self.infer_expression(id, scopes)?;
         let mismatch = |checked: &CheckedExpression, destination: &Type| {
             Diagnostic::new(
@@ -95,9 +103,129 @@ impl CheckedProgram<'_> {
         } else if let Some(destination) = destination
             && checked.ty != destination
         {
-            return Err(mismatch(&checked, &destination));
+            // A `*T` and a `nullable *T` share one representation, so a
+            // pointer takes the nullable type its context expects.
+            if !checked.ty.widens_to(&destination) {
+                return Err(mismatch(&checked, &destination));
+            }
+            checked.ty = destination;
         }
         Ok(checked)
+    }
+
+    /// Whether this expression is `null`, in any grouping.
+    fn is_null(&self, id: Idx<Expression>) -> bool {
+        match &self.syntax.expressions[id].kind {
+            ExpressionKind::Null => true,
+            ExpressionKind::Grouping { expression } => self.is_null(*expression),
+            _ => false,
+        }
+    }
+
+    /// Checks `null`, in any grouping, against the type its context supplies,
+    /// which must be a nullable pointer type.
+    fn check_null(
+        &mut self,
+        id: Idx<Expression>,
+        destination: Option<&Type>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let span = &self.syntax.expressions[id].span;
+        match &self.syntax.expressions[id].kind {
+            ExpressionKind::Null => match destination {
+                Some(ty @ Type::Pointer { nullable: true, .. }) => Ok(CheckedExpression {
+                    ty: ty.clone(),
+                    untyped: false,
+                    value: ExpressionValue::Null,
+                    constant: Some(Constant::Null),
+                }),
+                Some(destination) => Err(Diagnostic::new(
+                    span.clone(),
+                    format!("cannot implicitly convert `null` to `{destination}`"),
+                )),
+                None => Err(null_without_context(span)),
+            },
+            ExpressionKind::Grouping { expression } => {
+                let inner = *expression;
+                let checked = self.check_null(inner, destination)?;
+                let result = CheckedExpression {
+                    ty: checked.ty.clone(),
+                    untyped: false,
+                    value: ExpressionValue::Grouping { expression: inner },
+                    constant: checked.constant.clone(),
+                };
+                self.record_operand(inner, checked, true);
+                Ok(result)
+            }
+            _ => unreachable!("only `null` and its groupings are checked as `null`"),
+        }
+    }
+
+    /// `new(e)`, a pointer to a heap copy of the operand, which takes its
+    /// default type when it is an untyped constant.
+    fn infer_new(
+        &mut self,
+        operand: Idx<Expression>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let checked_operand = self.check_expression(operand, scopes, None)?;
+        let ty = Type::Pointer {
+            nullable: false,
+            target: Box::new(checked_operand.ty.clone()),
+        };
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::New { operand },
+            constant: None,
+        })
+    }
+
+    /// `*T(p)`, which yields the `*T` a `*T` or `nullable *T` holds. A
+    /// constant `null` operand would trap, so it is an error.
+    fn infer_pointer_conversion(
+        &mut self,
+        destination: Idx<TypeAnnotation>,
+        operand: Idx<Expression>,
+        span: &std::ops::Range<usize>,
+        scopes: &ScopeStack<'_>,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        let ty = self.resolve_annotation(destination, scopes, None)?;
+        let Type::Pointer {
+            nullable: false,
+            target,
+        } = &ty
+        else {
+            unreachable!("a pointer conversion's destination is written `*T`")
+        };
+        let nullable = Type::Pointer {
+            nullable: true,
+            target: target.clone(),
+        };
+        let checked_operand = if self.is_null(operand) {
+            self.check_null(operand, Some(&nullable))?
+        } else {
+            self.infer_expression(operand, scopes)?
+        };
+        if checked_operand.ty != ty && checked_operand.ty != nullable {
+            return Err(Diagnostic::new(
+                span.clone(),
+                format!("cannot convert `{}` to `{ty}`", checked_operand.ty),
+            ));
+        }
+        if checked_operand.constant == Some(Constant::Null) {
+            return Err(Diagnostic::new(
+                span.clone(),
+                format!("constant conversion to `{ty}` would trap"),
+            ));
+        }
+        self.record_operand(operand, checked_operand, false);
+        Ok(CheckedExpression {
+            ty,
+            untyped: false,
+            value: ExpressionValue::PointerConversion { operand },
+            constant: None,
+        })
     }
 
     pub(super) fn infer_expression(
@@ -179,11 +307,12 @@ impl CheckedProgram<'_> {
                 self.infer_address_of(id, *operand, scopes)
             }
             ExpressionKind::Dereference { operand, .. } => self.infer_dereference(*operand, scopes),
-            ExpressionKind::Null
-            | ExpressionKind::New { .. }
-            | ExpressionKind::PointerConversion { .. } => {
-                Err(pointers_not_implemented(&expression.span))
-            }
+            ExpressionKind::Null => Err(null_without_context(&expression.span)),
+            ExpressionKind::New { operand } => self.infer_new(*operand, scopes),
+            ExpressionKind::PointerConversion {
+                destination,
+                operand,
+            } => self.infer_pointer_conversion(*destination, *operand, &expression.span, scopes),
             ExpressionKind::Call(call) => {
                 let (function, result) = self.check_call(call, scopes, true)?;
                 Ok(CheckedExpression {
@@ -296,14 +425,24 @@ impl CheckedProgram<'_> {
         scopes: &ScopeStack<'_>,
     ) -> Result<Type, Diagnostic> {
         let mut default = None;
+        // `null` takes the type the other elements give.
         for &element in elements {
+            if self.is_null(element) {
+                continue;
+            }
             let checked = self.infer_expression(element, scopes)?;
             if !checked.untyped {
                 return Ok(checked.ty);
             }
             default.get_or_insert(checked.ty);
         }
-        Ok(default.expect("an array literal has at least one element"))
+        match default {
+            Some(default) => Ok(default),
+            // Every element is `null`, which has no type of its own.
+            None => Err(self
+                .check_null(elements[0], None)
+                .expect_err("`null` without a destination is rejected")),
+        }
     }
 
     /// Checks one `[ … ]` step and gives the element type it reaches. The
@@ -856,8 +995,26 @@ impl CheckedProgram<'_> {
         right: Idx<Expression>,
         scopes: &ScopeStack<'_>,
     ) -> Result<CheckedExpression, Diagnostic> {
-        let mut checked_left = self.infer_expression(left, scopes)?;
-        let mut checked_right = self.infer_expression(right, scopes)?;
+        // A `null` operand takes the other operand's type.
+        let (mut checked_left, mut checked_right) = match (self.is_null(left), self.is_null(right))
+        {
+            (true, false) => {
+                let checked_right = self.infer_expression(right, scopes)?;
+                (
+                    self.check_null(left, Some(&checked_right.ty))?,
+                    checked_right,
+                )
+            }
+            (false, true) => {
+                let checked_left = self.infer_expression(left, scopes)?;
+                let checked_right = self.check_null(right, Some(&checked_left.ty))?;
+                (checked_left, checked_right)
+            }
+            _ => (
+                self.infer_expression(left, scopes)?,
+                self.infer_expression(right, scopes)?,
+            ),
+        };
         self.unify_comparison(
             operator,
             operator_span,
@@ -913,6 +1070,15 @@ impl CheckedProgram<'_> {
                 }
                 _ => left_type == right_type,
             },
+            // A `*T` compares with a `nullable *T` as a `nullable *T`.
+            _ if left.ty.widens_to(&right.ty) => {
+                left.ty = right.ty.clone();
+                true
+            }
+            _ if right.ty.widens_to(&left.ty) => {
+                right.ty = left.ty.clone();
+                true
+            }
             _ => left.ty == right.ty,
         };
         if !unified {

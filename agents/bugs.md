@@ -16,3 +16,18 @@ Confirmed on macOS arm64: `main` passing 18,000 distinct elements of a global
 empty stderr on a 128 KiB stack. The same executable reports `stack overflow`
 on a 256 KiB stack and exits successfully on an 8 MiB stack. See
 `agents/reviews/2026-10-08-003-trap-on-stack-overflow.md` for the review.
+
+## A literal mixing `*T` and `nullable *T` checks only in one order
+
+With `p: *int` and `q: nullable *int`, an array literal with no context checks
+as `[2]nullable *int` when written `[q, p]` but reports
+`` cannot implicitly convert `nullable *int` to `*int` `` when written
+`[p, q]`. `common_element_type` in `src/semantic/expressions.rs` takes the
+first typed element's type, and the other elements are checked against it, so
+widening applies only when the nullable element comes first.
+
+`docs/spec.md#array-literals` requires every element of a literal with no
+context to have one common type and does not say whether `*T` and
+`nullable *T` share one. The fix needs that rule settled first. See
+`agents/reviews/2026-10-08-007-check-new-free-nullable-pointers-and-pointer-comparison.md`
+for the review.

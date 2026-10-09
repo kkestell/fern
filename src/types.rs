@@ -228,6 +228,24 @@ impl Type {
         }
     }
 
+    /// Whether a value of this type is valid where `destination` is expected
+    /// without being of that type: a `*T` where a `nullable *T` is expected.
+    pub(crate) fn widens_to(&self, destination: &Self) -> bool {
+        match (self, destination) {
+            (
+                Self::Pointer {
+                    nullable: false,
+                    target,
+                },
+                Self::Pointer {
+                    nullable: true,
+                    target: destination,
+                },
+            ) => target == destination,
+            _ => false,
+        }
+    }
+
     /// The type reached by following every non-nullable pointer, which is
     /// what field selection, indexing, and `len` act on. A nullable pointer
     /// is not followed.
@@ -451,6 +469,17 @@ mod tests {
             pointer(false, nullable.clone()).through_pointers(),
             &nullable
         );
+    }
+
+    #[test]
+    fn only_a_pointer_widens_to_its_nullable_form() {
+        let int = || Type::Scalar(Scalar::Int);
+        assert!(pointer(false, int()).widens_to(&pointer(true, int())));
+        assert!(!pointer(false, int()).widens_to(&pointer(true, Scalar::U8.into())));
+        assert!(!pointer(false, int()).widens_to(&pointer(false, int())));
+        assert!(!pointer(false, int()).widens_to(&pointer(true, pointer(true, int()))));
+        assert!(!pointer(true, int()).widens_to(&pointer(false, int())));
+        assert!(!int().widens_to(&int()));
     }
 
     #[test]

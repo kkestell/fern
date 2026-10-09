@@ -1172,7 +1172,11 @@ fn lower_folded_effects(
         | ExpressionValue::Call { .. }
         | ExpressionValue::Index { .. }
         | ExpressionValue::Field { .. } => {}
-        ExpressionValue::AddressOf | ExpressionValue::Dereference { .. } => {
+        ExpressionValue::AddressOf
+        | ExpressionValue::Dereference { .. }
+        | ExpressionValue::Null
+        | ExpressionValue::New { .. }
+        | ExpressionValue::PointerConversion { .. } => {
             unreachable!("pointer types are rejected before lowering")
         }
     }
@@ -1216,7 +1220,11 @@ fn lower_flow_operand(
             let place = field_place(checked, id, bindings, builder);
             load_place(builder, place, ty)
         }
-        ExpressionValue::AddressOf | ExpressionValue::Dereference { .. } => {
+        ExpressionValue::AddressOf
+        | ExpressionValue::Dereference { .. }
+        | ExpressionValue::Null
+        | ExpressionValue::New { .. }
+        | ExpressionValue::PointerConversion { .. } => {
             unreachable!("pointer types are rejected before lowering")
         }
         ExpressionValue::Reference(binding) => load_place(builder, bindings[binding].clone(), ty),

@@ -962,3 +962,21 @@ fn copy(s: S) -> S { return s; }
         rejects_root(&format!("{prelude}fn main() -> void {{ {body} }}"), message);
     }
 }
+
+#[test]
+fn free_takes_a_pointer() {
+    accepts(
+        "var x = 1; const p = &x; var q: nullable *int = null;
+         free(p); free(q,); free(new(1));",
+    );
+    rejects(
+        "free(1);",
+        "1",
+        "`free` requires a pointer operand, found `int`",
+    );
+    rejects(
+        "free(null);",
+        "null",
+        "`null` requires a nullable pointer type from context",
+    );
+}

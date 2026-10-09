@@ -2,9 +2,10 @@
 
 - Small functions over structs are slow
 
-  Every struct parameter is copied into a stack slot on entry, and every struct
-  local or field read into a local is copied with `blit`, so its fields are
-  loaded from memory rather than kept in registers. No call is inlined. In
-  `examples/raytrace.fern`, moving the box intersection from one written-out
-  function into `clip`, `local_point`, and `local_direction` raised the render
-  from 12.2 to 16.3 CPU seconds.
+  No call is inlined, and an aggregate result returns through memory the
+  caller provides. An aggregate with more than eight scalars and pointers,
+  such as `Hit` in `examples/raytrace.fern`, is still copied with `blit` or
+  `memcpy`, which keeps it in a stack slot. In `examples/raytrace.fern`,
+  moving the box intersection from one written-out function into `clip`,
+  `local_point`, and `local_direction` raised the render from 12.2 to 16.3 CPU
+  seconds; copying small aggregates field by field brought it to 13.4.

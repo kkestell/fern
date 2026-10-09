@@ -103,6 +103,28 @@ fn parameters_are_addressable_mutable_copies() {
  }"#);
 }
 #[test]
+fn field_wise_copies_keep_every_width() {
+    run(
+        r#"type S struct {flag:bool,value:f64,small:i8,wide:u16,single:f32,
+ target:*i32,pair:[2]i16}
+ type Holder struct {s:S}
+ fn same(s:S,n:*i32)->bool {
+ return s.flag && s.value==-2.5 && s.small==-7 && s.wide==65535 && s.single==0.25
+ && s.target==n && *s.target==-40000 && s.pair[0]==-300 && s.pair[1]==300;
+ }
+ fn pass(s:S)->S {return s;}
+ fn main()->void {
+ var n:i32=-40000;
+ var s=S {flag=true,value=-2.5,small=-7,wide=65535,single=0.25,target=&n,pair=[-300,300]};
+ if !same(s,&n) {exit(1);}
+ var returned=pass(s);if !same(returned,&n) {exit(2);}
+ var assigned=pass(returned);assigned.flag=false;assigned=s;if !same(assigned,&n) {exit(3);}
+ var p=&s;var loaded=*p;if !same(loaded,&n) {exit(4);}
+ var holder=Holder {s=s};var field=holder.s;if !same(field,&n) || returned!=field {exit(5);}
+ }"#,
+    );
+}
+#[test]
 fn aggregate_equality_uses_values_and_ieee_rules() {
     run(r#"type S struct {byte:u8,value:f64}
  fn main()->void {

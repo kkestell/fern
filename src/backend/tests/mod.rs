@@ -54,3 +54,23 @@ fn core_qbe_snapshot() {
         )
     );
 }
+
+#[test]
+fn small_aggregates_copy_field_by_field() {
+    let qbe = emitted(
+        "type V struct {x:f64,y:f64,z:f64} type B struct {b:[16]u8} type L struct {a:[9]f64}
+         fn v(p:V)->f64 {return p.y;} fn b(p:B)->u8 {return p.b[0];} fn l(p:L)->f64 {return p.a[0];}
+         fn call(pv:*V,pb:*B,pl:*L)->void {var x=v(*pv);var y=b(*pb);var z=l(*pl);}
+         fn main()->void {}",
+    );
+    let function = |name: &str| {
+        let start = qbe.find(&format!("${name}(")).unwrap();
+        &qbe[start..start + qbe[start..].find("\n}").unwrap()]
+    };
+    let small = function(".fern.fn0");
+    assert!(small.contains("=d loadd %access0_from\n    stored %access0_value, %access0_to"));
+    assert!(small.contains("%access2_from =l add %param0, 16"));
+    assert!(!small.contains("blit"));
+    assert!(function(".fern.fn1").contains("blit %param0, %local0, 16"));
+    assert!(function(".fern.fn2").contains("call $memcpy(l %local0, l %param0, l 72)"));
+}

@@ -1,6 +1,8 @@
 //! QBE program, function, block, instruction, place, aggregate, and data emission.
 //!
-//! Aggregates travel through addresses and are copied with blit or memcpy.
+//! Aggregates travel through addresses. A small aggregate is copied field by
+//! field so QBE can keep its fields in registers; a larger one is copied with
+//! blit or memcpy.
 //! Callees copy aggregate arguments into their local parameter storage.
 
 use crate::{
@@ -30,13 +32,41 @@ fn allocation(layout: &Layout<'_>, ty: &Type) -> &'static str {
 /// does not grow with the copy.
 const MAX_INLINE_COPY_BYTES: u64 = 64;
 
-/// Copies `size` bytes from `source` to `destination`, which do not overlap.
-fn emit_copy(text: &mut String, source: &str, destination: &str, size: u64) {
+/// A copy of at most this many scalars and pointers loads and stores each one
+/// with its own type, which lets QBE forward each store to the loads of its
+/// field and keep the fields in registers. A `blit`'s word copies do not
+/// forward to typed loads. Eight slots take no more code than the eight word
+/// copies of the largest `blit`.
+const MAX_FIELD_COPY_SLOTS: usize = 8;
+
+/// Copies a value of type `ty` from `source` to `destination`, which do not
+/// overlap. A field-wise copy skips padding.
+fn emit_copy(emitter: &mut Emitter<'_>, source: &str, destination: &str, ty: &Type) {
+    let slots = emitter.layout.value_slots(ty);
+    if slots.len() <= MAX_FIELD_COPY_SLOTS {
+        for (offset, slot) in slots {
+            let access = emitter.accesses;
+            emitter.accesses += 1;
+            writeln!(
+                emitter.text,
+                "    %access{access}_from =l add {source}, {offset}\n    \
+                 %access{access}_to =l add {destination}, {offset}\n    \
+                 %access{access}_value ={} {} %access{access}_from\n    \
+                 store{} %access{access}_value, %access{access}_to",
+                value_class(&slot),
+                load_operation(&slot),
+                memory_class(&slot)
+            )
+            .unwrap();
+        }
+        return;
+    }
+    let size = emitter.layout.size(ty);
     if size <= MAX_INLINE_COPY_BYTES {
-        writeln!(text, "    blit {source}, {destination}, {size}")
+        writeln!(emitter.text, "    blit {source}, {destination}, {size}")
     } else {
         writeln!(
-            text,
+            emitter.text,
             "    call $memcpy(l {destination}, l {source}, l {size})"
         )
     }
@@ -424,7 +454,7 @@ fn emit_instruction(emitter: &mut Emitter<'_>, function: &Function, instruction:
 /// address of its storage, so storing one copies it.
 fn emit_store(emitter: &mut Emitter<'_>, source: &str, address: &str, ty: &Type) {
     if ty.is_aggregate() {
-        emit_copy(&mut emitter.text, source, address, emitter.layout.size(ty));
+        emit_copy(emitter, source, address, ty);
     } else {
         writeln!(
             emitter.text,
@@ -508,12 +538,7 @@ fn emit_call(
             abi_class(ty)
         )
         .unwrap();
-        emit_copy(
-            &mut emitter.text,
-            &format!("%call{call}"),
-            storage,
-            emitter.layout.size(ty),
-        );
+        emit_copy(emitter, &format!("%call{call}"), storage, ty);
         if let Some(ValueId(id)) = result {
             writeln!(emitter.text, "    %v{id} =l copy {storage}").unwrap();
         }
@@ -573,8 +598,7 @@ fn emit_terminator(
                     // `%result`.
                     let written = matches!(value, Operand::Value(id) if emitter.returned_in_place.contains(id));
                     if !written {
-                        let size = emitter.layout.size(ty);
-                        emit_copy(&mut emitter.text, &operand(value.clone()), "%result", size);
+                        emit_copy(emitter, &operand(value.clone()), "%result", ty);
                     }
                     emitter.text.push_str("    ret\n");
                 }
@@ -646,13 +670,7 @@ fn emit_value(emitter: &mut Emitter<'_>, function: &Function, id: usize) {
             if emitter.returned_in_place.contains(&ValueId(id)) {
                 writeln!(emitter.text, "    %v{id} =l copy {address}")
             } else if value.ty.is_aggregate() {
-                let size = emitter.layout.size(&value.ty);
-                emit_copy(
-                    &mut emitter.text,
-                    &address,
-                    &format!("%v{id}_storage"),
-                    size,
-                );
+                emit_copy(emitter, &address, &format!("%v{id}_storage"), &value.ty);
                 writeln!(emitter.text, "    %v{id} =l copy %v{id}_storage")
             } else {
                 let class = value_class(&value.ty);

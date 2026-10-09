@@ -101,26 +101,31 @@ all fields and elements of aggregates. Pointer copies refer to the same target.
 ```fern
 var count = 0;
 var bytes: [3]u8 = [10, 20, 30];
+var buffer: [64]u8;
 const capacity: int = 16;
 ```
 
-Every binding requires an initializer. `var` creates a mutable location;
-`const` requires a compile-time value and creates no addressable location.
-Without a type annotation, the initializer determines the type. An annotation
-supplies the expected type for literals and aggregate literals.
+`var` creates a mutable location; `const` requires a compile-time value and
+creates no addressable location. Without a type annotation, the initializer
+determines the type. An annotation supplies the expected type for literals and
+aggregate literals. A `const` requires an initializer. A `var` without one
+requires a type annotation and holds its type's zero value: `0` for integers,
+`+0.0` for floats, `false` for `bool`, `null` for pointers, and the zero value
+in every element of an array and every field of a struct. A local is zeroed
+each time its declaration executes.
 
 Every block introduces a lexical scope. A local becomes visible after its
-initializer. A declaration may shadow an earlier declaration in the same or
+declaration. A declaration may shadow an earlier declaration in the same or
 an enclosing block; its initializer still sees the earlier declaration.
 Module-level declarations share one namespace and cannot repeat a name.
 They are visible throughout their module regardless of order. Module-level
 initializers must be constant expressions; initialization dependencies must
 not contain a cycle. All globals are initialized before `main`.
 
-There is no implicit zero initialization, aggregate fill, or inferred-length
-array type annotation. Array literals infer their length when no array type
-is expected. The first element determines the element type in that case;
-subsequent elements are checked against it.
+There is no aggregate fill or inferred-length array type annotation. Array
+literals infer their length when no array type is expected. The first element
+determines the element type in that case; subsequent elements are checked
+against it.
 
 ```fern
 var a = [1, 2, 3];

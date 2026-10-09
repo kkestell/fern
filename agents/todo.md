@@ -104,13 +104,12 @@
   which types extra arguments may have and how untyped literals and `f32`
   arguments are typed and promoted.
 
-- [ ] Fill and zero-initialize arrays
+- [ ] Zero-initialize a `var` without an initializer
 
-  Fern has no aggregate fill and no zero initialization, so an array needs a
-  literal with every element written out. `examples/raytrace.fern` spells
-  `[2]i32 = [0, 0]` and allocates its scratch buffers with `malloc` rather than
-  declare a 64-element array. Decide and specify a way to initialize an array
-  from one repeated value.
+  Implement the zero value specified in `docs/spec.md#declarations-and-scope`.
+  `examples/raytrace.fern` spells `[2]i32 = [0, 0]` and allocates its scratch
+  buffers with `malloc` rather than declare a 64-element array; declare them
+  without initializers there.
 
 - [ ] Enumerations or tagged unions
 

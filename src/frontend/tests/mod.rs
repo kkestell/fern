@@ -215,6 +215,10 @@ fn project_body(syntax: &Syntax, body: &[Idx<Statement>], depth: usize, output: 
                 writeln!(output, "{indent}exit span={:?}", statement.span).unwrap();
                 project_expression(syntax, *argument, depth + 1, output);
             }
+            StatementKind::Free { operand } => {
+                writeln!(output, "{indent}free span={:?}", statement.span).unwrap();
+                project_expression(syntax, *operand, depth + 1, output);
+            }
             StatementKind::Call { call } => {
                 writeln!(
                     output,
@@ -365,6 +369,16 @@ fn project_annotation(syntax: &Syntax, id: Idx<TypeAnnotation>, depth: usize, ou
             writeln!(output, "{indent}  element").unwrap();
             project_annotation(syntax, *element, depth + 2, output);
         }
+        AnnotationKind::Pointer { nullable, target } => {
+            writeln!(
+                output,
+                "{indent}pointer nullable={nullable} span={:?}",
+                annotation.span
+            )
+            .unwrap();
+            writeln!(output, "{indent}  target").unwrap();
+            project_annotation(syntax, *target, depth + 2, output);
+        }
     }
 }
 
@@ -387,6 +401,9 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
         .unwrap(),
         ExpressionKind::Boolean(value) => {
             writeln!(output, "{indent}boolean {value} span={:?}", expression.span).unwrap()
+        }
+        ExpressionKind::Null => {
+            writeln!(output, "{indent}null span={:?}", expression.span).unwrap()
         }
         ExpressionKind::Reference(name) => writeln!(
             output,
@@ -555,6 +572,49 @@ fn project_expression(syntax: &Syntax, id: Idx<Expression>, depth: usize, output
         ExpressionKind::Length { operand } => {
             writeln!(output, "{indent}len span={:?}", expression.span).unwrap();
             project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::AddressOf {
+            operator_span,
+            operand,
+        } => {
+            writeln!(
+                output,
+                "{indent}address-of operator={operator_span:?} span={:?}",
+                expression.span
+            )
+            .unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::Dereference {
+            operator_span,
+            operand,
+        } => {
+            writeln!(
+                output,
+                "{indent}dereference operator={operator_span:?} span={:?}",
+                expression.span
+            )
+            .unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::New { operand } => {
+            writeln!(output, "{indent}new span={:?}", expression.span).unwrap();
+            project_expression(syntax, *operand, depth + 1, output);
+        }
+        ExpressionKind::PointerConversion {
+            destination,
+            operand,
+        } => {
+            writeln!(
+                output,
+                "{indent}pointer conversion span={:?}",
+                expression.span
+            )
+            .unwrap();
+            writeln!(output, "{indent}  destination").unwrap();
+            project_annotation(syntax, *destination, depth + 2, output);
+            writeln!(output, "{indent}  operand").unwrap();
+            project_expression(syntax, *operand, depth + 2, output);
         }
     }
 }

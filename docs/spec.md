@@ -1258,6 +1258,12 @@ A `*T` is valid wherever a `nullable *T` is expected, and the conversion is
 implicit. The reverse direction is the checked conversion `*T(p)`, which yields
 the `*T` held by `p` and traps with `null pointer` when `p` is `null`.
 
+A `*` followed by a type and then `(` always begins this conversion, and the
+type extends as far as a type can, so `**Node(p)` converts `p` to `**Node`.
+Dereferencing the result of a call therefore requires parentheses: `*(f(x))` is
+the target of the pointer `f` returns, while `*f(x)` converts `x` to `*f` and is
+invalid when `f` is not a type.
+
 ```fern
 type Node struct {
     value: int,

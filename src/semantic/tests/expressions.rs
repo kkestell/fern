@@ -1311,3 +1311,50 @@ fn a_struct_value_passes_through_bindings_calls_returns_and_iteration() {
          }",
     );
 }
+
+#[test]
+fn pointer_syntax_reports_that_pointers_are_not_yet_implemented() {
+    let message = "pointers are not yet implemented";
+    for (body, offending) in [
+        ("var p: *int;", "*int"),
+        ("var p: [2]nullable *int;", "nullable *int"),
+        ("var x = 1; var p = null;", "null"),
+        ("var x = 1; const p = &x;", "&x"),
+        ("var x = 1; exit(*x);", "*x"),
+        ("const p = new(1);", "new(1)"),
+        ("var x = 1; const p = *int(x);", "*int(x)"),
+        ("var x = 1; *x = 2;", "*x"),
+        ("var x = 1; *x += 2;", "*x"),
+        ("var x = 1; (*x).y = 2;", "*x"),
+        ("var x = 1; free(x);", "free(x);"),
+        ("for *new(0) = 0; true; *new(1) = 1 {}", "*new(0)"),
+        ("var x = 1; for *&x = 0; true; *new(1) = 1 {}", "*&x"),
+        (
+            "var x = 1; for *[&x][0] = 0; true; *[&x][1] = 1 {}",
+            "*[&x][0]",
+        ),
+    ] {
+        rejects(body, offending, message);
+    }
+    rejects_source(
+        "fn f(p: *int) -> void {} fn main() -> void {}",
+        "*int",
+        message,
+    );
+    rejects_source(
+        "fn f() -> *int { return f(); } fn main() -> void {}",
+        "*int",
+        message,
+    );
+    rejects_source(
+        "type Node struct { value: int, next: nullable *Node }
+         fn main() -> void { var n: Node; }",
+        "nullable *Node",
+        message,
+    );
+    rejects_source(
+        "const p: *int = new(0); fn main() -> void {}",
+        "*int",
+        message,
+    );
+}

@@ -10,7 +10,11 @@ use lasso::Spur;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use super::{annotations::check_element_count, constants::*, model::*};
+use super::{
+    annotations::{check_element_count, pointers_not_implemented},
+    constants::*,
+    model::*,
+};
 
 /// Reports a field name the struct does not declare.
 fn no_field(
@@ -143,6 +147,13 @@ impl CheckedProgram<'_> {
                 name,
                 name_span,
             } => self.infer_field(*operand, *name, name_span, scopes),
+            ExpressionKind::Null
+            | ExpressionKind::AddressOf { .. }
+            | ExpressionKind::Dereference { .. }
+            | ExpressionKind::New { .. }
+            | ExpressionKind::PointerConversion { .. } => {
+                Err(pointers_not_implemented(&expression.span))
+            }
             ExpressionKind::Call(call) => {
                 let (function, result) = self.check_call(call, scopes, true)?;
                 Ok(CheckedExpression {
@@ -567,6 +578,9 @@ impl CheckedProgram<'_> {
                     ty,
                     span,
                 })
+            }
+            ExpressionKind::Dereference { .. } => {
+                Err(pointers_not_implemented(&self.syntax.expressions[id].span))
             }
             _ => Err(Diagnostic::new(
                 self.syntax.expressions[id].span.clone(),

@@ -14,6 +14,11 @@ use num_traits::ToPrimitive;
 
 use super::model::*;
 
+/// Rejects pointer syntax, which parses but is not yet checked.
+pub(super) fn pointers_not_implemented(span: &std::ops::Range<usize>) -> Diagnostic {
+    Diagnostic::new(span.clone(), "pointers are not yet implemented")
+}
+
 /// The length `[_]` takes from the declaration's initializer, which must be an
 /// array literal that states its own length.
 pub(super) fn inferred_length(
@@ -68,6 +73,7 @@ impl CheckedProgram<'_> {
                     element: Box::new(element),
                 })
             }
+            AnnotationKind::Pointer { .. } => Err(pointers_not_implemented(&written.span)),
         }?;
         self.validate_aggregate_layout(&ty, &written.span)?;
         Ok(ty)

@@ -1,6 +1,6 @@
 # Todo
 
-- [ ] Parse pointer syntax
+- [x] Parse pointer syntax
 
   Lex and parse the pointer forms in `docs/spec.md#pointers-and-heap-memory`:
   the `*T` and `nullable *T` annotations, the `null` literal, prefix `&` and

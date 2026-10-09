@@ -218,7 +218,8 @@ fn reserved_names_agree_in_all_name_positions() {
     for name in [
         "const", "var", "true", "false", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8",
         "u16", "u32", "u64", "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break",
-        "continue", "return", "in", "len", "pub", "use", "type", "struct",
+        "continue", "return", "in", "len", "pub", "use", "type", "struct", "null", "new", "free",
+        "nullable",
     ] {
         for (prefix, suffix) in [
             ("fn ", "() -> void {}"),
@@ -234,7 +235,7 @@ fn reserved_names_agree_in_all_name_positions() {
     for name in [
         "const", "var", "fn", "void", "exit", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
         "int", "uint", "f32", "f64", "bool", "if", "else", "for", "break", "continue", "return",
-        "in", "len", "pub", "use", "type", "struct",
+        "in", "len", "pub", "use", "type", "struct", "new", "free", "nullable",
     ] {
         for (prefix, suffix) in [
             ("fn main() -> void { const x = ", "; }"),
@@ -246,9 +247,7 @@ fn reserved_names_agree_in_all_name_positions() {
         }
     }
 
-    for name in [
-        "alloc", "free", "null", "rune", "str", "string", "uintptr", "size",
-    ] {
+    for name in ["alloc", "rune", "str", "string", "uintptr", "size"] {
         parse(&format!("fn {name}() -> void {{}}"))
             .unwrap_or_else(|error| panic!("{name} should not be reserved: {error:?}"));
     }

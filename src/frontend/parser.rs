@@ -40,6 +40,10 @@ fn reserved(name: &str) -> bool {
             | "use"
             | "type"
             | "struct"
+            | "null"
+            | "new"
+            | "free"
+            | "nullable"
     ) || Scalar::named(name).is_some()
 }
 
@@ -50,6 +54,31 @@ fn lookahead(lexer: &mut logos::Lexer<'_, Token>) -> Option<Token> {
         Some(Ok(token)) => Some(token),
         Some(Err(())) | None => None,
     }
+}
+
+/// Skips a balanced group and returns the token following its closing delimiter.
+fn token_after_group(lexer: &mut logos::Lexer<'_, Token>, opening: Token) -> Option<Token> {
+    let closing = |token| match token {
+        Token::LeftParen => Some(Token::RightParen),
+        Token::LeftBracket => Some(Token::RightBracket),
+        Token::LeftBrace => Some(Token::RightBrace),
+        _ => None,
+    };
+    let mut endings = vec![closing(opening)?];
+    while let Some(&end) = endings.last() {
+        let token = lookahead(lexer)?;
+        if token == end {
+            endings.pop();
+        } else if let Some(end) = closing(token) {
+            endings.push(end);
+        } else if matches!(
+            token,
+            Token::RightParen | Token::RightBracket | Token::RightBrace
+        ) {
+            return None;
+        }
+    }
+    lookahead(lexer)
 }
 
 struct Parser<'a> {
@@ -106,6 +135,8 @@ enum StructLiterals {
 enum PrefixOperator {
     Value(UnaryOperator),
     LogicalNot,
+    AddressOf,
+    Dereference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,11 +462,18 @@ impl Parser<'_> {
                 self.assignment(StructLiterals::Permitted)?
             }
             Some(Token::Name) if self.starts_call() => StatementKind::Call { call: self.call()? },
-            Some(Token::Name | Token::LeftParen) => self.assignment(StructLiterals::Permitted)?,
+            Some(Token::Name | Token::Star | Token::LeftParen) => {
+                self.assignment(StructLiterals::Permitted)?
+            }
             Some(Token::Exit) => {
                 self.advance()?;
                 let (argument, _) = self.single_argument("exit")?;
                 StatementKind::Exit { argument }
+            }
+            Some(Token::Free) => {
+                self.advance()?;
+                let (operand, _) = self.single_argument("free")?;
+                StatementKind::Free { operand }
             }
             Some(Token::Break) => {
                 self.advance()?;
@@ -458,7 +496,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(self.error(
-                    "expected a declaration, assignment, call, block, `if`, `for`, loop control, `return`, or `exit`",
+                    "expected a declaration, assignment, call, block, `if`, `for`, loop control, `return`, `exit`, or `free`",
                 ));
             }
         };
@@ -469,8 +507,8 @@ impl Parser<'_> {
         }))
     }
 
-    /// Parses the `( expression [,] )` of `exit` or `len`, which use call
-    /// syntax without being calls. Returns the operand and the `)` span.
+    /// Parses the `( expression [,] )` of `exit`, `free`, `len`, or `new`,
+    /// which use call syntax without being calls. Returns the operand and the `)` span.
     fn single_argument(
         &mut self,
         keyword: &str,
@@ -682,77 +720,59 @@ impl Parser<'_> {
     }
 
     /// Returns the token that follows an assignment target starting at the
-    /// current token, and whether the target carried any step: a
-    /// parenthesized group, an index, or a field selection. `None` when no
+    /// current token, and whether the target carried any step: a prefix operator,
+    /// a parenthesized group, an index, or a field selection. `None` when no
     /// target starts here.
     fn token_after_target(&self) -> Option<(Token, bool)> {
         let mut lexer = self.lexer.clone();
-        let current = self.current?;
-        let slice = self.lexer.slice();
+        let mut current = self.current?;
+        let mut slice = self.lexer.slice();
         let mut stepped = false;
-        let mut following = if current == Token::LeftParen {
+        while matches!(current, Token::Star | Token::Ampersand) {
             stepped = true;
-            let mut depth = 1usize;
-            while depth > 0 {
-                match lookahead(&mut lexer)? {
-                    Token::LeftParen => depth += 1,
-                    Token::RightParen => depth -= 1,
-                    _ => {}
-                }
+            current = lookahead(&mut lexer)?;
+            slice = lexer.slice();
+        }
+        let mut following = if matches!(current, Token::LeftParen | Token::LeftBracket) {
+            stepped = true;
+            token_after_group(&mut lexer, current)?
+        } else if current == Token::New && stepped {
+            if lookahead(&mut lexer)? != Token::LeftParen {
+                return None;
             }
-            lexer.next()
+            token_after_group(&mut lexer, Token::LeftParen)?
         } else {
             if current != Token::Name || reserved(slice) {
                 return None;
             }
-            let mut following = lexer.next();
-            if following == Some(Ok(Token::ColonColon)) {
-                if lexer.next() != Some(Ok(Token::Name)) {
+            let mut following = lookahead(&mut lexer)?;
+            if following == Token::ColonColon {
+                if lookahead(&mut lexer)? != Token::Name {
                     return None;
                 }
-                following = lexer.next();
+                following = lookahead(&mut lexer)?;
             }
-            if following == Some(Ok(Token::LeftParen)) {
-                let mut depth = 1usize;
-                while depth > 0 {
-                    match lexer.next()? {
-                        Ok(Token::LeftParen) => depth += 1,
-                        Ok(Token::RightParen) => depth -= 1,
-                        Ok(_) => {}
-                        Err(()) => return None,
-                    }
-                }
-                following = lexer.next();
+            if following == Token::LeftParen {
+                following = token_after_group(&mut lexer, following)?;
             }
             following
         };
         loop {
             match following {
-                Some(Ok(Token::LeftBracket)) => {
-                    let mut depth = 1usize;
-                    while depth > 0 {
-                        match lexer.next() {
-                            Some(Ok(Token::LeftBracket)) => depth += 1,
-                            Some(Ok(Token::RightBracket)) => depth -= 1,
-                            Some(Ok(_)) => {}
-                            Some(Err(())) | None => return None,
-                        }
-                    }
+                Token::LeftBracket => {
+                    following = token_after_group(&mut lexer, Token::LeftBracket)?;
                 }
-                Some(Ok(Token::Dot)) => {
-                    if lexer.next() != Some(Ok(Token::Name)) {
+                Token::Dot => {
+                    if lookahead(&mut lexer)? != Token::Name {
                         return None;
                     }
+                    following = lookahead(&mut lexer)?;
                 }
                 _ => break,
             }
             stepped = true;
-            following = lexer.next();
         }
-        match following {
-            Some(Ok(token)) => Some((token, stepped)),
-            Some(Err(())) | None => None,
-        }
+        Some((following, stepped))
     }
 
     fn starts_assignment(&self) -> bool {
@@ -875,10 +895,28 @@ impl Parser<'_> {
     }
 
     /// Parses a type annotation, which is a built-in scalar name, a declared
-    /// type name, or one or more `[ … ]` lengths in front of an element
-    /// annotation.
+    /// type name, one or more `[ … ]` lengths in front of an element
+    /// annotation, or `*` or `nullable *` in front of a target annotation.
     fn type_annotation(&mut self) -> Result<Idx<TypeAnnotation>, Diagnostic> {
         let start = self.span.start;
+        if matches!(self.current, Some(Token::Star | Token::Nullable)) {
+            self.enter_nesting()?;
+            let nullable = self.current == Some(Token::Nullable);
+            if nullable {
+                self.advance()?;
+                if self.current != Some(Token::Star) {
+                    return Err(self.error("expected `*` after `nullable`"));
+                }
+            }
+            self.advance()?;
+            let target = self.type_annotation()?;
+            self.nesting -= 1;
+            let span = start..self.syntax.annotations[target].span.end;
+            return Ok(self.syntax.annotations.alloc(TypeAnnotation {
+                kind: AnnotationKind::Pointer { nullable, target },
+                span,
+            }));
+        }
         if self.current != Some(Token::LeftBracket) {
             // A built-in scalar name is reserved, so an ordinary identifier
             // here names a declared type.
@@ -1010,8 +1048,13 @@ impl Parser<'_> {
         &mut self,
         literals: StructLiterals,
     ) -> Result<Idx<Expression>, Diagnostic> {
+        if self.starts_pointer_conversion() {
+            return self.postfix_expression(literals);
+        }
         let operator = match self.current {
             Some(Token::Bang) => PrefixOperator::LogicalNot,
+            Some(Token::Ampersand) => PrefixOperator::AddressOf,
+            Some(Token::Star) => PrefixOperator::Dereference,
             Some(Token::Minus) => PrefixOperator::Value(UnaryOperator::Negate),
             Some(Token::WrappingMinus) => PrefixOperator::Value(UnaryOperator::WrappingNegate),
             Some(Token::Caret) => PrefixOperator::Value(UnaryOperator::Complement),
@@ -1025,6 +1068,14 @@ impl Parser<'_> {
         let span = operator_span.start..self.syntax.expressions[operand].span.end;
         let kind = match operator {
             PrefixOperator::LogicalNot => ExpressionKind::LogicalNot {
+                operator_span,
+                operand,
+            },
+            PrefixOperator::AddressOf => ExpressionKind::AddressOf {
+                operator_span,
+                operand,
+            },
+            PrefixOperator::Dereference => ExpressionKind::Dereference {
                 operator_span,
                 operand,
             },
@@ -1115,12 +1166,19 @@ impl Parser<'_> {
             let value = self.current == Some(Token::True);
             self.advance()?;
             ExpressionKind::Boolean(value)
+        } else if self.current == Some(Token::Null) {
+            self.advance()?;
+            ExpressionKind::Null
+        } else if self.current == Some(Token::Star) {
+            return self.pointer_conversion_expression(span);
         } else if self.current == Some(Token::LeftParen) {
             return self.grouping_expression(span);
         } else if self.current == Some(Token::LeftBracket) {
             return self.array_literal(span);
         } else if self.current == Some(Token::Len) {
             return self.length_expression(span);
+        } else if self.current == Some(Token::New) {
+            return self.new_expression(span);
         } else {
             return self.name_expression(span, literals);
         };
@@ -1242,6 +1300,95 @@ impl Parser<'_> {
             depth: self.syntax.expressions[operand].depth + 1,
             span: span.start..right_paren_span.end,
             kind: ExpressionKind::Length { operand },
+        }))
+    }
+
+    /// Parses `new(e)`, which uses call syntax without being a call.
+    fn new_expression(&mut self, span: Range<usize>) -> Result<Idx<Expression>, Diagnostic> {
+        self.advance()?;
+        if self.current != Some(Token::LeftParen) {
+            return Err(Diagnostic::new(
+                span,
+                "reserved word cannot be used as an identifier",
+            ));
+        }
+        self.enter_nesting()?;
+        let (operand, right_paren_span) = self.single_argument("new")?;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            depth: self.syntax.expressions[operand].depth + 1,
+            span: span.start..right_paren_span.end,
+            kind: ExpressionKind::New { operand },
+        }))
+    }
+
+    /// Reports whether the current `*` begins a `*T(p)` conversion: a run of
+    /// `*`, `nullable *`, and `[ … ]` prefixes, a type name, and then `(`.
+    fn starts_pointer_conversion(&self) -> bool {
+        if self.current != Some(Token::Star) {
+            return false;
+        }
+        let mut lexer = self.lexer.clone();
+        let mut token = lookahead(&mut lexer);
+        loop {
+            match token {
+                Some(Token::Star) => {}
+                Some(Token::Nullable) => {
+                    if lookahead(&mut lexer) != Some(Token::Star) {
+                        return false;
+                    }
+                }
+                Some(Token::LeftBracket) => {
+                    let mut depth = 1usize;
+                    while depth > 0 {
+                        match lookahead(&mut lexer) {
+                            Some(Token::LeftBracket) => depth += 1,
+                            Some(Token::RightBracket) => depth -= 1,
+                            Some(_) => {}
+                            None => return false,
+                        }
+                    }
+                }
+                _ => break,
+            }
+            token = lookahead(&mut lexer);
+        }
+        if token != Some(Token::Name) {
+            return false;
+        }
+        let name = lexer.slice();
+        if reserved(name) && Scalar::named(name).is_none() {
+            return false;
+        }
+        token = lookahead(&mut lexer);
+        if token == Some(Token::ColonColon) && Scalar::named(name).is_none() {
+            if lookahead(&mut lexer) != Some(Token::Name) {
+                return false;
+            }
+            token = lookahead(&mut lexer);
+        }
+        token == Some(Token::LeftParen)
+    }
+
+    /// Parses the checked conversion `*T(p)`, whose head is a whole pointer
+    /// annotation.
+    fn pointer_conversion_expression(
+        &mut self,
+        span: Range<usize>,
+    ) -> Result<Idx<Expression>, Diagnostic> {
+        self.enter_nesting()?;
+        let destination = self.type_annotation()?;
+        self.expect(Token::LeftParen, "expected `(`")?;
+        let operand = self.expression()?;
+        let end = self.expect(Token::RightParen, "expected `)`")?.end;
+        self.nesting -= 1;
+        Ok(self.syntax.expressions.alloc(Expression {
+            kind: ExpressionKind::PointerConversion {
+                destination,
+                operand,
+            },
+            span: span.start..end,
+            depth: self.syntax.expressions[operand].depth + 1,
         }))
     }
 

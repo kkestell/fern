@@ -1,0 +1,250 @@
+---
+source: src/frontend/tests/parser.rs
+expression: projected(source)
+---
+use m span=0..6 path=[4..5]
+type Node struct name=12..16 span=7..96
+  field value name=30..35
+    scalar int span=37..40
+  field next name=46..50
+    pointer nullable=true span=52..66
+      target
+        named Node span=62..66
+  field owner name=72..77
+    pointer nullable=true span=79..93
+      target
+        named m::T span=89..93 qualifier=89..90
+var shared name=101..107 span=97..123
+  pointer nullable=false span=109..113
+    target
+      scalar int span=110..113
+  new span=116..122
+    integer 0 span=120..121
+fn first name=127..132 span=124..212
+  parameter list name=133..137
+    pointer nullable=true span=139..153
+      target
+        named Node span=149..153
+  parameter cells name=155..160
+    array span=162..169
+      length
+        integer 2 span=163..164
+      element
+        pointer nullable=false span=165..169
+          target
+            scalar int span=166..169
+  result
+    pointer nullable=false span=174..181
+      target
+        array span=175..181
+          length
+            integer 3 span=176..177
+          element
+            scalar int span=178..181
+  return span=188..210
+    new span=195..209
+      array literal fill=None span=199..208
+        integer 1 span=200..201
+        integer 2 span=203..204
+        integer 3 span=206..207
+fn main name=216..220 span=213..1028
+  result void
+  var x name=241..242 span=237..256
+    pointer nullable=false span=244..248
+      target
+        scalar int span=245..248
+    null span=251..255
+  var pp name=265..267 span=261..275
+    pointer nullable=false span=269..274
+      target
+        pointer nullable=false span=270..274
+          target
+            scalar int span=271..274
+  var q name=284..285 span=280..302
+    pointer nullable=false span=287..301
+      target
+        pointer nullable=true span=288..301
+          target
+            scalar int span=298..301
+  var s name=311..312 span=307..322
+    pointer nullable=false span=314..321
+      target
+        array span=315..321
+          length
+            integer 3 span=316..317
+          element
+            scalar int span=318..321
+  call first target=327..332 left_paren=332..333 right_paren=351..352 span=327..353
+    null span=333..337
+    array literal fill=None span=339..351
+      null span=340..344
+      null span=346..350
+  const n name=364..365 span=358..414
+    struct literal Node name=368..372 fill=None span=368..413
+      field value name=375..380
+        integer 1 span=383..384
+      field next name=386..390
+        null span=393..397
+      field owner name=399..404
+        null span=407..411
+  const same name=425..429 span=419..442
+    comparison Equal operator=434..436 span=432..441
+      reference p span=432..433
+      null span=437..441
+  const a name=453..454 span=447..460
+    address-of operator=457..458 span=457..459
+      reference x span=458..459
+  const b name=471..472 span=465..483
+    address-of operator=475..476 span=475..482
+      field f name=481..482 span=476..482
+        index span=476..480
+          reference a span=476..477
+          reference i span=478..479
+  const c name=494..495 span=488..501
+    dereference operator=498..499 span=498..500
+      reference p span=499..500
+  const d name=512..513 span=506..521
+    dereference operator=516..517 span=516..520
+      dereference operator=517..518 span=517..520
+        reference pp span=518..520
+  const e name=532..533 span=526..541
+    dereference operator=536..537 span=536..540
+      field x name=539..540 span=537..540
+        reference p span=537..538
+  const f name=552..553 span=546..563
+    field x name=561..562 span=556..562
+      group span=556..560
+        dereference operator=557..558 span=557..559
+          reference p span=558..559
+  const g name=574..575 span=568..585
+    new span=578..584
+      integer 1 span=582..583
+  const h name=596..597 span=590..629
+    new span=600..628
+      struct literal Point name=604..609 fill=None span=604..626
+        field x name=612..613
+          integer 1 span=616..617
+        field y name=619..620
+          integer 2 span=623..624
+  const k name=640..641 span=634..656
+    new span=644..655
+      new span=648..654
+        integer 0 span=652..653
+  const node name=667..671 span=661..688
+    pointer conversion span=674..687
+      destination
+        pointer nullable=false span=674..679
+          target
+            named Node span=675..679
+      operand
+        reference cursor span=680..686
+  const twice name=699..704 span=693..717
+    pointer conversion span=707..716
+      destination
+        pointer nullable=false span=707..713
+          target
+            pointer nullable=false span=708..713
+              target
+                named Node span=709..713
+      operand
+        reference p span=714..715
+  const number name=728..734 span=722..745
+    pointer conversion span=737..744
+      destination
+        pointer nullable=false span=737..741
+          target
+            scalar int span=738..741
+      operand
+        reference p span=742..743
+  const row name=756..759 span=750..773
+    pointer conversion span=762..772
+      destination
+        pointer nullable=false span=762..769
+          target
+            array span=763..769
+              length
+                integer 2 span=764..765
+              element
+                scalar int span=766..769
+      operand
+        reference p span=770..771
+  const remote name=784..790 span=778..802
+    pointer conversion span=793..801
+      destination
+        pointer nullable=false span=793..798
+          target
+            named m::T span=794..798 qualifier=794..795
+      operand
+        reference p span=799..800
+  const value name=813..818 span=807..836
+    field value name=830..835 span=821..835
+      pointer conversion span=821..829
+        destination
+          pointer nullable=false span=821..826
+            target
+              named Node span=822..826
+        operand
+          reference c span=827..828
+  const called name=847..853 span=841..864
+    dereference operator=856..857 span=856..863
+      group span=857..863
+        call f target=858..859 left_paren=859..860 right_paren=861..862 span=858..862
+          reference x span=860..861
+  const product name=875..882 span=869..892
+    binary Multiply operator=887..888 span=885..891
+      reference a span=885..886
+      dereference operator=889..890 span=889..891
+        reference p span=890..891
+  const masked name=903..909 span=897..919
+    binary And operator=914..915 span=912..918
+      reference a span=912..913
+      address-of operator=916..917 span=916..918
+        reference b span=917..918
+  free span=924..932
+    reference p span=929..930
+  free span=937..946
+    reference p span=942..943
+  assign span=951..958
+    target
+      dereference operator=951..952 span=951..953
+        reference p span=952..953
+    value
+      integer 1 span=956..957
+  compound assign Add= operator=968..970 span=963..973
+    target
+      dereference operator=963..964 span=963..967
+        dereference operator=964..965 span=964..967
+          reference pp span=965..967
+    value
+      integer 2 span=971..972
+  assign span=978..987
+    target
+      dereference operator=978..979 span=978..982
+        field x name=981..982 span=979..982
+          reference p span=979..980
+    value
+      integer 3 span=985..986
+  for label=- label_span=None span=992..1026
+    initializer
+      assign span=996..1003
+        target
+          dereference operator=996..997 span=996..998
+            reference p span=997..998
+        value
+          integer 0 span=1001..1002
+    condition
+      comparison Less operator=1007..1008 span=1004..1010
+        dereference operator=1004..1005 span=1004..1006
+          reference p span=1005..1006
+        integer 3 span=1009..1010
+    post
+      assign span=1012..1023
+        target
+          dereference operator=1012..1013 span=1012..1014
+            reference p span=1013..1014
+        value
+          binary Add operator=1020..1021 span=1017..1023
+            dereference operator=1017..1018 span=1017..1019
+              reference p span=1018..1019
+            integer 1 span=1022..1023
+    body

@@ -39,6 +39,14 @@ pub(super) enum Token {
     True,
     #[token("false")]
     False,
+    #[token("null")]
+    Null,
+    #[token("new")]
+    New,
+    #[token("free")]
+    Free,
+    #[token("nullable")]
+    Nullable,
     /// An integer or floating-point literal candidate, matched loosely so a
     /// malformed spelling stays one token. `is_floating` says which literal
     /// a candidate spells and `valid_number` says whether it is one.

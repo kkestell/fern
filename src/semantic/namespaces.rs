@@ -823,6 +823,9 @@ impl CheckedProgram<'_> {
                 }
                 self.collect_annotation_references(element, visited, references);
             }
+            AnnotationKind::Pointer { target, .. } => {
+                self.collect_annotation_references(*target, visited, references);
+            }
         }
     }
 
@@ -860,6 +863,7 @@ impl CheckedProgram<'_> {
     ) {
         let syntax = self.syntax;
         let mut literals = Vec::new();
+        let mut destinations = Vec::new();
         walk_expression(syntax, expression, &mut |id| {
             let expression = &syntax.expressions[id];
             match &expression.kind {
@@ -867,11 +871,17 @@ impl CheckedProgram<'_> {
                     references.push((name.name, expression.span.clone()));
                 }
                 ExpressionKind::StructLiteral { name, .. } => literals.push(name),
+                ExpressionKind::PointerConversion { destination, .. } => {
+                    destinations.push(*destination);
+                }
                 _ => {}
             }
         });
         for name in literals {
             self.collect_type_references(name, visited, references);
+        }
+        for destination in destinations {
+            self.collect_annotation_references(destination, visited, references);
         }
     }
 

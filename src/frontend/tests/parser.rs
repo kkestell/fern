@@ -868,3 +868,125 @@ fn struct_nesting_obeys_the_source_limit() {
         );
     }
 }
+
+#[test]
+fn pointer_syntax_snapshot() {
+    let source = "\
+use m;
+type Node struct {
+    value: int,
+    next: nullable *Node,
+    owner: nullable *m::T,
+}
+var shared: *int = new(0);
+fn first(list: nullable *Node, cells: [2]*int) -> *[3]int {
+    return new([1, 2, 3]);
+}
+fn main() -> void {
+    var x: *int = null;
+    var pp: **int;
+    var q: *nullable *int;
+    var s: *[3]int;
+    first(null, [null, null]);
+    const n = Node { value = 1, next = null, owner = null };
+    const same = p == null;
+    const a = &x;
+    const b = &a[i].f;
+    const c = *p;
+    const d = **pp;
+    const e = *p.x;
+    const f = (*p).x;
+    const g = new(1);
+    const h = new(Point { x = 1, y = 2 },);
+    const k = new(new(0));
+    const node = *Node(cursor);
+    const twice = **Node(p);
+    const number = *int(p);
+    const row = *[2]int(p);
+    const remote = *m::T(p);
+    const value = *Node(c).value;
+    const called = *(f(x));
+    const product = a * *p;
+    const masked = a & &b;
+    free(p);
+    free(p,);
+    *p = 1;
+    **pp += 2;
+    *p.x = 3;
+    for *p = 0; *p < 3; *p = *p + 1 {}
+}
+";
+    insta::assert_snapshot!(projected(source));
+}
+
+#[test]
+fn malformed_pointer_syntax_reports_the_offending_token() {
+    for (marked, message) in [
+        ("var x: nullable «int»;", "expected `*` after `nullable`"),
+        ("var x: *«void»;", "expected a type"),
+        (
+            "const x = «new»;",
+            "reserved word cannot be used as an identifier",
+        ),
+        ("const x = new(«)»;", "new requires one argument"),
+        ("const x = new(1, «2»);", "new takes one argument"),
+        ("free«;»", "expected `(`"),
+        ("free(«)»;", "free requires one argument"),
+        ("free(p, «q»);", "free takes one argument"),
+        ("const x = *Node(a«,» b);", "expected `)`"),
+        ("const x = *Node(p«,»);", "expected `)`"),
+    ] {
+        let prefix = "/* 🌿 */ fn main() -> void { ";
+        let start = marked.find('«').unwrap();
+        let end = marked.find('»').unwrap() - '«'.len_utf8();
+        let source = format!("{prefix}{}", marked.replace(['«', '»'], ""));
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.message, message, "{marked}");
+        assert_eq!(
+            error.span,
+            prefix.len() + start..prefix.len() + end,
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn pointer_nesting_obeys_the_source_limit() {
+    // A function body already holds one level, so 127 more are accepted.
+    let dereferences =
+        |count: usize| format!("fn main() -> void {{ const x = {}p; }}", "*".repeat(count));
+    let addresses =
+        |count: usize| format!("fn main() -> void {{ const x = {}p; }}", "& ".repeat(count));
+    let annotations =
+        |count: usize| format!("fn main() -> void {{ var x: {}int; }}", "*".repeat(count));
+    let allocations = |count: usize| {
+        format!(
+            "fn main() -> void {{ const x = {}0{}; }}",
+            "new(".repeat(count),
+            ")".repeat(count),
+        )
+    };
+    for build in [dereferences, addresses, annotations, allocations] {
+        parse(&build(127)).unwrap();
+        assert_eq!(
+            parse(&build(128)).unwrap_err().message,
+            "source nesting exceeds compiler limit of 128"
+        );
+    }
+}
+
+#[test]
+fn pointer_expression_targets_parse_in_three_clause_loops() {
+    for target in ["*new(0)", "*&x", "*[&x][0]"] {
+        let source = format!("fn main() -> void {{ for {target} = 0; true; {target} = 1 {{}} }}");
+        let syntax = parse(&source).unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let function = &syntax.functions[Idx::from_raw(0.into())];
+        assert!(matches!(
+            syntax.statements[function.body[0]].kind,
+            StatementKind::For {
+                header: ForHeader::ThreeClause { .. },
+                ..
+            }
+        ));
+    }
+}

@@ -12,7 +12,7 @@ use la_arena::Idx;
 use lasso::Spur;
 use std::collections::HashMap;
 
-use super::model::*;
+use super::{annotations::pointers_not_implemented, model::*};
 
 impl CheckedProgram<'_> {
     pub(super) fn check_body(
@@ -104,6 +104,9 @@ impl CheckedProgram<'_> {
                 Ok(())
             }
             StatementKind::Return { value } => self.check_return(statement, result, *value, scopes),
+            StatementKind::Free { .. } => Err(pointers_not_implemented(
+                &self.syntax.statements[statement].span,
+            )),
         }
     }
 

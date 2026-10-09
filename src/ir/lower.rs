@@ -480,6 +480,9 @@ fn lower_flow_statement(
             false
         }
         StatementKind::Block { body } => lower_flow_body(checked, body, bindings, loops, builder),
+        StatementKind::Free { .. } => {
+            unreachable!("semantic checking rejects `free` until pointers are implemented")
+        }
         StatementKind::Exit { argument } => {
             let status = lower_flow_operand(checked, *argument, bindings, builder);
             builder.terminate(Terminator::Exit { status });
